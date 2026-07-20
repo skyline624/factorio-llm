@@ -1,0 +1,38 @@
+# ===== Secrets / config locale (NE JAMAIS COMMITTER) =====
+# python/.env contient OPENAI_API_KEY et le mot de passe RCON -> local uniquement.
+# Le modele vide est python/.env.example (versionne).
+python/.env
+
+# ===== Python =====
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+
+# ===== Factorio runtime (artefacts de jeu, recrees au lancement) =====
+# Saves + autosaves (recreees via `factorio --create saves/fl-dev.zip`).
+saves/
+# Write-data isole serveur / client (genere au runtime par Factorio).
+server-data/
+client-data/
+# mods/ : contient la junction `factorio-llm -> mod/` (lien Windows) + mod-list/dat.
+# Le code du mod vit dans mod/ (versionne) ; la junction est recreee par les .bat.
+mods/
+# Logs serveur / client.
+logs/
+*.log
+# Locks Factorio.
+*.lock
+
+# ===== Configs generees par les .bat (recreees au lancement via :writeconfig) =====
+server/config/config.ini
+client/config/config.ini
+
+# ===== OS / editeurs =====
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+*.swp

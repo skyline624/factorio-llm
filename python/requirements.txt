@@ -1,0 +1,5 @@
+# Socle RCON du pilote multi-agent factorio-llm.
+# Le client RCON est natif (pas de dependance externe) -> on n'a besoin que de
+# python-dotenv pour charger la config. Les deps LLM viendront au module agents.
+
+python-dotenv>=1.0.0

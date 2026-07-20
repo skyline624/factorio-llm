@@ -1,0 +1,1 @@
+"""Core : infrastructure commune aux agents (RCON, API mod, etat, LLM)."""

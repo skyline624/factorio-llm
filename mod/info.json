@@ -1,0 +1,9 @@
+{
+  "name": "factorio-llm",
+  "version": "0.1.0",
+  "title": "Factorio LLM Multi-Agent",
+  "author": "factorio_llm",
+  "factorio_version": "2.0",
+  "dependencies": ["base >= 2.0"],
+  "description": "Mod de base d'un pilote Factorio autonome multi-agent. Expose deux interfaces RCON : fl_tools (observation synchrone) et fl_ops (action asynchrone via task_manager). Concu pour etre pilote en pull depuis un orchestrateur Python multi-agent."
+}

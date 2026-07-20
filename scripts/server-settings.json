@@ -1,0 +1,23 @@
+{
+  "name": "factorio-llm dev",
+  "description": "Serveur dedie de dev pour le pilote multi-agent factorio-llm",
+  "tags": ["autonomy", "llm"],
+  "max_players": 4,
+  "visibility": { "public": false, "lan": true },
+  "username": "",
+  "token": "",
+  "game_password": "",
+  "require_user_verification": false,
+  "max_upload_in_kilobytes_per_second": 0,
+  "max_upload_slots": 5,
+  "minimum_latency_in_ticks": 0,
+  "max_heartbeat_latency_in_ticks": 100,
+  "auto_pause": false,
+  "only_admins_can_pause": false,
+  "autosave_interval": 60,
+  "autosave_slots": 3,
+  "afk_autokick_interval": 0,
+  "allow_commands": "admins-only",
+  "verify_identity": false,
+  "ignored": ["ignored"]
+}
