@@ -143,6 +143,12 @@ class ModApi:
         donne le kit de depart au joueur connecte (prod)."""
         return self._call("fl_ops", "setup")
 
+    def reset_character(self) -> dict:
+        """Detruit et recree le character headless avec le kit integral (mode test
+        uniquement). Rend les tests d'integration reproductibles sans relancer le
+        serveur. Refuse en production (ne touche pas le character d'un joueur)."""
+        return self._call("fl_ops", "reset_character")
+
     def status(self) -> dict:
         """Etat de la tache courante : {state: busy|idle, ...}."""
         return self._call("fl_ops", "status")

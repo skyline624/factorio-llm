@@ -51,6 +51,24 @@ function M.create_headless(surface)
   return char
 end
 
+-- Reset du character headless (mode test uniquement) : detruit l'ancien, rearme le
+-- flag kit_given, et recree un character neuf avec le kit integral. Sert a rendre les
+-- tests d'integration reproductibles sans relancer le serveur. Refuse en production
+-- (ne jamais toucher le character d'un joueur connecte). Retourne (ok, detail).
+function M.reset_headless()
+  if not (storage.fl and storage.fl.test_mode) then
+    return false, "reset interdit en production"
+  end
+  local surface = game.surfaces.nauvis or game.surfaces[1]
+  if not surface then return false, "aucune surface" end
+  -- Rearme le kit : le nouveau character repartira avec l'inventaire de depart.
+  storage.fl.kit_given = false
+  local char = M.create_headless(surface)
+  if not char then return false, "echec creation character headless" end
+  log("[fl] character headless reset (kit rearme)")
+  return true, "character headless reset"
+end
+
 -- Character headless courant (mode test), ou nil.
 function M.get_headless()
   local c = storage.fl and storage.fl.character

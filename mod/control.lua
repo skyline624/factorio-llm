@@ -99,6 +99,9 @@ remote.add_interface("fl_ops", {
   setup = function()
     safe(function() local ok, d = operations.setup() reply_ack(ok, d) end)
   end,
+  reset_character = function()
+    safe(function() local ok, d = operations.reset_character() reply_ack(ok, d) end)
+  end,
   -- Etats
   status = function() safe(function() return json.encode(operations.status()) end) end,
   cancel = function()

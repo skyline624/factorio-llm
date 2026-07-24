@@ -157,6 +157,15 @@ function M.setup()
   return player.setup()
 end
 
+-- reset_character() : detruit et recree le character headless avec le kit integral
+-- (mode test uniquement). Rend les tests d'integration reproductibles sans relancer le
+-- serveur. Refuse en production (ne touche jamais le character d'un joueur).
+function M.reset_character()
+  if not player.is_test_mode() then return false, "reset interdit en production" end
+  task_manager.clear()
+  return player.reset_headless()
+end
+
 -- ===== Etats =====
 
 function M.status()

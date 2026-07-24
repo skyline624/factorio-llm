@@ -24,10 +24,14 @@ class Config:
     rcon_port: int = 27015
     rcon_password: str = "factoriollm"
 
-    # LLM OpenAI-compatible (utilise plus tard par les agents).
+    # LLM OpenAI-compatible (Ollama / LM Studio / vLLM / OpenAI / custom).
+    # Utilise par FactoryBuilder P1b (decision LLM plan structure).
     openai_api_key: str = ""
     openai_base_url: str = "http://localhost:11434/v1"
-    openai_model: str = "qwen2.5"
+    openai_model: str = "glm-5.2:cloud"
+    llm_timeout: float = 30.0
+    llm_max_tokens: int = 2048
+    llm_enabled: bool = True
 
 
 def load_config() -> Config:
@@ -37,5 +41,8 @@ def load_config() -> Config:
         rcon_password=os.getenv("RCON_PASSWORD", "factoriollm"),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         openai_base_url=os.getenv("OPENAI_BASE_URL", "http://localhost:11434/v1"),
-        openai_model=os.getenv("OPENAI_MODEL", "qwen2.5"),
+        openai_model=os.getenv("OPENAI_MODEL", "glm-5.2:cloud"),
+        llm_timeout=float(os.getenv("LLM_TIMEOUT", "30.0")),
+        llm_max_tokens=int(os.getenv("LLM_MAX_TOKENS", "2048")),
+        llm_enabled=os.getenv("LLM_ENABLED", "true").lower() in ("1", "true", "yes"),
     )

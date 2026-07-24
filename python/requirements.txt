@@ -1,5 +1,7 @@
 # Socle RCON du pilote multi-agent factorio-llm.
 # Le client RCON est natif (pas de dependance externe) -> on n'a besoin que de
-# python-dotenv pour charger la config. Les deps LLM viendront au module agents.
+# python-dotenv pour charger la config.
+# P1b : SDK openai (OpenAI-compatible, Ollama /v1) pour la decision LLM plan structure.
 
 python-dotenv>=1.0.0
+openai>=1.40.0
