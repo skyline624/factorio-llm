@@ -57,6 +57,31 @@ remote.add_interface("fl_tools", {
   describe = function(name) safe(function() return tools.describe(name) end) end,
   get_recipe = function(item) safe(function() return tools.get_recipe(item) end) end,
   production_stats = function() safe(function() return tools.production_stats() end) end,
+  -- Validation LayoutPlanner (S0b) : synchrones, non destructives (sauf measure_entity).
+  can_place_check = function(name, x, y, direction)
+    safe(function() return tools.can_place_check(name, x, y, direction) end)
+  end,
+  scan_patch = function(resource, radius)
+    safe(function() return tools.scan_patch(resource, radius) end)
+  end,
+  -- S2a : bord d'un plan d'eau (tiles d'eau adjacents à terre) pour offshore-pump.
+  scan_water_edge = function(radius)
+    safe(function() return tools.scan_water_edge(radius) end)
+  end,
+  -- S4a : observation terrain (obstacles organiques, tuiles bbox, tuile ponctuelle).
+  -- Non destructif. Donne au Python la visibilité terrain manquante pour le replan S4b.
+  scan_obstacles = function(radius)
+    safe(function() return tools.scan_obstacles(radius) end)
+  end,
+  scan_tiles_bbox = function(x1, y1, x2, y2)
+    safe(function() return tools.scan_tiles_bbox(x1, y1, x2, y2) end)
+  end,
+  get_tile = function(x, y)
+    safe(function() return tools.get_tile(x, y) end)
+  end,
+  measure_entity = function(name, x, y, direction)
+    safe(function() return tools.measure_entity(name, x, y, direction) end)
+  end,
 })
 
 remote.add_interface("fl_ops", {

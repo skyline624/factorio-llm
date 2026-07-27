@@ -88,6 +88,87 @@ class ModApi:
         """Compteurs cumules de production/consommation de la force."""
         return self._call("fl_tools", "production_stats")
 
+    # ----- fl_tools : validation LayoutPlanner (S0b) -----
+    # Commandes synchrones non destructives (sauf measure_entity qui pose puis detruit,
+    # reserve au mode test). Valident qu'un blueprint est placable + mesurent les
+    # geometries reelles pour confirmer le hardcode Python (cf. constat API 2.0).
+
+    def can_place_check(self, name: str, x: float, y: float, direction: str = "north") -> dict:
+        """Test non destructif de placabilite (surface.can_place_entity). Retourne
+        {name, x, y, can_place, error?}. direction = 'north'|'east'|'south'|'west'."""
+        return self._call("fl_tools", "can_place_check", name, x, y, direction)
+
+    def scan_patch(self, resource: str, radius: float = 400.0) -> dict:
+        """Bbox + count + total_amount d'un gisement reel autour de l'avatar
+        (chaque tuile = 1 entite resource ; total_amount = somme des initial_amount)."""
+        return self._call("fl_tools", "scan_patch", resource, radius)
+
+    def scan_water_edge(self, radius: float = 200.0) -> dict:
+        """Tiles d'eau adjacents à terre (bord d'un plan d'eau) pour offshore-pump.
+        Retourne {tiles:[{x,y}], bbox, count, origin}. Non destructif."""
+        return self._call("fl_tools", "scan_water_edge", radius)
+
+    # ----- fl_tools : observation terrain (S4a) -----
+    # Non destructif. Donne au LayoutPlanner la visibilité terrain (obstacles organiques,
+    # tuiles sur bbox arbitraire, tuile ponctuelle) pour le replan auto S4b.
+
+    def scan_obstacles(self, radius: float = 400.0) -> dict:
+        """Obstacles organiques (rochers/arbres/cliffs) autour de l'avatar.
+        Retourne {obstacles:[{x,y,w,h,name,type}], bbox, count, origin}. Non destructif.
+        bbox = bounding_box floored (x1,y1,w,h). Sert au LayoutPlanner S4 (contournement)."""
+        return self._call("fl_tools", "scan_obstacles", radius)
+
+    def scan_tiles_bbox(self, x1: float, y1: float, x2: float, y2: float) -> dict:
+        """Toutes les tuiles dans une bbox arbitraire (pas de filtre name).
+        Retourne {tiles:[{x,y,name}], bbox, count}. Cap aire 200x200 côté mod. Non destructif.
+        Sert a peupler Terrain.tile_grid (water/out-of-map précis au niveau tuile)."""
+        return self._call("fl_tools", "scan_tiles_bbox", x1, y1, x2, y2)
+
+    def get_tile(self, x: float, y: float) -> dict:
+        """Nom de la tuile a une position. Retourne {x,y,name}. Non destructif.
+        Sert a vérifier ponctuellement water/out-of-map (frontière headless)."""
+        return self._call("fl_tools", "get_tile", x, y)
+
+    def measure_entity(self, name: str, x: float, y: float, direction: str = "north") -> dict:
+        """Pose + mesure (size, pickup/drop_position, belt_speed, mining_drill_radius,
+        wire/supply, fluid_boxes instance, output_fluid instance) + detruit. Mode test
+        uniquement. Valide le hardcode Python (cf. constat API 2.0 : proto.fluid_boxes
+        inaccessible -> fluid_boxes lu sur l'instance posée)."""
+        return self._call("fl_tools", "measure_entity", name, x, y, direction)
+
+    def measure_fluid_boxes(self, name: str, x: float = 0.0, y: float = 0.0,
+                            direction: str = "north") -> dict:
+        """Wrapper S2b-1 : mesure les fluid_boxes d'une machine fluide sur instance posée
+        (source de vérité Factorio 2.0, proto.fluid_boxes étant inaccessible au runtime).
+        Retourne {name, fluid_boxes:[{production_type, pipe_connections:[{x,y,direction?}]}],
+        output_fluid?}. Mode test uniquement (pose puis détruit). Si fluid_boxes absent
+        (type non fluide ou API 2.0 opaque), retourne un dict avec fluid_boxes=[] et le
+        LayoutPlanner retombe sur le hardcode GEOMETRY_FIXTURE."""
+        r = self.measure_entity(name, x, y, direction)
+        return {
+            "name": name,
+            "fluid_boxes": r.get("fluid_boxes", []) if isinstance(r, dict) else [],
+            "output_fluid": r.get("output_fluid") if isinstance(r, dict) else None,
+        }
+
+    def measure_beacon(self, name: str = "beacon", x: float = 0.0, y: float = 0.0,
+                       direction: str = "north") -> dict:
+        """Wrapper S3b : mesure un beacon sur instance posée (supply_area_distance lisible
+        via ent.prototype ; module_slots/distribution_effectivity CONSTAT probablement
+        inaccessibles -> nil, fallback BEACON_FIXTURE). Round-trip modules : insert 2
+        speed-module-3 + lecture get_module_inventory (accessible sur l'instance). Mode
+        test uniquement (pose + insert + lit + détruit). Retourne {name, supply_area_distance,
+        beacon:{module_slots?, distribution_effectivity?, allowed_effects?}, modules?}."""
+        r = self.measure_entity(name, x, y, direction)
+        if not isinstance(r, dict):
+            return {"name": name, "error": str(r)}
+        return {
+            "name": name,
+            "supply_area_distance": r.get("supply_area_distance"),
+            "beacon": r.get("beacon") or {},
+            "modules": r.get("modules") or [],
+        }
+
     # ----- fl_ops (action) -----
 
     def walk_to(self, x: float, y: float) -> dict:

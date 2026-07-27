@@ -17,7 +17,25 @@ REM      guillemets. On utilise des goto + lignes simples a la place.
 setlocal
 
 set "ROOT=%~dp0.."
-set "FACTORIO_EXE=C:\Program Files (x86)\Steam\steamapps\common\Factorio\bin\x64\factorio.exe"
+
+REM FACTORIO_EXE : auto-detection parmi les emplacements Steam courants.
+REM NB : chemins avec "Program Files (x86)" -> PAS de bloc if(...) (les parentheses
+REM ferment le bloc meme entre guillemets) ; on enchaene des if exist simples.
+set "FACTORIO_EXE="
+if exist "C:\Program Files (x86)\Steam\steamapps\common\Factorio\bin\x64\factorio.exe" set "FACTORIO_EXE=C:\Program Files (x86)\Steam\steamapps\common\Factorio\bin\x64\factorio.exe"
+if defined FACTORIO_EXE goto :exefound
+if exist "D:\SteamLibrary\steamapps\common\Factorio\bin\x64\factorio.exe" set "FACTORIO_EXE=D:\SteamLibrary\steamapps\common\Factorio\bin\x64\factorio.exe"
+if defined FACTORIO_EXE goto :exefound
+if exist "D:\Steam\steamapps\common\Factorio\bin\x64\factorio.exe" set "FACTORIO_EXE=D:\Steam\steamapps\common\Factorio\bin\x64\factorio.exe"
+if defined FACTORIO_EXE goto :exefound
+if exist "E:\SteamLibrary\steamapps\common\Factorio\bin\x64\factorio.exe" set "FACTORIO_EXE=E:\SteamLibrary\steamapps\common\Factorio\bin\x64\factorio.exe"
+if defined FACTORIO_EXE goto :exefound
+if exist "C:\Program Files\Steam\steamapps\common\Factorio\bin\x64\factorio.exe" set "FACTORIO_EXE=C:\Program Files\Steam\steamapps\common\Factorio\bin\x64\factorio.exe"
+if defined FACTORIO_EXE goto :exefound
+goto :noexe
+:exefound
+echo [start] factorio.exe : %FACTORIO_EXE%
+
 set "MODS_DIR=%ROOT%\mods"
 set "SAVE=%ROOT%\saves\fl-dev.zip"
 set "SETTINGS=%ROOT%\scripts\server-settings.json"
@@ -65,6 +83,6 @@ echo [start] (Ctrl+C pour arreter le serveur)
 goto :eof
 
 :noexe
-echo [start] factorio.exe introuvable : %FACTORIO_EXE%
-echo [start] adapte FACTORIO_EXE dans ce script.
+echo [start] factorio.exe introuvable dans les emplacements testes.
+echo [start] edite ce .bat et ajoute ton chemin dans le bloc d'auto-detection.
 exit /b 1

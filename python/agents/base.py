@@ -30,6 +30,12 @@ class Contract:
     """
     goal: ProductionGoal
     zone: Optional[tuple[float, float]] = None
+    # S4c : arbitrage replan lourd FactoryBuilder. replan_budget = budget replan auto du
+    # LayoutPlanner (S4b, shift offset/facing). layout_constraints = injection de contraintes
+    # (tiers, beacons, terrain_check) ; None = défauts S4b (terrain_check=True). `zone` (ci-
+    # dessus) est utilisé comme constructible_zone (conversion point/rayon -> bbox = S4c).
+    replan_budget: int = 4
+    layout_constraints: Optional[object] = None
 
 
 # Offsets essayés pour poser un four près du character (cf. test_full.py:120).

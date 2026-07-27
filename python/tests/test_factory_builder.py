@@ -246,6 +246,146 @@ def test_planner_injection() -> None:
            f"source={res2.source} reason={res2.reason!r}")
 
 
+# ===== 1c. Test unitaire build_layout (S4c) — mock ModApi, aucun serveur =====
+
+class _FakeModApi:
+    """Mock ModApi pour build_layout (S4c). scan_patch/obstacles/water_edge/tiles_bbox canned.
+
+    `patches` : liste ordonnée de bbox dict (ou None) retournés par scan_patch successifs
+    (rayon croissant 400/800/1200). `obstacles_by_patch` : dict index->list[(x1,y1,x2,y2)] ;
+    l'index actif = dernier scan_patch réussi (scan_obstacles dépend du patch traité).
+    `water` : bbox dict ou None. `tiles` : nom de tuile pour scan_tiles_bbox (default "land").
+    """
+
+    def __init__(self, patches, obstacles_by_patch, water=None, tiles="land"):
+        self._patches = patches
+        self._obstacles_by_patch = obstacles_by_patch
+        self._water = water
+        self._tiles = tiles
+        self._pcall = 0
+        self._active = 0
+
+    def scan_patch(self, resource, radius=400.0):
+        i = self._pcall
+        self._pcall += 1
+        if i < len(self._patches) and self._patches[i] is not None:
+            self._active = i
+            return {"bbox": self._patches[i], "resource": resource, "count": 100}
+        return {}
+
+    def scan_obstacles(self, radius=400.0):
+        obs = self._obstacles_by_patch.get(self._active, [])
+        return {
+            "obstacles": [
+                {"x": o[0], "y": o[1], "w": o[2] - o[0], "h": o[3] - o[1],
+                 "name": "rock", "type": "simple-entity"} for o in obs
+            ],
+            "count": len(obs),
+        }
+
+    def scan_water_edge(self, radius=200):
+        return {"bbox": self._water} if self._water else {}
+
+    def scan_tiles_bbox(self, x1, y1, x2, y2):
+        tiles = [{"x": x, "y": y, "name": self._tiles}
+                 for x in range(int(x1), int(x2)) for y in range(int(y1), int(y2))]
+        return {"tiles": tiles, "count": len(tiles)}
+
+
+def _splan_gears():
+    """splan fixture iron-gear-wheel@5/s (chaîne ore->plate->gear) via solveur + kb fixture."""
+    from tests.test_layout_solver import sample_kb, sample_geometry
+    from services.production_solver import ProductionRequest, solve
+    kb = sample_kb()
+    splan = solve(ProductionRequest("iron-gear-wheel", 5.0), kb)
+    return splan, sample_geometry()
+
+
+def test_build_layout() -> None:
+    print("\n[test] === UNITAIRE : build_layout (S4c arbitre replan lourd) ===")
+    from agents.base import Contract
+    from services.knowledge import ProductionGoal
+    splan, geometry = _splan_gears()
+
+    # --- Cas 1 : terrain libre -> feasibility=ok (gisement 1, tier yellow) ---
+    api1 = _FakeModApi(
+        patches=[{"x1": 0, "y1": 0, "x2": 20, "y2": 20}, None, None],
+        obstacles_by_patch={0: []},
+    )
+    fb1 = FactoryBuilder(
+        api1, Contract(ProductionGoal("iron-gear-wheel", 5), zone=(0, 0), replan_budget=4))
+    lp1 = fb1.build_layout(splan, geometry)
+    record("Cas1 terrain libre -> ok",
+           lp1 is not None and lp1.feasibility == "ok",
+           f"feas={getattr(lp1, 'feasibility', None)}")
+    record("Cas1 tier yellow (1er tier)",
+           lp1 is not None and lp1.request.constraints.belt_tier == "transport-belt",
+           f"belt_tier={getattr(lp1.request.constraints, 'belt_tier', None)}")
+
+    # --- Cas 2 : terrain bloqué partout (obstacle géant) -> obstacle_blocking, best non None ---
+    api2 = _FakeModApi(
+        patches=[{"x1": 0, "y1": 0, "x2": 20, "y2": 20}, None, None],
+        obstacles_by_patch={0: [(-50, -50, 500, 500)]},  # couvre tout, insurmontable par replan léger
+    )
+    fb2 = FactoryBuilder(
+        api2, Contract(ProductionGoal("iron-gear-wheel", 5), zone=(0, 0), replan_budget=4))
+    lp2 = fb2.build_layout(splan, geometry)
+    record("Cas2 terrain bloqué -> obstacle_blocking (best retenu)",
+           lp2 is not None and lp2.feasibility == "obstacle_blocking",
+           f"feas={getattr(lp2, 'feasibility', None)} entities={len(getattr(lp2,'entities',[]))}")
+
+    # --- Cas 3 : 2 gisements, patch1 bloqué + patch2 libre -> ok sur gisement 2 ---
+    api3 = _FakeModApi(
+        patches=[{"x1": 0, "y1": 0, "x2": 20, "y2": 20},
+                 {"x1": 200, "y1": 0, "x2": 220, "y2": 20}, None],
+        obstacles_by_patch={0: [(-50, -50, 300, 300)], 1: []},
+    )
+    fb3 = FactoryBuilder(
+        api3, Contract(ProductionGoal("iron-gear-wheel", 5), zone=(0, 0), replan_budget=4))
+    lp3 = fb3.build_layout(splan, geometry)
+    record("Cas3 2 gisements (patch1 bloqué, patch2 libre) -> ok",
+           lp3 is not None and lp3.feasibility == "ok",
+           f"feas={getattr(lp3, 'feasibility', None)}")
+
+    # --- Cas 4 : aucun patch trouvé (scan_patch {} tous radius) -> retourne None ---
+    api4 = _FakeModApi(patches=[None, None, None], obstacles_by_patch={})
+    fb4 = FactoryBuilder(
+        api4, Contract(ProductionGoal("iron-gear-wheel", 5), zone=(0, 0), replan_budget=4))
+    lp4 = fb4.build_layout(splan, geometry)
+    record("Cas4 aucun patch -> retourne None (handoff abandon)",
+           lp4 is None, f"lp={lp4}")
+
+    # --- Cas 5 : pas de mine (splan sans node mine) -> chemin défensif (terrain vide + plan
+    # direct), retourne un LayoutPlan non None (pas de crash ; feasibility dépend du splan). ---
+    from types import SimpleNamespace as _NS
+    node_craft = _NS(role="craft", item="iron-gear-wheel", machine="assembling-machine-1",
+                     ingredients=[("iron-plate", 2)], machine_count=1, rate_effective=5.0,
+                     source_item=None, transport="belt")
+    splan_no_mine = _NS(nodes=[node_craft], leaves=[node_craft], feasibility="ok")
+    api5 = _FakeModApi(patches=[None, None, None], obstacles_by_patch={})
+    fb5 = FactoryBuilder(
+        api5, Contract(ProductionGoal("iron-gear-wheel", 5), zone=(0, 0), replan_budget=4))
+    lp5 = fb5.build_layout(splan_no_mine, geometry)
+    record("Cas5 pas de mine -> chemin défensif (LayoutPlan non None, pas crash)",
+           lp5 is not None,
+           f"feas={getattr(lp5, 'feasibility', None)} entities={len(getattr(lp5,'entities',[]))}")
+
+    # --- Cas 6 : replan_budget propagé depuis Contract vers le LayoutPlan ---
+    record("Cas6 replan_budget propagé (Contract -> LayoutPlan)",
+           lp1 is not None and lp1.request.constraints.replan_budget == 4,
+           f"replan_budget={getattr(lp1.request.constraints, 'replan_budget', None)}")
+
+    # --- Cas 7 : constructible_zone dérivé depuis Contract.zone (point -> bbox ±60) ---
+    record("Cas7 constructible_zone dérivé de Contract.zone (±60)",
+           lp1 is not None and lp1.request.constraints.constructible_zone == (-60, -60, 60, 60),
+           f"zone={getattr(lp1.request.constraints, 'constructible_zone', None)}")
+
+    # --- Cas 8 : terrain_check=True injecté par _merge_constraints (défaut S4b) ---
+    record("Cas8 terrain_check=True injecté (défaut S4b)",
+           lp1 is not None and lp1.request.constraints.terrain_check is True,
+           f"terrain_check={getattr(lp1.request.constraints, 'terrain_check', None)}")
+
+
 # ===== 2. Test d'intégration sur serveur =====
 
 def _inv(api: ModApi) -> dict[str, int]:
@@ -402,12 +542,14 @@ def main() -> None:
         test_planner()
         test_llm_schema()
         test_planner_injection()
+        test_build_layout()
         recap()
         return
 
     test_planner()
     test_llm_schema()
     test_planner_injection()
+    test_build_layout()
     try:
         test_integration(headless=args.headless, llm=args.llm, loop=args.llm_loop)
     except Exception as e:

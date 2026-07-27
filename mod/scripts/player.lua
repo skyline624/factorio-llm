@@ -11,6 +11,10 @@
 local M = {}
 
 -- Kit de depart du personnage IA (cf. ai-player-v3 character.lua).
+-- S2a : ajoute les entites fluides (pipe/pumpjack/oil-refinery/chemical-plant/
+-- offshore-pump/boiler/steam-engine/pump/storage-tank/pipe-to-ground) pour valider
+-- la chaîne plastic-bar en live. Idempotent via storage.fl.kit_given (reset_character
+-- rearme le flag -> le nouveau character repart avec le kit integral).
 local STARTING_ITEMS = {
   {name = "wood", count = 50},
   {name = "coal", count = 100},
@@ -22,8 +26,24 @@ local STARTING_ITEMS = {
   {name = "burner-inserter", count = 10},
   {name = "transport-belt", count = 50},
   {name = "small-electric-pole", count = 20},
-  {name = "pipe", count = 20},
+  {name = "pipe", count = 100},
   {name = "iron-chest", count = 4},
+  -- S2a : fluides (socle + chaîne plastic-bar).
+  {name = "pipe-to-ground", count = 20},
+  {name = "pump", count = 4},
+  {name = "offshore-pump", count = 2},
+  {name = "pumpjack", count = 2},
+  {name = "oil-refinery", count = 1},
+  {name = "chemical-plant", count = 2},
+  {name = "boiler", count = 2},
+  {name = "steam-engine", count = 2},
+  {name = "storage-tank", count = 4},
+  -- S3b : beacons + modules + electric-furnace (validateur live S3b/S3c).
+  {name = "beacon", count = 20},
+  {name = "speed-module-3", count = 50},
+  {name = "productivity-module-3", count = 50},
+  {name = "speed-module-2", count = 20},
+  {name = "electric-furnace", count = 10},
 }
 
 -- Donne le kit de depart a un character (idempotent : une seule fois via storage).
