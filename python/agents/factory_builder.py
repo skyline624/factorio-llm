@@ -229,33 +229,114 @@ class FactoryBuilder(BaseAgent):
     # + retry de position, dont la validation que le drill est sur une tuile ore — règle
     # mémoire feedback-production-bootstrap-p2-llm §1, find_nearest non fiable iron-ore).
 
+    # Rayons d'escalade de scan_patch. Le bbox de scan_patch AGRÈGE tous les gisements du
+    # carré de rayon r (tools.lua : un seul find_entities_filtered, pas de clustering) :
+    # au rayon 400 le bbox observé en live faisait (-259,-91)-(400,46) et son centre
+    # tombait sur de l'herbe, à 250 tuiles du minerai le plus proche. On part donc du
+    # rayon le plus court qui trouve quelque chose : il isole le gisement local.
+    PATCH_RADII: tuple[float, ...] = (50.0, 100.0, 200.0, 400.0)
+
+    def _scan_patch_local(self, resource: str) -> dict:
+        """scan_patch au plus petit rayon qui trouve du minerai (gisement local, pas l'agrégat)."""
+        last: dict = {}
+        for r in self.PATCH_RADII:
+            sp = self.api.scan_patch(resource, r)
+            last = sp if isinstance(sp, dict) else {}
+            if last.get("bbox"):
+                last["_radius"] = r
+                return last
+        return last
+
+    @staticmethod
+    def _anchor_on_ore(sp: dict, facing: int) -> Optional[tuple]:
+        """Ancre le drill sur une VRAIE tuile de minerai, au bord aval du gisement.
+
+        `sample` (12 tuiles réelles, tools.lua) est la seule donnée de scan_patch qui
+        garantisse du minerai — le centre du bbox, lui, ne garantit rien (agrégat).
+        On prend la tuile la plus avancée dans le sens de `facing` : la chaîne
+        (drop → inserter → furnace) se déploie de ce côté et sort donc du gisement,
+        où il reste de la place. Recul d'une tuile vers l'intérieur pour que l'emprise
+        du drill morde le minerai même au bord.
+
+        Position ENTIÈRE : mesuré live, `create_entity` snappe le drill et le four sur
+        la grille entière (demandé (-17.5,-60.5) -> réel (-17,-60)).
+        """
+        from services.layout_planner import FACING_UNIT
+
+        sample = [(int(t["x"]), int(t["y"])) for t in sp.get("sample", [])
+                  if isinstance(t, dict) and "x" in t and "y" in t]
+        if not sample:
+            return None
+        ux, uy = FACING_UNIT.get(facing, (0, 1))
+        # Tuile la plus avancée côté facing, puis recul d'une tuile vers l'intérieur.
+        tx, ty = max(sample, key=lambda t: t[0] * ux + t[1] * uy)
+        return (float(tx - ux), float(ty - uy))
+
     def build_micro_layout(self, resource: str, geometry: object = None,
                            facing: int = 4, anchor: Optional[tuple] = None) -> object:
         """Bootstrap : micro-chaîne drill→inserter→furnace (3 entités, tout-burner).
 
-        1. scan_patch(resource) -> ResourcePatch (bbox ; pas de tiles détaillées).
-        2. anchor = anchor fourni ou centre du bbox du gisement (tuile ore probable ;
-           l'executor valide can_place et ajuste si le drill n'est pas sur une tuile ore).
+        1. scan_patch au plus petit rayon utile -> gisement LOCAL (pas l'agrégat r=400).
+        2. anchor = anchor fourni, sinon une tuile réelle du `sample` au bord aval
+           (jamais le centre du bbox : un mining-drill hors minerai est refusé à la pose
+           par `build_check_type=manual`, mesuré 26/26 en live).
         3. plan_micro(MicroRequest) -> MicroPlan (3 entités, feasibility='ok').
 
-        Retourne un MicroPlan (feasibility='patch' si scan_patch ne trouve aucun gisement).
+        Retourne un MicroPlan (feasibility='patch' si aucun gisement, ou si scan_patch
+        ne renvoie pas de `sample` exploitable — mieux vaut pas de plan qu'un plan posé
+        sur de l'herbe).
         Limitation : scan_patch est centré avatar (pas point arbitraire) — cf. build_layout.
         """
         from services.micro_planner import MicroRequest, plan_micro, MicroPlan
         from services.layout_planner import ResourcePatch
 
-        sp = self.api.scan_patch(resource, 400.0)
+        sp = self._scan_patch_local(resource)
         if not sp or not sp.get("bbox"):
             return MicroPlan(
                 feasibility="patch",
-                notes=[f"scan_patch({resource}): aucun gisement trouvé (rayon 400)"],
+                notes=[f"scan_patch({resource}): aucun gisement trouvé "
+                       f"(rayons {list(self.PATCH_RADII)})"],
             )
         bb = sp["bbox"]
         patch = ResourcePatch(resource,
                               bbox=(int(bb["x1"]), int(bb["y1"]), int(bb["x2"]), int(bb["y2"])))
+        note = (f"scan_patch({resource}) r={sp.get('_radius')} count={sp.get('count')} "
+                f"bbox=({bb['x1']},{bb['y1']})-({bb['x2']},{bb['y2']})")
         if anchor is None:
-            # Centre du bbox (tuile ore probable) ; arrondi entier pour alignement grille.
-            ax = (int(bb["x1"]) + int(bb["x2"])) // 2
-            ay = (int(bb["y1"]) + int(bb["y2"])) // 2
-            anchor = (float(ax), float(ay))
-        return plan_micro(MicroRequest(patch=patch, facing=facing, anchor=anchor), geometry)
+            anchor = self._anchor_on_ore(sp, facing)
+            if anchor is None:
+                return MicroPlan(
+                    feasibility="patch",
+                    notes=[note, "sample vide : impossible d'ancrer le drill sur du minerai"],
+                )
+        plan = plan_micro(MicroRequest(patch=patch, facing=facing, anchor=anchor), geometry)
+        plan.notes.insert(0, note)
+        return plan
+
+    def run_micro_layout(self, resource: str, geometry: object = None,
+                         facing: int = 4, anchor: Optional[tuple] = None,
+                         **exec_kwargs) -> tuple:
+        """Bootstrap de bout en bout : calcule la micro-chaîne PUIS la bâtit en jeu.
+
+        Enchaîne `build_micro_layout` (plan déterministe) et
+        `services.executor.execute_micro` (pose + alimentation). Ferme la boucle
+        agent → jeu : c'est le premier chemin où FactoryBuilder produit des entités
+        réelles à partir d'un objectif, sans script de pose ad hoc.
+
+        `exec_kwargs` est passé tel quel à `execute_micro` (fuel, fuel_count, dry_run,
+        generate, approach, retry_offsets, timeout).
+
+        Retourne
+        --------
+        (MicroPlan, ExecutionReport)
+            Le rapport porte l'arbitrage à rendre : `missing` = approvisionnement à
+            faire (craft/collecte), `blocked` = replan lourd (autre gisement/tier,
+            cf. build_layout S4c). L'executor n'arbitre ni l'un ni l'autre.
+        """
+        from services.executor import ExecutionReport, execute_micro
+
+        plan = self.build_micro_layout(resource, geometry, facing, anchor)
+        if getattr(plan, "feasibility", "ok") != "ok":
+            return plan, ExecutionReport(
+                notes=[f"plan non exécuté: feasibility={plan.feasibility}"])
+        return plan, execute_micro(self.api, plan, **exec_kwargs)
