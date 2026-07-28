@@ -12,18 +12,35 @@ servent à crafter l'inserter — chicken-egg résolu).
 Déterministe pur (pas d'LLM) ; la vérification terrain (can_place) reste à l'executor
 (Coordinator P2). Frontière §7 spec respectée : le planner calcule, l'executor adapte.
 
-Règle mémoire feedback-production-bootstrap-p2-llm §2 : drop-direct drill→furnace 3×3
-IMPOSSIBLE en Factorio 2.0 (le furnace 3×3 chevauche le drill 3×3). L'inserter au milieu
-est la solution ; le MicroPlanner l'intègre par construction.
+Règle mémoire feedback-production-bootstrap-p2-llm §2 : drop-direct drill→furnace
+IMPOSSIBLE en Factorio 2.0. L'inserter au milieu est la solution ; le MicroPlanner
+l'intègre par construction.
 
-Layout (facing south, u = FACING_UNIT[4] = +y) :
-  drill (dx,dy) 3×3            [emprise dy-1..dy+1]
-    ↓ drop tile (dx, dy+2)     [bord aval + 1, hors emprise]
-  inserter (dx, dy+3) 1×1      [pickup 1.0 atteint dy+2, drop 1.0 atteint dy+4]
-    ↓
-  furnace (dx, dy+5) 3×3       [emprise dy+4..dy+6, bord -u (dy+4) = drop inserter]
+GÉOMÉTRIE MESURÉE (measure_entity, live 2026-07 — ne pas la ré-inventer)
+-----------------------------------------------------------------------
+burner-mining-drill : size 2×2, pose sur position ENTIÈRE ;
+    drop_position = centre + u*1.25 + perp*0.5   (perp = (uy, -ux), rotation -90°)
+    -> la TUILE de drop a pour centre  centre + u*1.5 + perp*0.5
+    Le drop n'est donc PAS sur l'axe du drill : il est décalé d'une demi-tuile de côté.
+burner-inserter     : 1×1, pose sur CENTRE de tuile (x.5) ;
+    pickup = centre + v*1.0, drop = centre - v*1.1  (v = FACING_UNIT[direction])
+stone-furnace       : size 2×2, pose sur position ENTIÈRE.
 
-Aucun chevauchement : drill dy-1..dy+1, inserter dy+3, furnace dy+4..dy+6.
+Le premier jet supposait drill 3×3 et un drop centré : la chaîne sortait décalée d'UNE
+tuile. Constat live : le drill posé était `working` puis `waiting_for_space_in_destination`,
+un `item-on-ground` s'accumulait sur sa vraie drop tile, l'inserter restait
+`waiting_for_source_items` et le four ne fondait rien. Toutes les positions sont désormais
+dérivées des mesures ci-dessus et SNAPPÉES sur la grille légale (`_snap`) : `can_place_check`
+teste ainsi exactement la position où `create_entity` posera.
+
+Layout (facing south, u = +y, perp = +x, drill/furnace 2×2) :
+  drill (dx,dy) 2×2            [emprise dy-1..dy+1]
+    ↓ drop tile (dx+0.5, dy+1.5)   [hors emprise, décalée de +0.5 en x]
+  inserter (dx+0.5, dy+2.5) 1×1    [pickup = drop tile du drill, drop = tuile suivante]
+    ↓ tuile de dépôt (dx+0.5, dy+3.5)
+  furnace (dx, dy+4) 2×2       [emprise dy+3..dy+5 : son bord amont EST la tuile de dépôt]
+
+Aucun chevauchement : drill dy-1..dy+1, inserter dy+2..dy+3, furnace dy+3..dy+5.
 
 Parallèle :
   LayoutPlanner : BOM + terrain -> usine main-bus scalable (dimensionnée au débit + taille patch)
@@ -32,11 +49,12 @@ Parallèle :
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
 from services.layout_planner import (
-    LayoutEntity, FACING_UNIT, FACING_DIR_U, ResourcePatch,
+    LayoutEntity, FACING_UNIT, ResourcePatch,
 )
 from services.knowledge import GeometryBase
 
@@ -47,18 +65,20 @@ from services.knowledge import GeometryBase
 class MicroRequest:
     """Requête du MicroPlanner : un gisement + orientation + tiers (tout-burner par défaut).
 
-    `drill_size` et `furnace_size` sont des tailles RÉELLES (tuiles de collision), pas les
-    métadonnées `describe().size` (qui retournent w=2 h=2 pour le burner-mining-drill alors
-    que sa collision est 3×3 en Factorio 2.0 — cf. mémoire feedback-production-bootstrap-p2-llm).
-    Defaults = burner-mining-drill (3×3) + stone-furnace (3×3), tout-burner, aucun pole/belt.
+    `drill_size` et `furnace_size` sont des emprises RÉELLES en tuiles, MESURÉES en jeu
+    (`measure_entity` : size w=2 h=2 pour burner-mining-drill comme pour stone-furnace,
+    et les deux se posent sur position entière — ce qui confirme l'emprise paire).
+    Une taille paire pose sur position entière, une taille impaire sur centre de tuile
+    (`_snap`) ; la parité pilote aussi le décalage latéral du drop du drill.
+    Defaults = burner-mining-drill (2×2) + stone-furnace (2×2), tout-burner, aucun pole/belt.
     """
     patch: ResourcePatch                              # gisement (depuis scan_patch)
     facing: int = 4                                   # côté de drop du drill (0=N, 2=E, 4=S, 6=W)
     drill_tier: str = "burner-mining-drill"
     inserter_tier: str = "burner-inserter"            # burner = pas de pole
     furnace_tier: str = "stone-furnace"
-    drill_size: int = 3                               # taille RÉELLE drill (2.0 = 3×3)
-    furnace_size: int = 3                             # taille RÉELLE furnace (stone-furnace = 3×3)
+    drill_size: int = 2                               # emprise RÉELLE drill (mesurée 2×2)
+    furnace_size: int = 2                             # emprise RÉELLE furnace (mesurée 2×2)
     anchor: Optional[tuple[float, float]] = None      # position drill ; None = 1re tuile ore du patch
 
 
@@ -83,6 +103,17 @@ def _add(entities, name, x, y, direction, role, node_item="") -> int:
     """Append une LayoutEntity, retourne son idx (même pattern que layout_planner._add)."""
     entities.append(LayoutEntity(name, x, y, direction, role, node_item))
     return len(entities) - 1
+
+
+def _snap(v: float, size: int) -> float:
+    """Position légale sur la grille Factorio pour une entité d'emprise `size` tuiles.
+
+    Emprise paire -> position entière (coin de 4 tuiles) ; impaire -> centre de tuile (x.5).
+    `create_entity` snappe de toute façon ; on le fait ICI pour que `can_place_check` teste
+    la position réellement occupée. Sans ça les deux divergent d'une demi-tuile et la chaîne
+    se retrouve désalignée (constat live : inserter demandé en -69.0, posé en -68.5).
+    """
+    return float(round(v)) if size % 2 == 0 else math.floor(v) + 0.5
 
 
 def plan_micro(request: MicroRequest, geometry: Optional[GeometryBase] = None) -> MicroPlan:
@@ -124,30 +155,39 @@ def plan_micro(request: MicroRequest, geometry: Optional[GeometryBase] = None) -
         x1, y1, x2, y2 = request.patch.bbox
         dx, dy = float((x1 + x2) / 2), float((y1 + y2) / 2)
 
-    demi_d = request.drill_size // 2     # 3 // 2 = 1
-    demi_f = request.furnace_size // 2   # 3 // 2 = 1
+    dx, dy = _snap(dx, request.drill_size), _snap(dy, request.drill_size)
 
-    # 2. Drop tile = bord aval du drill + 1 (tuile juste après l'emprise, hors emprise).
-    #    Pour un drill 3×3 (demi 1), emprise dy-1..dy+1 -> drop à dy+2.
-    drop_x = dx + ux * (demi_d + 1)
-    drop_y = dy + uy * (demi_d + 1)
+    demi_d = request.drill_size / 2.0      # 2×2 -> 1.0 (emprise dy-1..dy+1)
+    demi_f = request.furnace_size / 2.0
+    # Décalage latéral du drop : mesuré à 0.5 sur les entités d'emprise PAIRE (leur centre
+    # est un coin de tuiles, le drop se cale sur la colonne de tuiles d'un seul côté).
+    # Emprise impaire (centre = centre de tuile) -> drop dans l'axe, décalage nul.
+    lat_d = 0.5 if request.drill_size % 2 == 0 else 0.0
+    lat_f = 0.5 if request.furnace_size % 2 == 0 else 0.0
+    px, py = uy, -ux                       # perpendiculaire à u (rotation -90°)
 
-    # 3. Inserter (1×1, pickup 1.0, drop 1.0) : 1 tuile après la drop tile (côté +u).
-    #    L'inserter est placé entre la drop tile (drill, côté -u) et le furnace (côté +u).
-    #    En Factorio 2.0, `direction` = direction de PICKUP (validé live : inserter facing
-    #    north pickup_position = y-1, drop_position = y+1). L'inserter doit ramasser la drop
-    #    tile du drill (côté -u) et déposer côté furnace (+u) -> sa direction = OPPOSÉ de
-    #    facing (il « regarde » vers le drill). Bug initial : FACING_DIR_U[facing] orientait
-    #    l'inserter vers +u -> il ramassait la tuile vide côté furnace et déposait sur la
-    #    drop tile du drill (bloquait le drill : waiting_for_space_in_destination).
-    ins_x = drop_x + ux * 1.0
-    ins_y = drop_y + uy * 1.0
+    # 2. Centre de la TUILE de drop du drill = centre + u*(demi+0.5) + perp*lat.
+    #    Mesuré : drop_position = centre + u*1.25 + perp*0.5 pour un drill 2×2 ; la tuile
+    #    qui la contient a pour centre + u*1.5 + perp*0.5. Elle est hors emprise (demi=1).
+    drop_x = dx + ux * (demi_d + 0.5) + px * lat_d
+    drop_y = dy + uy * (demi_d + 0.5) + py * lat_d
+
+    # 3. Inserter (1×1) : 1 tuile après la drop tile, de sorte que son pickup TOMBE dessus.
+    #    En Factorio 2.0, `direction` = direction de PICKUP (mesuré : inserter north ->
+    #    pickup = centre+(0,-1), drop = centre+(0,+1.1)). L'inserter doit ramasser la drop
+    #    tile du drill (côté -u) et déposer côté furnace (+u) -> direction = OPPOSÉ de facing
+    #    (il « regarde » vers le drill). Bug initial : FACING_DIR_U[facing] l'orientait vers
+    #    +u -> il ramassait la tuile vide côté furnace et déposait sur la drop tile du drill.
+    ins_x = _snap(drop_x + ux * 1.0, 1)
+    ins_y = _snap(drop_y + uy * 1.0, 1)
     ins_dir = (facing + 4) % 8       # opposé de facing : pickup vers la drop tile du drill (-u)
 
-    # 4. Furnace : bord -u (côté arrière) = drop inserter -> centre = ins + (1 + demi_f).
-    #    Inserter drop à ins+1*u ; furnace bord -u = ins+1*u -> centre = ins+(1+demi_f)*u.
-    furnace_x = ins_x + ux * (1 + demi_f)
-    furnace_y = ins_y + uy * (1 + demi_f)
+    # 4. Furnace : sa tuile de bord amont doit être la tuile où l'inserter DÉPOSE
+    #    (= ins + u*1, mesuré drop à u*1.1 donc même tuile). Centre = tuile de dépôt
+    #    + u*(demi_f - 0.5), recentré latéralement sur l'axe du drill (-perp*lat_f).
+    put_x, put_y = ins_x + ux * 1.0, ins_y + uy * 1.0
+    furnace_x = _snap(put_x + ux * (demi_f - 0.5) - px * lat_f, request.furnace_size)
+    furnace_y = _snap(put_y + uy * (demi_f - 0.5) - py * lat_f, request.furnace_size)
 
     # 5. Entités (drill orienté facing = drop côté facing ; furnace carré non orienté).
     entities: list[LayoutEntity] = []
@@ -175,8 +215,9 @@ def plan_micro(request: MicroRequest, geometry: Optional[GeometryBase] = None) -
     notes = [
         f"micro_chain: drill({request.drill_tier})@({dx},{dy}) facing={facing} "
         f"-> inserter@({ins_x},{ins_y}) -> furnace@({furnace_x},{furnace_y})",
-        f"drop_tile=({drop_x},{drop_y}) ; drill_size={request.drill_size} "
-        f"(réel 2.0, describe w=2 h=2 = métadonnée) ; furnace_size={request.furnace_size}",
+        f"drop_tile={drop_x},{drop_y} -> pickup inserter ; dépôt inserter={put_x},{put_y} "
+        f"-> bord amont furnace ; drill_size={request.drill_size} "
+        f"furnace_size={request.furnace_size} (emprises mesurées, positions snappées)",
         "terrain_check=off (executor fait can_place_check + retry de position)",
     ]
 
