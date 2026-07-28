@@ -31,6 +31,10 @@ server/config/config.ini
 client/config/config.ini
 
 # ===== OS / editeurs =====
+# Artefact Git Bash sous Windows : `> nul` cree un vrai fichier au lieu de viser le
+# peripherique null (utiliser `/dev/null` en bash). Nom reserve : `del`/`Remove-Item`
+# ne peuvent pas le supprimer, seul `rm -- nul` (Git Bash) fonctionne.
+nul
 Thumbs.db
 .DS_Store
 .vscode/

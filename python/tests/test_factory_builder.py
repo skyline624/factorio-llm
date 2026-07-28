@@ -10,7 +10,9 @@ Niveaux de validation :
    sans four/wait, plan ne satisfaisant pas l'objectif, >40 steps, double four).
 3. **test_planner_injection()** — UNITAIRE. Valide l'injection DIP : FakePlanner
    utilisé tel quel par FactoryBuilder ; LLMPlanner désactivé -> fallback det.
-4. **test_integration(headless, llm)** — INTÉGRATION sur serveur RCON. Exécute
+4. **run_integration(headless, llm)** — INTÉGRATION sur serveur RCON (préfixe `run_`
+   et non `test_` : scénario paramétré appelé par `main()`, non collectable par
+   pytest — un `test_*` à paramètres serait lu comme des fixtures). Exécute
    réellement la chaîne. Cas 1 (craft direct +5 gears) + Cas 2 (mine+smelt+craft
    +25 gears). En mode `--llm`, la décision vient du LLM (avec fallback det si
    LLM down ou plan invalide) ; les asserts portent sur l'aboutissement (delta
@@ -469,7 +471,7 @@ def _run_case(api: ModApi, goal_count: int, expect_mining: bool,
            f"gears {inv_before.get('iron-gear-wheel', 0)} -> {inv_after.get('iron-gear-wheel', 0)} (delta={d_gear})")
 
 
-def test_integration(headless: bool, llm: bool = False, loop: bool = False) -> None:
+def run_integration(headless: bool, llm: bool = False, loop: bool = False) -> None:
     mode = ("llm-loop " if loop else "llm " if llm else "") + \
           ("headless" if headless else "physique")
     print(f"\n[test] === INTEGRATION {mode} ===")
@@ -551,7 +553,7 @@ def main() -> None:
     test_planner_injection()
     test_build_layout()
     try:
-        test_integration(headless=args.headless, llm=args.llm, loop=args.llm_loop)
+        run_integration(headless=args.headless, llm=args.llm, loop=args.llm_loop)
     except Exception as e:
         record("integration", False, f"EXC: {e!r}")
     recap()
