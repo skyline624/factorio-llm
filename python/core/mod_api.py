@@ -18,7 +18,7 @@ donc le retour en JSON.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Optional
 
 from core.rcon import RconClient
 
@@ -34,6 +34,8 @@ class ModApi:
     # ----- bas niveau -----
 
     def _lua_literal(self, v: Any) -> str:
+        if v is None:
+            return "nil"          # argument optionnel omis (positionnel en Lua)
         if isinstance(v, bool):
             return "true" if v else "false"
         if isinstance(v, (int, float)):
@@ -41,6 +43,14 @@ class ModApi:
         if isinstance(v, str):
             escaped = v.replace("\\", "\\\\").replace('"', '\\"')
             return f'"{escaped}"'
+        if isinstance(v, dict):
+            # Table Lua. Cles TOUJOURS en ["..."] : les noms d'items contiennent des
+            # tirets ("speed-module-3"), illegaux en cle nue.
+            inner = ", ".join(f"[{self._lua_literal(str(k))}] = {self._lua_literal(val)}"
+                              for k, val in v.items())
+            return "{" + inner + "}"
+        if isinstance(v, (list, tuple)):
+            return "{" + ", ".join(self._lua_literal(i) for i in v) + "}"
         raise ModApiError(f"type non serialisable en literal Lua: {type(v)}")
 
     def _call(self, interface: str, method: str, *args: Any) -> Any:
@@ -197,9 +207,41 @@ class ModApi:
         """Mine `count` entites du nom/type donne (mining_state anime en prod)."""
         return self._call("fl_ops", "mine_entity", entity_name, count)
 
-    def place_entity_at(self, entity_name: str, x: float, y: float, direction: str = "north") -> dict:
-        """Pose une entite a une position (garde de reach + can_place en prod)."""
-        return self._call("fl_ops", "place_entity_at", entity_name, x, y, direction)
+    def place_entity_at(self, entity_name: str, x: float, y: float, direction: str = "north",
+                        opts: Optional[dict] = None) -> dict:
+        """Pose une entite a une position (garde de reach + can_place en prod).
+
+        `opts` (E2) : {recipe, ug_type, priority_in, priority_out, modules, fuel,
+        fuel_count} — les champs que le LayoutPlanner calcule deja et qu'on ne savait
+        pas poser. Appliques APRES la creation ; l'echec d'une option n'annule pas la
+        pose mais est consigne dans le detail (une entite mal reglee se corrige avec
+        set_recipe_at / rotate_entity_at, un trou dans la chaine non).
+        """
+        return self._call("fl_ops", "place_entity_at", entity_name, x, y, direction, opts)
+
+    def remove_entity_at(self, x: float, y: float, entity_name: Optional[str] = None) -> dict:
+        """Retire l'entite a la position (rayon 1.5) ; les items reviennent a l'inventaire.
+
+        Sans `entity_name` : entite de notre force la plus proche, a defaut une entite
+        minable (arbre / rocher) — degager un emplacement est un usage prevu.
+        Contrairement a mine_entity (qui cible par NOM dans un rayon), cette primitive
+        vise une position precise : c'est ce qui rend une erreur de pose reparable.
+        """
+        return self._call("fl_ops", "remove_entity_at", x, y, entity_name)
+
+    def rotate_entity_at(self, x: float, y: float, direction: str,
+                         entity_name: Optional[str] = None) -> dict:
+        """Oriente une entite deja posee. Direction ABSOLUE, pas un cran de rotation."""
+        return self._call("fl_ops", "rotate_entity_at", x, y, direction, entity_name)
+
+    def set_recipe_at(self, x: float, y: float, recipe: Optional[str],
+                      entity_name: Optional[str] = None) -> dict:
+        """Regle la recette d'une machine posee (None efface la recette).
+
+        Verrou de toute automatisation au-dela des fours : un assembleur sans recette
+        ne produit rien.
+        """
+        return self._call("fl_ops", "set_recipe_at", x, y, recipe, entity_name)
 
     def move_items(self, item_name: str, entity_name: str, max_count: int = 0,
                    to_entity: bool = True) -> dict:

@@ -92,6 +92,48 @@ class StubRconClient:
 # ===== Tests =====
 
 
+def test_lua_literal_nil_et_table() -> None:
+    """E2 : `None` -> nil et dict -> table Lua, clés TOUJOURS en ["..."].
+
+    Les noms d'items contiennent des tirets ("speed-module-3") : en clé nue le Lua
+    ne compile pas (`{speed-module-3 = 2}` est une soustraction). Sans ces deux
+    conversions, `opts` et les arguments optionnels sont insérables.
+    """
+    api = ModApi(StubRconClient())
+    lit = api._lua_literal
+    ok = (lit(None) == "nil"
+          and lit({"recipe": "iron-gear-wheel"}) == '{["recipe"] = "iron-gear-wheel"}'
+          and lit({"modules": {"speed-module-3": 2}})
+          == '{["modules"] = {["speed-module-3"] = 2}}'
+          and lit(["a", "b"]) == '{"a", "b"}')
+    rec("E2-1 : _lua_literal gère nil, table et clés à tirets", ok,
+        f'None->{lit(None)} dict->{lit({"modules": {"speed-module-3": 2}})}')
+    assert ok
+
+
+def test_primitives_e2_emises() -> None:
+    """E2 : les 4 primitives émettent le bon remote.call (nom + arguments positionnels)."""
+    stub = StubRconClient()
+    api = ModApi(stub)
+    emis = {}
+    api.place_entity_at("assembling-machine-1", 3.0, -4.0, "north", {"recipe": "iron-gear-wheel"})
+    emis["place"] = stub.last_lua
+    api.remove_entity_at(3.0, -4.0)
+    emis["remove"] = stub.last_lua
+    api.rotate_entity_at(3.0, -4.0, "east")
+    emis["rotate"] = stub.last_lua
+    api.set_recipe_at(3.0, -4.0, "electronic-circuit")
+    emis["recipe"] = stub.last_lua
+    ok = ('"place_entity_at", "assembling-machine-1", 3.0, -4.0, "north", {["recipe"] = "iron-gear-wheel"}'
+          in emis["place"]
+          and '"remove_entity_at", 3.0, -4.0, nil' in emis["remove"]
+          and '"rotate_entity_at", 3.0, -4.0, "east", nil' in emis["rotate"]
+          and '"set_recipe_at", 3.0, -4.0, "electronic-circuit", nil' in emis["recipe"])
+    rec("E2-2 : remove/rotate/set_recipe + opts de pose émis correctement", ok,
+        emis["place"][-70:])
+    assert ok
+
+
 def test_scan_obstacles_parse() -> None:
     """scan_obstacles parse obstacles[].bbox (x,y,w,h floored) + count + origin."""
     stub = StubRconClient()
@@ -199,6 +241,8 @@ def test_generate_terrain_default_radius() -> None:
 
 def main() -> int:
     tests = [
+        test_lua_literal_nil_et_table,
+        test_primitives_e2_emises,
         test_scan_obstacles_parse,
         test_scan_obstacles_radius_arg,
         test_get_tile_name,

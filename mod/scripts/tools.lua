@@ -50,6 +50,20 @@ local function entity_row(surface, e)
   -- accessible au runtime sur l'INSTANCE (contrairement aux prototypes). Retourne
   -- [{name, count}] par slot. Indispensable pour valider live que les beacons posés
   -- contiennent bien les modules attendus (scan_factory).
+  -- E2 : rendre VERIFIABLES les options de pose du LayoutPlanner. Sans ces champs,
+  -- on pose un underground-belt ou un splitter sans pouvoir controler que le sens et
+  -- les priorites ont bien ete appliques (belt_to_ground_type n'est pas modifiable
+  -- apres coup : une erreur ici oblige a retirer l'entite).
+  if e.type == "underground-belt" then
+    local okug, ug = pcall(function() return e.belt_to_ground_type end)
+    if okug then rec.ugType = ug end
+  end
+  if e.type == "splitter" then
+    local oki, pin = pcall(function() return e.splitter_input_priority end)
+    local oko, pout = pcall(function() return e.splitter_output_priority end)
+    if oki then rec.prioIn = pin end
+    if oko then rec.prioOut = pout end
+  end
   if e.type == "beacon" or utils_entity.is_crafting_machine(e) then
     local okmi, inv = pcall(function() return e.get_module_inventory() end)
     if okmi and inv and inv.valid then
@@ -416,6 +430,14 @@ end
 
 -- can_place_check(name, x, y, direction) : test non destructif de placabilite.
 -- Retourne {name, x, y, can_place, error?}. direction = string cardinale ou int 16-dir.
+--
+-- build_check_type = manual : OBLIGATOIRE pour que la verification predise la POSE.
+-- state_placing_at (task_manager.lua) pose avec `manual` ; sans lui, can_place_entity
+-- utilise le mode `script`, plus permissif, et les deux divergent. Mesure live E1 :
+-- burner-mining-drill sur de l'herbe -> can_place_check(script)=True 26 fois sur 26,
+-- pose(manual)=echec 26 fois sur 26 ("cannot place here"), car un mining-drill hors
+-- gisement est refuse par le curseur joueur ("no ore"). L'executor Python posait donc
+-- en aveugle et rapportait des poses fantomes. Meme drill sur une tuile iron-ore : pose OK.
 function M.can_place_check(name, x, y, direction)
   local surface = game.surfaces.nauvis or game.surfaces[1]
   if not surface then return json.encode({error = "aucune surface"}) end
@@ -428,7 +450,10 @@ function M.can_place_check(name, x, y, direction)
   end
   local force = game.forces.player
   local ok, can = pcall(function()
-    return surface.can_place_entity{name = name, position = {x = x, y = y}, direction = dir, force = force}
+    return surface.can_place_entity{
+      name = name, position = {x = x, y = y}, direction = dir, force = force,
+      build_check_type = defines.build_check_type.manual,
+    }
   end)
   if not ok then return json.encode({name = name, x = r1(x), y = r1(y), can_place = false, error = tostring(can)}) end
   return json.encode({name = name, x = r1(x), y = r1(y), can_place = can == true})

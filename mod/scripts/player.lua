@@ -26,6 +26,14 @@ local STARTING_ITEMS = {
   {name = "burner-inserter", count = 10},
   {name = "transport-belt", count = 50},
   {name = "small-electric-pole", count = 20},
+  -- E2 : de quoi valider les options de pose (recette, sens underground, priorite
+  -- splitter) et amorcer l'automatisation reelle — le kit n'avait aucun assembleur,
+  -- donc aucune machine a recette reglable hors chaine fluide.
+  {name = "assembling-machine-1", count = 4},
+  {name = "assembling-machine-2", count = 2},
+  {name = "underground-belt", count = 10},
+  {name = "splitter", count = 4},
+  {name = "lab", count = 2},
   {name = "pipe", count = 100},
   {name = "iron-chest", count = 4},
   -- S2a : fluides (socle + chaîne plastic-bar).

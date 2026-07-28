@@ -4,7 +4,8 @@
 --   fl_tools : observation synchrone (get_state, get_tick, scan_area, scan_factory,
 --              find_nearest, describe, get_recipe, production_stats)
 --   fl_ops   : action asynchrone (walk_to, walk_to_entity, teleport_to, mine_entity,
---              place_entity_at, move_items, move_items_at, wait, craft_item,
+--              place_entity_at, remove_entity_at, rotate_entity_at, set_recipe_at,
+--              move_items, move_items_at, wait, craft_item,
 --              research_technology, set_test_mode, setup, status, cancel)
 -- Les operations ne font qu'enfiler une tache ; l'execution se fait sur on_tick.
 --
@@ -104,8 +105,18 @@ remote.add_interface("fl_ops", {
   mine_entity = function(entity_name, count)
     safe(function() local ok, d = operations.mine_entity(entity_name, count) reply_ack(ok, d) end)
   end,
-  place_entity_at = function(entity_name, x, y, direction)
-    safe(function() local ok, d = operations.place_entity_at(entity_name, x, y, direction) reply_ack(ok, d) end)
+  place_entity_at = function(entity_name, x, y, direction, opts)
+    safe(function() local ok, d = operations.place_entity_at(entity_name, x, y, direction, opts) reply_ack(ok, d) end)
+  end,
+  -- E2 : agir sur une entite deja posee (corriger au lieu de subir).
+  remove_entity_at = function(x, y, entity_name)
+    safe(function() local ok, d = operations.remove_entity_at(x, y, entity_name) reply_ack(ok, d) end)
+  end,
+  rotate_entity_at = function(x, y, direction, entity_name)
+    safe(function() local ok, d = operations.rotate_entity_at(x, y, direction, entity_name) reply_ack(ok, d) end)
+  end,
+  set_recipe_at = function(x, y, recipe, entity_name)
+    safe(function() local ok, d = operations.set_recipe_at(x, y, recipe, entity_name) reply_ack(ok, d) end)
   end,
   move_items = function(item_name, entity_name, max_count, to_entity)
     safe(function() local ok, d = operations.move_items(item_name, entity_name, max_count, to_entity) reply_ack(ok, d) end)

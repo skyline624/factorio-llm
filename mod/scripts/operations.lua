@@ -61,20 +61,60 @@ end
 
 -- ===== Placement =====
 
--- place_entity_at(entity_name, x, y, direction) : pose une entite a une position.
+-- Conversion commune des directions : string ('north'|'east'|...) ou int 16-dir.
+local function to_direction(direction)
+  if type(direction) == "string" then return utils_entity.direction_from_name(direction) end
+  if type(direction) == "number" then return direction end
+  return defines.direction.north
+end
+
+-- place_entity_at(entity_name, x, y, direction, opts) : pose une entite a une position.
 -- direction : string ('north'|'east'|...) convertie en int via utils_entity.
-function M.place_entity_at(entity_name, x, y, direction)
+-- opts (optionnel, E2) : table {recipe, ug_type, priority_in, priority_out, modules,
+-- fuel, fuel_count}. Les options sont appliquees APRES la pose et leurs echecs sont
+-- consignes dans le detail sans annuler la pose (une entite mal reglee se corrige).
+function M.place_entity_at(entity_name, x, y, direction, opts)
   if not require_entity() then return false, "aucun avatar IA" end
   if not entity_name or entity_name == "" then return false, "entity_name requis" end
   if type(x) ~= "number" or type(y) ~= "number" then return false, "x,y numeriques requis" end
-  local dir = defines.direction.north
-  if type(direction) == "string" then
-    dir = utils_entity.direction_from_name(direction)
-  elseif type(direction) == "number" then
-    dir = direction
-  end
-  task_manager.queue(task_manager.new_place_entity_at(entity_name, x, y, dir))
+  if opts ~= nil and type(opts) ~= "table" then return false, "opts doit etre une table" end
+  task_manager.queue(task_manager.new_place_entity_at(entity_name, x, y, to_direction(direction), opts))
   return true, string.format("en file (place %s at %.1f,%.1f)", entity_name, x, y)
+end
+
+-- ===== Correction d'une entite deja posee (E2) =====
+-- Ces trois operations ferment la boucle « construire -> constater -> corriger ».
+-- Sans elles le mod ne sait que construire, et toute erreur de pose est definitive.
+
+-- remove_entity_at(x, y, entity_name) : retire l'entite a la position (rayon 1.5).
+-- entity_name optionnel : sans lui, cible l'entite de notre force la plus proche,
+-- a defaut une entite minable (arbre / rocher) pour degager un emplacement.
+function M.remove_entity_at(x, y, entity_name)
+  if not require_entity() then return false, "aucun avatar IA" end
+  if type(x) ~= "number" or type(y) ~= "number" then return false, "x,y numeriques requis" end
+  task_manager.queue(task_manager.new_remove_entity_at(x, y, entity_name))
+  return true, string.format("en file (remove at %.1f,%.1f)", x, y)
+end
+
+-- rotate_entity_at(x, y, direction, entity_name) : oriente une entite deja posee.
+-- La direction est ABSOLUE (pas un cran de rotation).
+function M.rotate_entity_at(x, y, direction, entity_name)
+  if not require_entity() then return false, "aucun avatar IA" end
+  if type(x) ~= "number" or type(y) ~= "number" then return false, "x,y numeriques requis" end
+  if direction == nil then return false, "direction requise" end
+  task_manager.queue(task_manager.new_rotate_entity_at(x, y, to_direction(direction), entity_name))
+  return true, string.format("en file (rotate at %.1f,%.1f)", x, y)
+end
+
+-- set_recipe_at(x, y, recipe, entity_name) : regle la recette d'une machine posee.
+-- recipe = nil ou "" efface la recette. Verrou de toute automatisation au-dela des fours.
+function M.set_recipe_at(x, y, recipe, entity_name)
+  if not require_entity() then return false, "aucun avatar IA" end
+  if type(x) ~= "number" or type(y) ~= "number" then return false, "x,y numeriques requis" end
+  if recipe == "" then recipe = nil end
+  if recipe ~= nil and type(recipe) ~= "string" then return false, "recipe doit etre une chaine" end
+  task_manager.queue(task_manager.new_set_recipe_at(x, y, recipe, entity_name))
+  return true, string.format("en file (recipe %s at %.1f,%.1f)", tostring(recipe), x, y)
 end
 
 -- ===== Transfert d'items =====

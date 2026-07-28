@@ -45,6 +45,7 @@ local TEST_MINING_RADIUS = 12      -- rayon de recherche cible de minage (test :
 local MINING_STALL_MAX = 90        -- ticks sans progres minage = abort
 local MOVE_RADIUS = 32             -- rayon de recherche entites pour move_items
 local MOVE_AT_RADIUS = 1.5         -- rayon de recherche entite pour move_items_at
+local TARGET_AT_RADIUS = 1.5       -- rayon de ciblage d'une entite deja posee (E2)
 
 -- ===== Etats =====
 local WALKING = "walking"
@@ -54,6 +55,12 @@ local MOVING_ITEMS = "moving_items"
 local WAITING = "waiting"
 local CRAFTING = "crafting"
 local RESEARCHING = "researching"
+-- E2 : agir sur une entite DEJA posee. Sans ces trois etats, le mod ne sait que
+-- construire : une erreur de pose est definitive et aucune machine ne peut recevoir
+-- de recette (donc aucune automatisation au-dela des fours).
+local REMOVING_AT = "removing_at"
+local ROTATING_AT = "rotating_at"
+local SETTING_RECIPE = "setting_recipe"
 
 -- ===== Storage =====
 
@@ -513,17 +520,137 @@ function M.on_player_mined(event)
   end
 end
 
+-- ===== Helpers partages : portee et ciblage par position (E2) =====
+
+-- Portee du joueur en PRODUCTION. En mode test il n'y en a aucune : le mode test
+-- MASQUE cette contrainte, donc toute primitive doit etre validee en production.
+-- kind = "build" (poser -> build_distance) ou "reach" (miner/tourner/regler la
+-- recette -> reach_distance, la portee d'interaction).
+local function out_of_reach(char, target, kind)
+  if player_mod.is_test_mode() then return false end
+  local p = player_mod.get_ai_player()
+  local max_d
+  if kind == "build" then
+    max_d = (p and (p.build_distance + 2)) or 10
+  else
+    max_d = (p and (p.reach_distance + 2)) or 10
+  end
+  return math_utils.distance(char.position, target) > max_d
+end
+
+-- Entite visee par une action a la position (x, y).
+--   name fourni  -> filtre par nom (ou type, cf. utils_entity.find_target_entities)
+--   name absent  -> entite de NOTRE force la plus proche ; a defaut une entite
+--                   minable (arbre / rocher : degager un emplacement est legitime).
+-- Le character est toujours exclu (on ne se mine pas soi-meme).
+local function entity_at(char, x, y, name)
+  local target = {x = x, y = y}
+  local ents = utils_entity.find_target_entities(char.surface, target, TARGET_AT_RADIUS, name)
+  local best, best_d, spare, spare_d = nil, nil, nil, nil
+  for _, e in ipairs(ents) do
+    if e.valid and e ~= char and e.type ~= "character" then
+      local d = math_utils.distance(target, e.position)
+      if e.force == char.force then
+        if not best_d or d < best_d then best, best_d = e, d end
+      elseif e.minable then
+        if not spare_d or d < spare_d then spare, spare_d = e, d end
+      end
+    end
+  end
+  return best or spare
+end
+
+-- Applique les options de pose a l'entite creee (E2). Chaque option est independante
+-- et son echec est CONSIGNE sans annuler la pose : une entite posee mais mal reglee
+-- se corrige (set_recipe_at / rotate_entity_at), une pose annulee laisse un trou dans
+-- la chaine. Retourne la liste des notes a joindre au detail de la tache.
+local function apply_place_options(ent, opts, inv)
+  local notes = {}
+  if not opts then return notes end
+
+  -- Recette : sans elle un assembleur ne produit RIEN.
+  if opts.recipe then
+    local ok, ejected = pcall(function() return ent.set_recipe(opts.recipe) end)
+    if ok then
+      -- set_recipe rend les ingredients de l'ancienne recette : ne pas les perdre.
+      if ejected and inv then
+        for _, st in pairs(ejected) do pcall(function() inv.insert(st) end) end
+      end
+      table.insert(notes, "recipe=" .. tostring(opts.recipe))
+    else
+      table.insert(notes, "recipe KO")
+    end
+  end
+
+  -- Underground belt : le sens est donne A LA CREATION (champ `type` de create_entity)
+  -- et n'est PAS reglable ensuite (belt_to_ground_type est en lecture seule). On ne
+  -- fait donc pas confiance a la creation : on relit, et on corrige par rotation.
+  if opts.ug_type then
+    local got = nil
+    pcall(function() got = ent.belt_to_ground_type end)
+    if got and got ~= opts.ug_type then
+      pcall(function() ent.rotate({}) end)
+      pcall(function() got = ent.belt_to_ground_type end)
+    end
+    table.insert(notes, "ug_type=" .. tostring(got))
+  end
+
+  -- Splitter : priorites d'entree/sortie (RW, donc reglables apres la pose).
+  if opts.priority_in then
+    local ok = pcall(function() ent.splitter_input_priority = opts.priority_in end)
+    table.insert(notes, "prio_in=" .. tostring(opts.priority_in) .. (ok and "" or " KO"))
+  end
+  if opts.priority_out then
+    local ok = pcall(function() ent.splitter_output_priority = opts.priority_out end)
+    table.insert(notes, "prio_out=" .. tostring(opts.priority_out) .. (ok and "" or " KO"))
+  end
+
+  -- Modules : preleves sur l'inventaire IA, comme l'entite elle-meme.
+  if opts.modules then
+    local minv = nil
+    pcall(function() minv = ent.get_module_inventory() end)
+    if minv and minv.valid then
+      for name, count in pairs(opts.modules) do
+        local have = (inv and inv.get_item_count(name)) or 0
+        local n = math.min(have, count)
+        if n > 0 then
+          local placed = minv.insert({name = name, count = n})
+          if placed > 0 and inv then inv.remove({name = name, count = placed}) end
+          table.insert(notes, string.format("module %s x%d", name, placed))
+        else
+          table.insert(notes, "module " .. name .. " absent de l'inventaire")
+        end
+      end
+    else
+      table.insert(notes, "pas d'emplacement de module")
+    end
+  end
+
+  -- Carburant a la pose : supprime le trou d'autonomie entre la pose et
+  -- l'alimentation, et un aller-retour move_items.
+  if opts.fuel and (opts.fuel_count or 0) > 0 then
+    local finv = nil
+    pcall(function() finv = ent.get_fuel_inventory() end)
+    if finv and finv.valid then
+      local have = (inv and inv.get_item_count(opts.fuel)) or 0
+      local n = math.min(have, opts.fuel_count)
+      if n > 0 then
+        local placed = finv.insert({name = opts.fuel, count = n})
+        if placed > 0 and inv then inv.remove({name = opts.fuel, count = placed}) end
+        table.insert(notes, string.format("fuel %s x%d", opts.fuel, placed))
+      end
+    end
+  end
+  return notes
+end
+
 -- ===== Etat PLACING_AT (synchrone, 1 tick) =====
 
 local function state_placing_at(char, params)
   local target = {x = params.x, y = params.y}
-  if not player_mod.is_test_mode() then
-    local p = player_mod.get_ai_player()
-    local reach = (p and (p.build_distance + 2)) or 10
-    if math_utils.distance(char.position, target) > reach then
-      M._complete("walk closer first", false)
-      return
-    end
+  if out_of_reach(char, target, "build") then
+    M._complete("walk closer first", false)
+    return
   end
   local surface = char.surface
   local dir = params.direction or defines.direction.north
@@ -539,6 +666,9 @@ local function state_placing_at(char, params)
     name = params.entity_name, position = target, direction = dir,
     force = char.force, raise_built = true,
   }
+  -- underground-belt / loader : le sens (input/output) se donne A LA CREATION.
+  local opts = params.opts
+  if opts and opts.ug_type then create_args.type = opts.ug_type end
   if not player_mod.is_test_mode() then
     local p = player_mod.get_ai_player()
     if p then create_args.player = p end
@@ -551,8 +681,108 @@ local function state_placing_at(char, params)
   local inv = player_mod.get_ai_inventory()
   if inv then inv.remove({name = params.entity_name, count = 1}) end
   utils_entity.push_character_clear(char, ent)
-  log(string.format("[fl] [RESULT] place_entity_at %s at (%.1f, %.1f)", params.entity_name, target.x, target.y))
-  M._complete(string.format("place %s at (%.1f, %.1f)", params.entity_name, target.x, target.y), true)
+  local notes = apply_place_options(ent, opts, inv)
+  local detail = string.format("place %s at (%.1f, %.1f)", params.entity_name, target.x, target.y)
+  if #notes > 0 then detail = detail .. " [" .. table.concat(notes, ", ") .. "]" end
+  log("[fl] [RESULT] place_entity_at " .. detail)
+  M._complete(detail, true)
+end
+
+-- ===== Etats REMOVING_AT / ROTATING_AT / SETTING_RECIPE (synchrones, 1 tick) =====
+-- Les trois agissent sur une entite DEJA posee et partagent la meme sequence :
+-- verifier la portee -> cibler l'entite -> agir -> RELIRE le resultat. On ne croit
+-- jamais l'affectation : le succes rapporte est celui qu'on a relu dans le jeu.
+
+-- Retire l'entite a une position. `char.mine_entity` mine COMME LE JOUEUR : les
+-- produits tombent dans l'inventaire IA, alors que destroy() les perdrait.
+-- Sans cette primitive, une erreur de construction est definitive.
+local function state_removing_at(char, params)
+  local target = {x = params.x, y = params.y}
+  if out_of_reach(char, target, "reach") then
+    M._complete("walk closer first", false)
+    return
+  end
+  local ent = entity_at(char, params.x, params.y, params.entity_name)
+  if not ent then
+    M._complete("aucune entite a cette position", false)
+    return
+  end
+  local name = ent.name
+  local ok, mined = pcall(function() return char.mine_entity(ent, true) end)
+  if ok and mined then
+    M._complete(string.format("retire %s at (%.1f, %.1f)", name, target.x, target.y), true)
+    return
+  end
+  -- Repli 1 : mine{} vers l'inventaire IA (entites non minables par le character).
+  local inv = player_mod.get_ai_inventory()
+  local ok2, mined2 = pcall(function()
+    return ent.mine({inventory = inv, force = true, raise_destroyed = true})
+  end)
+  if ok2 and mined2 then
+    M._complete(string.format("retire %s at (%.1f, %.1f) (mine)", name, target.x, target.y), true)
+    return
+  end
+  -- Repli 2 : destruction seche. Les items sont perdus -> on le DIT dans le detail.
+  local ok3 = pcall(function() return ent.destroy({raise_destroy = true}) end)
+  if not ok3 then
+    M._complete("retrait impossible: " .. name, false)
+    return
+  end
+  M._complete(string.format("detruit %s at (%.1f, %.1f) (items perdus)", name, target.x, target.y), true)
+end
+
+-- Oriente une entite deja posee. La direction est ABSOLUE (pas un cran de rotation) :
+-- le planner connait la direction cible, il ne compte pas les crans.
+local function state_rotating_at(char, params)
+  local target = {x = params.x, y = params.y}
+  if out_of_reach(char, target, "reach") then
+    M._complete("walk closer first", false)
+    return
+  end
+  local ent = entity_at(char, params.x, params.y, params.entity_name)
+  if not ent then
+    M._complete("aucune entite a cette position", false)
+    return
+  end
+  local dir = params.direction or defines.direction.north
+  local name = ent.name
+  if not pcall(function() ent.direction = dir end) then
+    M._complete("rotation refusee: " .. name, false)
+    return
+  end
+  local got = nil
+  pcall(function() got = ent.direction end)
+  M._complete(string.format("oriente %s -> %s at (%.1f, %.1f)", name, tostring(got), target.x, target.y),
+    got == dir)
+end
+
+-- Regle la recette d'une machine. C'est le verrou de toute automatisation au-dela
+-- des fours : un assembleur sans recette ne produit rien.
+local function state_setting_recipe(char, params)
+  local target = {x = params.x, y = params.y}
+  if out_of_reach(char, target, "reach") then
+    M._complete("walk closer first", false)
+    return
+  end
+  local ent = entity_at(char, params.x, params.y, params.entity_name)
+  if not ent then
+    M._complete("aucune entite a cette position", false)
+    return
+  end
+  local inv = player_mod.get_ai_inventory()
+  local ok, ejected = pcall(function() return ent.set_recipe(params.recipe) end)
+  if not ok then
+    M._complete("set_recipe refuse: " .. ent.name, false)
+    return
+  end
+  -- La machine rend les ingredients de l'ancienne recette : ne pas les perdre.
+  if ejected and inv then
+    for _, st in pairs(ejected) do pcall(function() inv.insert(st) end) end
+  end
+  local got = nil
+  pcall(function() local r = ent.get_recipe() got = r and r.name or nil end)
+  M._complete(string.format("recipe %s sur %s at (%.1f, %.1f)", tostring(got), ent.name, target.x, target.y),
+    got == params.recipe)
 end
 
 -- ===== Etat MOVING_ITEMS (synchrone, 1 tick) =====
@@ -791,6 +1021,12 @@ function M.tick()
     state_mining(char, cur)
   elseif cur.type == PLACING_AT then
     state_placing_at(char, cur)
+  elseif cur.type == REMOVING_AT then
+    state_removing_at(char, cur)
+  elseif cur.type == ROTATING_AT then
+    state_rotating_at(char, cur)
+  elseif cur.type == SETTING_RECIPE then
+    state_setting_recipe(char, cur)
   elseif cur.type == MOVING_ITEMS then
     state_moving_items(char, cur)
   elseif cur.type == CRAFTING then
@@ -846,11 +1082,26 @@ function M.new_mine_entity(entity_name, count)
   }
 end
 
-function M.new_place_entity_at(entity_name, x, y, direction)
+-- `opts` (optionnel, E2) : {recipe, ug_type, priority_in, priority_out, modules, fuel,
+-- fuel_count}. Le LayoutPlanner calcule deja ces champs (S1 a S3) ; sans eux la pose
+-- ne sait produire ni bus (underground/splitter), ni beacons, ni machines a recette.
+function M.new_place_entity_at(entity_name, x, y, direction, opts)
   return {
     type = PLACING_AT, entity_name = entity_name,
-    x = x, y = y, direction = direction,
+    x = x, y = y, direction = direction, opts = opts,
   }
+end
+
+function M.new_remove_entity_at(x, y, entity_name)
+  return {type = REMOVING_AT, x = x, y = y, entity_name = entity_name}
+end
+
+function M.new_rotate_entity_at(x, y, direction, entity_name)
+  return {type = ROTATING_AT, x = x, y = y, direction = direction, entity_name = entity_name}
+end
+
+function M.new_set_recipe_at(x, y, recipe, entity_name)
+  return {type = SETTING_RECIPE, x = x, y = y, recipe = recipe, entity_name = entity_name}
 end
 
 function M.new_move_items(item_name, entity_name, max_count, to_entity)
