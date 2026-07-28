@@ -1,9 +1,10 @@
-"""Tests unitaires des wrappers ModApi S4a (scan_obstacles/scan_tiles_bbox/get_tile).
+"""Tests unitaires des wrappers ModApi S4a (scan_obstacles/scan_tiles_bbox/get_tile) +
+S4d (generate_terrain).
 
 Aucun serveur requis : un StubRconClient retourne du JSON canned selon la méthode
 `remote.call("fl_tools", <method>, ...)` émise par ModApi._call. Valide le parsing
 côté Python (obstacles[].bbox floored, count cohérent, get_tile name, idempotence
-non-destructive).
+non-destructive, generate_terrain retourne generated==total).
 
 Lancement :
     cd python
@@ -55,6 +56,9 @@ CANNED = {
         "count": 4,
     },
     "get_tile": {"x": 0, "y": 0, "name": "grass-1"},
+    "generate_terrain": {
+        "x": 100, "y": -50, "radius_chunks": 2, "generated": 25, "total": 25,
+    },
 }
 
 
@@ -158,6 +162,41 @@ def test_non_destructif_idempotent() -> None:
         ok, f"r1==r2={r1 == r2} n_calls={len(stub.calls)}")
 
 
+def test_generate_terrain_parse() -> None:
+    """generate_terrain(x, y, radius) retourne {x, y, radius_chunks, generated, total}
+    avec generated == total (tous les chunks demandés générés)."""
+    stub = StubRconClient()
+    api = ModApi(stub)
+    r = api.generate_terrain(100, -50, 30.0)
+    ok = (isinstance(r, dict)
+          and r.get("x") == 100 and r.get("y") == -50
+          and r.get("radius_chunks") == 2
+          and r.get("generated") == r.get("total") == 25)
+    rec("S4d-1 : generate_terrain parse {x,y,radius_chunks,generated,total}",
+        ok, f"r={r}")
+
+
+def test_generate_terrain_args_passed() -> None:
+    """generate_terrain(x, y, radius) passe les 3 args au lua (x, y, radius présents)."""
+    stub = StubRconClient()
+    api = ModApi(stub)
+    api.generate_terrain(100, -50, 60.0)
+    ok = ("generate_terrain" in stub.last_lua
+          and "100" in stub.last_lua and "-50" in stub.last_lua and "60.0" in stub.last_lua)
+    rec("S4d-2 : generate_terrain passe (x, y, radius) au lua",
+        ok, f"lua={stub.last_lua[:90]}")
+
+
+def test_generate_terrain_default_radius() -> None:
+    """generate_terrain(x, y) sans radius -> defaut 30.0 transmis au lua."""
+    stub = StubRconClient()
+    api = ModApi(stub)
+    api.generate_terrain(200, 300)
+    ok = "generate_terrain" in stub.last_lua and "30.0" in stub.last_lua
+    rec("S4d-3 : generate_terrain defaut radius=30.0 transmis",
+        ok, f"lua={stub.last_lua[:90]}")
+
+
 def main() -> int:
     tests = [
         test_scan_obstacles_parse,
@@ -166,6 +205,9 @@ def main() -> int:
         test_scan_tiles_bbox_count_coherent,
         test_scan_tiles_bbox_args_passed,
         test_non_destructif_idempotent,
+        test_generate_terrain_parse,
+        test_generate_terrain_args_passed,
+        test_generate_terrain_default_radius,
     ]
     for t in tests:
         t()

@@ -79,6 +79,11 @@ remote.add_interface("fl_tools", {
   get_tile = function(x, y)
     safe(function() return tools.get_tile(x, y) end)
   end,
+  -- S4d : generation synchrone de chunks autour d'une position (resout out-of-map).
+  -- request_to_generate_chunks + force_generate_chunk_requests. Non destructif.
+  generate_terrain = function(x, y, radius)
+    safe(function() return tools.generate_terrain(x, y, radius) end)
+  end,
   measure_entity = function(name, x, y, direction)
     safe(function() return tools.measure_entity(name, x, y, direction) end)
   end,

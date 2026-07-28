@@ -129,6 +129,15 @@ class ModApi:
         Sert a vérifier ponctuellement water/out-of-map (frontière headless)."""
         return self._call("fl_tools", "get_tile", x, y)
 
+    def generate_terrain(self, x: float, y: float, radius: float = 30.0) -> dict:
+        """Genere les chunks autour de (x, y) SYNCHRONE (resout le CONSTAT S1d/S1g
+        out-of-map). request_to_generate_chunks + force_generate_chunk_requests (API
+        Factorio 2.0). Sans ceci, walk_to (pathfinding) ne peut pas planifier vers du
+        out-of-map -> le character ne s'y rend jamais. radius en tuiles (cap 200 cote
+        mod, converti en chunks de 32 tuiles). Non destructif (cree du terrain vierge).
+        Retourne {x, y, radius_chunks, generated, total} ou {error}."""
+        return self._call("fl_tools", "generate_terrain", x, y, radius)
+
     def measure_entity(self, name: str, x: float, y: float, direction: str = "north") -> dict:
         """Pose + mesure (size, pickup/drop_position, belt_speed, mining_drill_radius,
         wire/supply, fluid_boxes instance, output_fluid instance) + detruit. Mode test

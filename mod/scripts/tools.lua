@@ -578,6 +578,42 @@ function M.get_tile(x, y)
   return json.encode({x = math.floor(x), y = math.floor(y), name = t.name})
 end
 
+-- generate_terrain(x, y, radius) : genere les chunks autour de (x, y) SYNCHRONE.
+-- request_to_generate_chunks(position, radius_chunks) + force_generate_chunk_requests()
+-- (API Factorio 2.0). Resout le CONSTAT S1d/S1g : sans ceci, walk_to (pathfinding) ne
+-- peut pas planifier vers du out-of-map (tuiles non walkable) -> le character ne s'y
+-- rend jamais -> le terrain n'est jamais genere -> orniere. Ici on genere AVANT le
+-- walk, rendant la cible walkable. Aussi utile en headless (le character headless ne
+-- genere pas le terrain en marchant, contrairement au joueur connecte).
+-- radius en TUILES, converti en chunks (1 chunk = 32 tuiles). Cap 200 tuiles (7 chunks).
+-- Non destructif (cree du terrain vierge, ne detruit rien). Retourne {x, y,
+-- radius_chunks, generated, total} ou {error}. Sert au LayoutPlanner S4 + couche P2
+-- (Coordinator ordonne la generation avant de builder au-dela de la starting_area).
+function M.generate_terrain(x, y, radius)
+  local char = player_mod.get_ai_entity()
+  local surface = char and char.surface or game.surfaces.nauvis or game.surfaces[1]
+  if not surface then return json.encode({error = "aucune surface"}) end
+  local r_tiles = math.min(math.max((radius and radius > 0) and radius or 30, 1), 200)
+  local r_chunks = math.floor(r_tiles / 32) + 1
+  surface.request_to_generate_chunks({x = x, y = y}, r_chunks)
+  surface.force_generate_chunk_requests()
+  -- Statut : compte les chunks generes autour de (x, y) pour confirmation cote Python.
+  local cx, cy = math.floor(x / 32), math.floor(y / 32)
+  local generated = 0
+  for dy = -r_chunks, r_chunks do
+    for dx = -r_chunks, r_chunks do
+      if surface.is_chunk_generated({x = cx + dx, y = cy + dy}) then
+        generated = generated + 1
+      end
+    end
+  end
+  local side = 2 * r_chunks + 1
+  return json.encode({
+    x = math.floor(x), y = math.floor(y),
+    radius_chunks = r_chunks, generated = generated, total = side * side,
+  })
+end
+
 -- measure_entity(name, x, y, direction) : pose une entite, mesure ses proprietes
 -- reelles (size, pickup/drop_position, belt_speed, mining_drill_radius, wire/supply),
 -- puis la DETRUIT. Mode test uniquement (terrain jetable). Valide le hardcode Python
