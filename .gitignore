@@ -40,3 +40,5 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+# Reglages locaux de l'assistant CLI (permissions, agents) : propres au poste.
+.claude/
