@@ -216,3 +216,46 @@ class FactoryBuilder(BaseAgent):
             c = replace(c, constructible_zone=(int(zx) - 60, int(zy) - 60,
                                                int(zx) + 60, int(zy) + 60))
         return replace(c, belt_tier=belt_tier)
+
+    # ===== MicroPlanner : bootstrap compact (drill + inserter + furnace) =====
+    #
+    # Complément de build_layout pour le cas « production minimale bootstrap » : le
+    # LayoutPlanner émet une usine main-bus scalable (40 entités pour 0.3 iron-plate/s) ;
+    # build_micro_layout émet une micro-chaîne de 3 entités (1 drill → 1 inserter → 1
+    # furnace, tout-burner, sans belt/pole/bus). À utiliser après le flux manuel de
+    # bootstrap (les iron-plates du flux manuel servent à crafter l'inserter).
+    #
+    # Déterministe pur (pas d'LLM) ; pas de terrain check (l'executor fait can_place_check
+    # + retry de position, dont la validation que le drill est sur une tuile ore — règle
+    # mémoire feedback-production-bootstrap-p2-llm §1, find_nearest non fiable iron-ore).
+
+    def build_micro_layout(self, resource: str, geometry: object = None,
+                           facing: int = 4, anchor: Optional[tuple] = None) -> object:
+        """Bootstrap : micro-chaîne drill→inserter→furnace (3 entités, tout-burner).
+
+        1. scan_patch(resource) -> ResourcePatch (bbox ; pas de tiles détaillées).
+        2. anchor = anchor fourni ou centre du bbox du gisement (tuile ore probable ;
+           l'executor valide can_place et ajuste si le drill n'est pas sur une tuile ore).
+        3. plan_micro(MicroRequest) -> MicroPlan (3 entités, feasibility='ok').
+
+        Retourne un MicroPlan (feasibility='patch' si scan_patch ne trouve aucun gisement).
+        Limitation : scan_patch est centré avatar (pas point arbitraire) — cf. build_layout.
+        """
+        from services.micro_planner import MicroRequest, plan_micro, MicroPlan
+        from services.layout_planner import ResourcePatch
+
+        sp = self.api.scan_patch(resource, 400.0)
+        if not sp or not sp.get("bbox"):
+            return MicroPlan(
+                feasibility="patch",
+                notes=[f"scan_patch({resource}): aucun gisement trouvé (rayon 400)"],
+            )
+        bb = sp["bbox"]
+        patch = ResourcePatch(resource,
+                              bbox=(int(bb["x1"]), int(bb["y1"]), int(bb["x2"]), int(bb["y2"])))
+        if anchor is None:
+            # Centre du bbox (tuile ore probable) ; arrondi entier pour alignement grille.
+            ax = (int(bb["x1"]) + int(bb["x2"])) // 2
+            ay = (int(bb["y1"]) + int(bb["y2"])) // 2
+            anchor = (float(ax), float(ay))
+        return plan_micro(MicroRequest(patch=patch, facing=facing, anchor=anchor), geometry)
