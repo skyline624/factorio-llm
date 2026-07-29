@@ -639,6 +639,53 @@ def test_acharnement_declasse_apres_trois_echecs() -> None:
     assert ok, [f"{o.action}/{o.priorite}/{o.faisable}" for o in apres]
 
 
+def test_arbitrage_trace_meme_sans_arbitre() -> None:
+    """Chaque décision doit dire s'il y avait un CHOIX, arbitre ou pas.
+
+    Sans cette trace, comparer une partie « avec modèle » à une partie « sans » ne mesure
+    rien : `decide` n'appelle pas l'arbitre quand il n'y a qu'une option, et l'on
+    conclurait « le modèle n'apporte pas » sans le lui avoir demandé une seule fois.
+    """
+    seule = decide(_etat([_m("stone-furnace", 0, 0, "no_fuel")]))
+    deux = decide(_etat([_m("stone-furnace", 0, 0, "no_fuel"),
+                         _m("electric-furnace", 0, 8, "full_output")]))
+    ok = (seule.arbitrage is not None and seule.arbitrage.options == 1
+          and not seule.arbitrage.arbitrable and not seule.arbitrage.appele
+          and deux.arbitrage.options == 2 and deux.arbitrage.arbitrable
+          and not deux.arbitrage.appele)          # pas d'arbitre fourni
+    rec("test_arbitrage_trace_meme_sans_arbitre", ok,
+        f"1 option -> arbitrable={seule.arbitrage.arbitrable} ; "
+        f"2 options -> arbitrable={deux.arbitrage.arbitrable}, appele={deux.arbitrage.appele}")
+    assert ok
+
+
+def test_arbitrage_note_lappel_et_la_divergence() -> None:
+    """Appelé et divergent sont deux faits distincts : l'un mesure l'occasion, l'autre l'effet."""
+    lignes = [_m("stone-furnace", 0, 0, "no_fuel"),
+              _m("electric-furnace", 0, 8, "full_output")]
+    accord = decide(_etat(lignes), arbitre=lambda e, o: 0)
+    divergent = decide(_etat(lignes), arbitre=lambda e, o: 1)
+    ok = (accord.arbitrage.appele and not accord.arbitrage.diverge
+          and divergent.arbitrage.appele and divergent.arbitrage.diverge
+          and divergent.arbitrage.indice == 1)
+    rec("test_arbitrage_note_lappel_et_la_divergence", ok,
+        f"accord : appele={accord.arbitrage.appele} diverge={accord.arbitrage.diverge} ; "
+        f"divergent : indice={divergent.arbitrage.indice}")
+    assert ok
+
+
+def test_arbitre_defaillant_reste_trace_comme_appele() -> None:
+    """Un modèle qui plante A EU la parole : le compter comme non consulté fausserait tout."""
+    def casse(etat, options):
+        raise RuntimeError("modèle injoignable")
+    d = decide(_etat([_m("stone-furnace", 0, 0, "no_fuel"),
+                      _m("electric-furnace", 0, 8, "full_output")]), arbitre=casse)
+    ok = d.arbitrage.appele and not d.arbitrage.diverge and d.arbitrage.indice == 0
+    rec("test_arbitre_defaillant_reste_trace_comme_appele", ok,
+        f"appele={d.arbitrage.appele}, repli sur l'indice {d.arbitrage.indice}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -669,6 +716,9 @@ def main() -> int:
         test_attente_approvisionner_suit_le_flux,
         test_ecart_journalise_quand_lattente_est_decue,
         test_acharnement_declasse_apres_trois_echecs,
+        test_arbitrage_trace_meme_sans_arbitre,
+        test_arbitrage_note_lappel_et_la_divergence,
+        test_arbitre_defaillant_reste_trace_comme_appele,
     ]
     for t in tests:
         t()

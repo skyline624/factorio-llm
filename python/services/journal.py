@@ -56,9 +56,18 @@ class Journal:
             self.erreurs += 1
 
     def tour(self, n: int, tick: Optional[int], decision, agi: bool, detail: str) -> None:
+        # L'arbitrage est journalisé À CHAQUE TOUR, même quand il n'a pas eu lieu :
+        # « combien de fois y avait-il un vrai choix » est la question qui décide si une
+        # comparaison avec/sans modèle a le moindre sens.
+        a = getattr(decision, "arbitrage", None)
         self.ecrire("tour", n=n, tick=tick, action=getattr(decision, "action", "?"),
                     raison=getattr(decision, "raison", "")[:200], agi=agi,
-                    detail=str(detail)[:300])
+                    detail=str(detail)[:300],
+                    options=getattr(a, "options", 0),
+                    faisables=getattr(a, "faisables", 0),
+                    arbitrable=bool(getattr(a, "arbitrable", False)),
+                    arbitre_appele=bool(getattr(a, "appele", False)),
+                    diverge=bool(getattr(a, "diverge", False)))
 
     def ecart(self, tick: Optional[int], e) -> None:
         self.ecrire("ecart", tick=tick, action=getattr(e, "action", "?"),

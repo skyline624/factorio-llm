@@ -116,6 +116,7 @@ def main(argv: list[str]) -> int:
 
     rcon.query_lua(f"game.speed = {vitesse} rcon.print('ok')")
     tour, bloques, derniere_action = 0, 0, ""
+    arbitrables, appels, divergences = 0, 0, 0
     try:
         while _tick(api) - t0 < ticks_vises:
             tour += 1
@@ -133,6 +134,11 @@ def main(argv: list[str]) -> int:
                     break
                 continue
             jr.tour(tour, t, d, agi, coord.journal[-1] if coord.journal else "")
+            a = getattr(d, "arbitrage", None)
+            if a is not None:
+                arbitrables += 1 if a.arbitrable else 0
+                appels += 1 if a.appele else 0
+                divergences += 1 if a.diverge else 0
             for e in coord.ecarts[-2:]:
                 jr.ecart(t, e)
             for c in coord.constats[-2:]:
@@ -156,7 +162,8 @@ def main(argv: list[str]) -> int:
         rcon.query_lua("game.speed = 1 rcon.print('ok')")
 
     m = _mesures(api, coord)
-    jr.ecrire("fin", tour=tour, ticks=_tick(api) - t0, **m)
+    jr.ecrire("fin", tour=tour, ticks=_tick(api) - t0,
+              arbitrables=arbitrables, appels=appels, divergences=divergences, **m)
     if coord.arbitre is not None and hasattr(coord.arbitre, "divergences"):
         a = coord.arbitre
         jr.ecrire("arbitre", accords=a.accords, divergences=len(a.divergences),
@@ -167,6 +174,13 @@ def main(argv: list[str]) -> int:
           f"{m['arretees']} arrêtée(s)")
     print(f"       écarts : {m['ecarts']} constaté(s), {m['constats']} enquête(s) "
           f"dont {m['inconnus']} sans conclusion")
+    # LE chiffre qui décide si une comparaison avec/sans modèle a un sens.
+    part = (100.0 * arbitrables / tour) if tour else 0.0
+    print(f"       arbitrage : {arbitrables} tour(s) à VRAI choix sur {tour} "
+          f"({part:.0f} %), {appels} appel(s) au modèle, {divergences} divergence(s)")
+    if arbitrables == 0:
+        print("       -> aucun arbitrage possible : comparer avec et sans modèle ne "
+              "mesurerait rien. C'est le nombre d'options qu'il faut traiter d'abord.")
     print(f"       {jr.resume()}")
     print(f"\n       journal : {chemin}")
     rcon.close()

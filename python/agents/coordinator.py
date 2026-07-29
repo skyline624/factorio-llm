@@ -194,6 +194,28 @@ class Ecart:
 
 
 @dataclass
+class Arbitrage:
+    """Combien de choix il y avait, et ce que l'arbitre en a fait.
+
+    Sans cette trace, comparer une partie « avec modèle » à une partie « sans » ne
+    mesure rien : `decide` n'appelle pas l'arbitre quand il n'y a qu'une option — le cas
+    le plus fréquent — et l'on conclurait « le modèle n'apporte pas » sans le lui avoir
+    demandé une seule fois. C'est le préalable à toute expérience A/B, et il coûte trois
+    champs.
+    """
+    options: int = 0
+    faisables: int = 0       # celles qui peuvent réellement aboutir
+    appele: bool = False     # l'arbitre a-t-il eu la parole
+    indice: int = 0          # ce qu'il a désigné (0 = comme le déterministe)
+    diverge: bool = False    # a-t-il choisi autre chose que le déterministe
+
+    @property
+    def arbitrable(self) -> bool:
+        """Y avait-il un VRAI choix — au moins deux options qui puissent aboutir."""
+        return self.faisables >= 2
+
+
+@dataclass
 class Decision:
     """Ce que le Coordinator a décidé, et pourquoi — le « pourquoi » est la moitié utile."""
     action: str
@@ -201,6 +223,9 @@ class Decision:
     priorite: int = 0
     cible: Optional[Symptome] = None
     faisable: bool = True     # False = le matériel manque (cf. BESOINS)
+    # Renseigné par `decide` : de quoi savoir, après coup, si le modèle a seulement eu
+    # son mot à dire. Une décision sans arbitrage possible n'est pas un désaccord.
+    arbitrage: Optional["Arbitrage"] = None
 
     def __str__(self) -> str:
         ou = f" @({self.cible.x},{self.cible.y})" if self.cible else ""
@@ -329,6 +354,8 @@ def decide(etat: EtatUsine, arbitre: Optional[Arbitre] = None) -> Decision:
         Un agent qui s'arrête parce que le modèle est indisponible ne vaut rien.
     """
     options = enumerer_options(etat)
+    trace = Arbitrage(options=len(options),
+                      faisables=sum(1 for o in options if o.faisable))
     # Toutes les options ont échoué ou sont infaisables : NE RIEN FAIRE est la bonne
     # réponse, et il faut la dire. Mesuré en partie longue : sans ce cas, la boucle
     # reprenait 598 fois de suite la seule action disponible, déjà abandonnée trois fois.
@@ -339,18 +366,27 @@ def decide(etat: EtatUsine, arbitre: Optional[Arbitre] = None) -> Decision:
             raison=("tout ce qui est réparable ici a déjà échoué : "
                     + " ; ".join(f"{o.action} sur {o.cible.name}" for o in options[:3]
                                  if o.cible is not None)),
-            priorite=PRIORITE["rien"])
+            priorite=PRIORITE["rien"], arbitrage=trace)
+
+    def _rendre(i: int) -> Decision:
+        d = options[i]
+        trace.indice = i
+        trace.diverge = i != 0
+        d.arbitrage = trace
+        return d
+
     if arbitre is None or len(options) <= 1:
-        return options[0]
+        return _rendre(0)
+    trace.appele = True
     try:
         choix = arbitre(etat, options)
     except Exception:
-        return options[0]
+        return _rendre(0)
     if not isinstance(choix, int) or isinstance(choix, bool):
-        return options[0]
+        return _rendre(0)
     if not 0 <= choix < len(options):
-        return options[0]
-    return options[choix]
+        return _rendre(0)
+    return _rendre(choix)
 
 
 class Coordinator:
