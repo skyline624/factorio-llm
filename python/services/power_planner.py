@@ -316,6 +316,44 @@ def plan_power(request: PowerRequest, origin: tuple[float, float],
     return plan
 
 
+def plan_transmission(start: tuple[float, float], end: tuple[float, float],
+                      pole_tier: str = "small-electric-pole",
+                      reach: float = POLE_WIRE_REACH,
+                      margin: float = 0.5) -> list[LayoutEntity]:
+    """Ligne de poteaux reliant `start` à `end`, espacés sous la portée de fil.
+
+    Besoin structurel, pas un cas de test : sur une carte réelle le gisement et l'eau
+    sont rarement voisins — mesuré ici, tous les minerais sont à plus de 100 tuiles du
+    premier plan d'eau. Une centrale ne sert à rien si son courant n'atteint pas les
+    machines, et `plan_power` ne câble que ses propres rangées.
+
+    L'espacement retenu est `reach - margin` : à la portée exacte, la moindre tuile de
+    décalage au moment de la pose (terrain, snap) couperait la ligne en deux réseaux —
+    et une ligne coupée ne se voit pas au moment de poser, seulement quand la machine
+    au bout reste sans courant.
+
+    Les deux extrémités sont incluses ; les positions sont des centres de tuile
+    (poteau 1×1). Retourne [] si `start` et `end` sont sur la même tuile.
+    """
+    x0, y0 = math.floor(start[0]) + 0.5, math.floor(start[1]) + 0.5
+    x1, y1 = math.floor(end[0]) + 0.5, math.floor(end[1]) + 0.5
+    distance = math.hypot(x1 - x0, y1 - y0)
+    pas = max(1.0, reach - margin)
+    n = int(math.ceil(distance / pas)) if distance > 0 else 0
+
+    entities: list[LayoutEntity] = []
+    vues: set[tuple[float, float]] = set()
+    for i in range(n + 1):
+        t = i / n if n else 0.0
+        px = math.floor(x0 + (x1 - x0) * t) + 0.5
+        py = math.floor(y0 + (y1 - y0) * t) + 0.5
+        if (px, py) in vues:
+            continue
+        vues.add((px, py))
+        entities.append(LayoutEntity(pole_tier, px, py, 0, "pole"))
+    return entities
+
+
 def _pipe_run(start: tuple[float, float], end: tuple[float, float]) -> list[tuple[float, float]]:
     """Tuyaux d'un trajet en L entre deux centres de tuile (horizontal puis vertical).
 

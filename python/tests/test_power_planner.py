@@ -259,6 +259,53 @@ def test_implantation_totaux_coherents_avec_dimensionnement() -> None:
     assert ok
 
 
+def test_transmission_ligne_connexe() -> None:
+    """Ligne de poteaux : chaque saut reste SOUS la portée de fil, extrémités comprises.
+
+    C'est la propriété qui compte : un saut trop long coupe le réseau en deux, et ça ne
+    se voit pas à la pose — seulement quand la machine au bout reste sans courant. On
+    teste sur des trajets réalistes (mesuré sur la carte : plus de 100 tuiles entre le
+    premier plan d'eau et le moindre gisement).
+    """
+    from services.power_planner import POLE_WIRE_REACH, plan_transmission
+    bad = []
+    for depart, arrivee in (((0.0, 0.0), (108.0, 0.0)),      # ligne droite longue
+                            ((0.0, 0.0), (-40.0, 95.0)),     # diagonale
+                            ((5.0, 5.0), (5.0, -60.0)),      # verticale
+                            ((3.0, 3.0), (4.0, 3.0))):       # trajet court
+        poles = plan_transmission(depart, arrivee)
+        if not poles:
+            bad.append(f"{depart}->{arrivee}: aucun poteau")
+            continue
+        for a, b in zip(poles, poles[1:]):
+            d = ((a.x - b.x) ** 2 + (a.y - b.y) ** 2) ** 0.5
+            if d > POLE_WIRE_REACH:
+                bad.append(f"{depart}->{arrivee}: saut {d:.1f} > portee {POLE_WIRE_REACH}")
+        # Les extrémités doivent être desservies (à une tuile près, snap compris).
+        if abs(poles[0].x - depart[0]) > 1.5 or abs(poles[0].y - depart[1]) > 1.5:
+            bad.append(f"{depart}->{arrivee}: depart non desservi")
+        if abs(poles[-1].x - arrivee[0]) > 1.5 or abs(poles[-1].y - arrivee[1]) > 1.5:
+            bad.append(f"{depart}->{arrivee}: arrivee non desservie")
+        # Centres de tuile, sans doublon.
+        if any(abs(p.x % 1) != 0.5 or abs(p.y % 1) != 0.5 for p in poles):
+            bad.append(f"{depart}->{arrivee}: poteau hors centre de tuile")
+        if len({(p.x, p.y) for p in poles}) != len(poles):
+            bad.append(f"{depart}->{arrivee}: poteaux en doublon")
+    n = len(plan_transmission((0.0, 0.0), (108.0, 0.0)))
+    rec("test_transmission_ligne_connexe", not bad,
+        f"anomalies={bad[:2] or 'aucune'} ; 108 tuiles -> {n} poteaux")
+    assert not bad, bad
+
+
+def test_transmission_meme_tuile() -> None:
+    """Départ et arrivée sur la même tuile : un seul poteau, pas de division par zéro."""
+    from services.power_planner import plan_transmission
+    poles = plan_transmission((7.2, -3.8), (7.4, -3.6))
+    ok = len(poles) == 1 and poles[0].role == "pole"
+    rec("test_transmission_meme_tuile", ok, f"{len(poles)} poteau(x)")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_ratios_derives_des_mesures,
@@ -275,6 +322,8 @@ def main() -> int:
         test_implantation_grille_et_absence_de_chevauchement,
         test_implantation_sans_eau_refuse,
         test_implantation_totaux_coherents_avec_dimensionnement,
+        test_transmission_ligne_connexe,
+        test_transmission_meme_tuile,
     ]
     for t in tests:
         t()

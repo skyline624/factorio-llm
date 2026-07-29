@@ -170,6 +170,48 @@ def test_micro_positions_sur_grille_legale() -> None:
     assert ok
 
 
+def test_micro_emprises_impaires_coherentes() -> None:
+    """Chaîne à emprises IMPAIRES (3×3) : grille légale et aucun chevauchement.
+
+    La chaîne électrique à venir (electric-mining-drill, electric-furnace) est en 3×3,
+    or toute la couverture actuelle est en 2×2 : la branche impaire de `_snap` et du
+    décalage latéral n'était jamais exercée. Un plan qui se chevauche ou qui sort de la
+    grille ne se pose pas — autant le savoir sans serveur.
+
+    PORTÉE : ce test vérifie la cohérence INTERNE du plan. Les positions de ports d'un
+    3×3 (drop du drill, notamment) n'ont pas encore été mesurées en jeu, contrairement
+    au 2×2 — c'est `verify_factory_e5` qui les mesurera. On ne grave donc ici aucune
+    constante de géométrie non mesurée : c'est précisément l'erreur qui avait coûté
+    deux runs au premier jet du MicroPlanner.
+    """
+    bad: list[str] = []
+    for taille in (2, 3):
+        for facing in (0, 2, 4, 6):
+            mp = plan_micro(MicroRequest(
+                patch=_iron_patch(), facing=facing, anchor=(10.0, -6.0),
+                drill_size=taille, furnace_size=taille,
+                drill_tier="electric-mining-drill", inserter_tier="inserter",
+                furnace_tier="electric-furnace"))
+            d, ins, fur = (_by_role(mp, "drill"), _by_role(mp, "inserter"),
+                           _by_role(mp, "machine"))
+            # Grille : emprise paire -> entier, impaire -> centre de tuile ; 1×1 -> .5.
+            attendu = 0.0 if taille % 2 == 0 else 0.5
+            for e in (d, fur):
+                if abs(e.x % 1) != attendu or abs(e.y % 1) != attendu:
+                    bad.append(f"{taille}x{taille} f{facing}: {e.role} hors grille "
+                               f"({e.x},{e.y})")
+            if abs(ins.x % 1) != 0.5 or abs(ins.y % 1) != 0.5:
+                bad.append(f"{taille}x{taille} f{facing}: inserter hors centre de tuile")
+            # Chevauchement : demi-emprises + demi-emprise de l'inserter (1×1).
+            for a, b, ta, tb in ((d, ins, taille, 1), (ins, fur, 1, taille),
+                                 (d, fur, taille, taille)):
+                if (abs(a.x - b.x) < (ta + tb) / 2 - 1e-6
+                        and abs(a.y - b.y) < (ta + tb) / 2 - 1e-6):
+                    bad.append(f"{taille}x{taille} f{facing}: {a.role} recouvre {b.role}")
+    rec("test_micro_emprises_impaires_coherentes", not bad, f"anomalies={bad[:3] or 'aucune'}")
+    assert not bad, bad
+
+
 def test_micro_no_overlap() -> None:
     # Distance inter-centres drill→inserter ≥ 2, inserter→furnace ≥ 2 (facing south).
     mp = plan_micro(MicroRequest(patch=_iron_patch(), facing=4))
@@ -248,6 +290,7 @@ def main() -> int:
         test_micro_facing_north_west,
         test_micro_chainage_pickup_drop,
         test_micro_positions_sur_grille_legale,
+        test_micro_emprises_impaires_coherentes,
         test_micro_no_overlap,
         test_micro_connections,
         test_micro_no_pole_no_belt,
