@@ -745,6 +745,39 @@ class Coordinator:
         return EtatUsine(machines=0, inventaire=perception.inventory(self.api),
                          menace=self.derniere_menace)
 
+    def _relais_d_alimentation(self, cx: float, cy: float, bras: str,
+                               exclure=()) -> Optional[tuple]:
+        """Où faire ARRIVER la belt pour qu'un bras puisse charger la machine.
+
+        La belt ne décide plus, le BRAS décide. C'est l'inversion qui manquait : on
+        traçait la ligne d'abord, puis on cherchait un emplacement — après chaque recul,
+        donc sur une belt encore en cours d'allongement et triée depuis un bout périmé.
+        Le résultat dépendait de l'encombrement du terrain, ce qui est le signe d'un
+        placement fragile et non d'un défaut isolé.
+
+        On cherche donc d'abord le couple (bras, tuile amont) : le bras adjacent à la
+        machine, la tuile juste derrière lui pour la belt. La belt visera CETTE tuile.
+
+        Les distances sont essayées croissantes parce que l'emprise varie — un four 2×2
+        et une assembleuse 3×3 n'offrent pas leurs bords au même endroit, et rien dans
+        `entity_row` ne donne la bounding box.
+        """
+        import math
+        from services.site_finder import can_place
+
+        interdits = {(math.floor(x) + 0.5, math.floor(y) + 0.5) for x, y in exclure}
+        for d in (1.5, 2.0, 2.5):
+            for ux, uy in ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)):
+                bx = math.floor(cx + ux * d) + 0.5
+                by = math.floor(cy + uy * d) + 0.5
+                px, py = bx + ux, by + uy
+                if (bx, by) in interdits or (px, py) in interdits:
+                    continue
+                if (can_place(self.api, bras, bx, by)
+                        and can_place(self.api, "transport-belt", px, py)):
+                    return (bx, by), (px, py)
+        return None
+
     def _relais_de_retour(self, drill, depart, bras: str, foreur: str):
         """Une tuile par où faire passer la belt pour qu'un bras puisse réalimenter le foreur.
 
@@ -967,7 +1000,17 @@ class Coordinator:
         #    centrale avait besoin pour produire ce courant. Mesuré en jeu : foreur et
         #    inserter posés, belt complète, statut `no_power` des deux côtés, zéro
         #    charbon transporté. Un burner ne dépend que de ce qu'il extrait.
+        # Burner ou électrique : la question n'est pas QUEL minerai, mais Y A-T-IL DU
+        # COURANT. Le critère « item == coal » était la leçon d'E13 appliquée à moitié :
+        # elle évitait bien la circularité du charbon, et posait un foreur électrique sur
+        # du fer dans une usine sans réseau. Mesuré : `electric-mining-drill` en
+        # `no_power`, chaîne complète de 39 belts, four à jeun.
         burner = (item == "coal")
+        if not burner:
+            reseau = (self.api.get_power_state(cible.x, cible.y, 25.0) or {}).get("networkId")
+            if reseau is None and perception.inventory(self.api).get(
+                    "burner-mining-drill", 0) > 0:
+                burner = True
         foreur = "burner-mining-drill" if burner else "electric-mining-drill"
         bras = "burner-inserter" if burner else "inserter"
         taille = 2 if burner else 3
@@ -1008,89 +1051,57 @@ class Coordinator:
             depart = (pose_drill["dropX"], pose_drill["dropY"])
         else:
             depart = (drill.x, drill.y + 2.0)
-        # La belt ne vise pas la machine : elle s'arrête EN RETRAIT, du côté d'où elle
-        # arrive. Mesuré : visée sur la machine, elle bute dessus et le dernier segment
-        # se colle à son bord — il ne reste alors aucune tuile libre entre la belt et la
-        # machine, et un inserter doit se tenir ENTRE les deux. 36 segments posés, aucun
-        # bras possible au bout. Le retrait dépend de la taille de la machine, qu'on ne
-        # connaît pas ici : on part large et on rallonge d'une tuile tant que le bras ne
-        # trouve pas sa place — trois essais suffisent du 1×1 au 3×3.
-        # L'approche est ramenée à un AXE, jamais à une diagonale : un inserter dessert
-        # les quatre côtés d'une machine, pas ses coins. Une arrivée oblique laisse la
-        # belt décalée en x ET en y — 50 segments posés, et le seul emplacement libre se
-        # trouvait en diagonale du boiler, d'où aucun dépôt n'est possible.
+        # La belt vise le RELAIS D'ENTRÉE, décidé avant elle : la tuile derrière le
+        # bras qui chargera la machine. C'est l'inversion qui manquait — on traçait la
+        # ligne d'abord, puis on cherchait un emplacement de bras après chaque recul,
+        # donc sur une belt encore en cours d'allongement. Le résultat dépendait de
+        # l'encombrement du terrain : chaîne complète et machine à jeun, au hasard.
+        #
         # En `test_mode` le character headless bâtit à n'importe quelle distance : faire
         # marcher l'avatar le long de la belt ne servirait qu'à ralentir les tests.
         etat_mod = self.api.get_state()
         portee = 0.0 if etat_mod.get("test_mode") else 8.0
 
-        # Un RELAIS pour le bras de retour, avant même de tracer la belt.
-        #
-        # Le foreur déverse sur la tuile qui touche son bord : la belt commence donc
-        # collée à lui, et il ne reste aucune place pour un inserter qui devrait se tenir
-        # ENTRE la belt et le foreur. Chercher mieux ne sert à rien — la géométrie
-        # l'interdit. On fait donc passer la belt à DEUX tuiles du foreur en un point
-        # choisi : le bras tient alors au milieu, prend sur la belt et redonne au foreur.
-        # Sans lui la chaîne n'est pas perpétuelle, elle a juste une plus longue amorce.
         relais = self._relais_de_retour(drill, depart, bras, foreur) if burner else None
+        entree = self._relais_d_alimentation(cible.x, cible.y, bras,
+                                             exclure=(depart,) + ((relais,) if relais else ()))
+        if entree is None:
+            return False, (f"aucun emplacement de {bras} ne peut charger {cible.name} : "
+                           f"ses quatre côtés sont pris")
+        pos_bras, arrivee = entree
 
-        vx, vy = depart[0] - cible.x, depart[1] - cible.y
-        if abs(vx) >= abs(vy):
-            ux, uy = (1.0 if vx > 0 else -1.0), 0.0
-        else:
-            ux, uy = 0.0, (1.0 if vy > 0 else -1.0)
         belts: list[tuple[float, float]] = []
-        complete = False
-        pose_ins = None
         essais: list[str] = []
-        # Le premier tronçon passe par le RELAIS, s'il en existe un : c'est ce détour
-        # de deux tuiles qui rend la chaîne perpétuelle.
-        # Le second tronçon repart DU RELAIS, jamais de la dernière tuile posée :
-        # `place_belt_line` s'arrête AVANT sa tuile d'arrivée, si bien que le relais
-        # lui-même restait vide et que la suite le contournait. Le bras de retour ne
-        # trouvait alors rien sur quoi puiser, alors que sa place existait bel et bien.
         origine = depart
+        # Le tronçon de retour du foreur passe d'abord par son relais, s'il en a un.
         if relais is not None:
             seg0, _ = site_finder.place_belt_line(self.api, depart, relais, portee=portee)
             belts.extend(seg0)
             origine = relais
-
-        for recul in (4.0, 3.0, 2.0):
-            arrivee = (cible.x + ux * recul, cible.y + uy * recul)
-            seg, complete = site_finder.place_belt_line(
-                self.api, origine, arrivee, portee=portee)
-            belts.extend(seg)
-            origine = belts[-1] if belts else origine
-            essais.append(f"recul {recul:.0f} -> {len(seg)} segment(s), "
-                          f"bout {belts[-1] if belts else 'aucun'}")
-            if not belts:
-                continue
-            # 4. Le bras qui décharge. `place_inserter_vers` vérifie par LECTURE que le
-            #    dépôt tombe dans la machine — une orientation supposée ne suffit pas.
-            jr: list = []
-            pose_ins = site_finder.place_inserter_vers(
-                self.api, (cible.x, cible.y), belts[-1], cible.name, nom=bras, journal=jr)
-            essais.append(" ; ".join(jr[:6]))
-            if pose_ins is not None:
-                break
+        seg, complete = site_finder.place_belt_line(self.api, origine, arrivee,
+                                                    portee=portee)
+        belts.extend(seg)
+        essais.append(f"belt {origine} -> relais d'entrée {arrivee} : {len(seg)} segment(s)")
         if not belts:
             return False, f"aucune belt posée entre le foreur et {cible.name}"
+
+        # La tuile d'arrivée elle-même : `place_belt_line` s'arrête AVANT elle, or c'est
+        # précisément celle sur laquelle le bras doit puiser.
+        if site_finder.can_place(self.api, "transport-belt", arrivee[0], arrivee[1]):
+            from services.flux import _direction_vers
+            d_fin = _direction_vers(belts[-1], arrivee) if belts else "east"
+            r = self.api.run_action(self.api.place_entity_at, "transport-belt",
+                                    arrivee[0], arrivee[1], d_fin, None, timeout=20.0)
+            if isinstance(r, dict) and r.get("ok"):
+                belts.append(arrivee)
+
+        # 4. Le bras qui décharge, à la place RÉSERVÉE pour lui. `place_inserter_vers`
+        #    vérifie par LECTURE que le dépôt tombe dans la machine.
+        pose_ins = site_finder.place_inserter_vers(
+            self.api, (cible.x, cible.y), arrivee, cible.name, nom=bras, essais=40)
         if pose_ins is None:
-            # Ultime essai, une fois la belt à sa position DÉFINITIVE. Les tentatives
-            # précédentes ont eu lieu après chaque recul, donc sur une belt encore en
-            # cours d'allongement, et triées depuis un bout périmé. Mesuré : un
-            # emplacement valable existait à une tuile du four et n'avait jamais été
-            # essayé dans le bon ordre.
-            jf: list = []
-            pose_ins = site_finder.place_inserter_vers(
-                self.api, (cible.x, cible.y), (cible.x, cible.y), cible.name, nom=bras,
-                essais=40, journal=jf)
-            if pose_ins is None:
-                essais.append("dernier essai depuis la belt définitive : "
-                              + " ; ".join(jf[:6]))
-        if pose_ins is None:
-            return False, (f"belt posée ({len(belts)} segments) mais aucun inserter "
-                           f"n'atteint {cible.name} depuis la belt — {' | '.join(essais)}")
+            return False, (f"belt posée jusqu'au relais {arrivee} mais aucun {bras} "
+                           f"n'atteint {cible.name} — {' | '.join(essais)}")
 
         # 5. Le bras de RETOUR. C'est lui qui rend la chaîne perpétuelle : sans lui, le
         #    foreur épuise son amorce et s'arrête, et l'on aurait seulement déplacé le
