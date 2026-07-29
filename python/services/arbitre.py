@@ -108,14 +108,24 @@ class LLMArbitre:
         # n'en atteigne qu'une.
         from services.llm_client import construire_client
         self.journal: list[str] = []
+        # Combien de fois le modèle N'A PAS pu se prononcer. Rendre 0 est la bonne
+        # conduite — c'est la décision du moteur seul — mais 0 « par défaut » et 0
+        # « après réflexion » sont deux faits opposés qu'un seul entier confondait. Sans
+        # ce compteur, un modèle injoignable se lit « le modèle est d'accord », c'est-à-dire
+        # la conclusion la plus flatteuse pour ce qu'on essaie de mesurer.
+        self.replis = 0
         self._client, self.cfg = construire_client(cfg, client, self.journal)
+
+    def _repli(self, motif: str) -> int:
+        self.replis += 1
+        self.journal.append(f"repli : {motif}")
+        return 0
 
     def __call__(self, etat, options) -> int:
         if not options:
             return 0
         if self._client is None:
-            self.journal.append("repli : aucun client LLM")
-            return 0
+            return self._repli("aucun client LLM")
         try:
             resp = self._client.chat.completions.create(
                 model=getattr(self.cfg, "openai_model", "gpt-4o-mini"),
@@ -131,15 +141,13 @@ class LLMArbitre:
                 max_tokens=getattr(self.cfg, "llm_max_tokens", 512),
             )
         except Exception as e:
-            self.journal.append(f"repli : modèle injoignable ({type(e).__name__})")
-            return 0
+            return self._repli(f"modèle injoignable ({type(e).__name__})")
 
         indice, raison = self._lire(resp)
         if indice is None:
-            return 0
+            return 0            # `_lire` a déjà compté le repli et dit lequel
         if not 0 <= indice < len(options):
-            self.journal.append(f"repli : indice {indice} hors des {len(options)} options")
-            return 0
+            return self._repli(f"indice {indice} hors des {len(options)} options")
         self.journal.append(f"choix [{indice}] {options[indice].action} — {raison}")
         return indice
 
@@ -148,24 +156,24 @@ class LLMArbitre:
         try:
             appels = getattr(resp.choices[0].message, "tool_calls", None)
         except (AttributeError, IndexError, TypeError):
-            self.journal.append("repli : réponse sans message exploitable")
+            self._repli("réponse sans message exploitable")
             return None, ""
         if not appels:
-            self.journal.append("repli : le modèle n'a pas appelé l'outil")
+            self._repli("le modèle n'a pas appelé l'outil")
             return None, ""
         try:
             brut = appels[0].function.arguments
             args = json.loads(brut) if isinstance(brut, str) else brut
         except (json.JSONDecodeError, AttributeError, TypeError) as e:
-            self.journal.append(f"repli : arguments illisibles ({type(e).__name__})")
+            self._repli(f"arguments illisibles ({type(e).__name__})")
             return None, ""
         if not isinstance(args, dict):
-            self.journal.append("repli : arguments hors format")
+            self._repli("arguments hors format")
             return None, ""
         indice = args.get("indice")
         # bool est un int en Python : True passerait pour l'indice 1.
         if isinstance(indice, bool) or not isinstance(indice, int):
-            self.journal.append(f"repli : indice non entier ({indice!r})")
+            self._repli(f"indice non entier ({indice!r})")
             return None, ""
         return indice, str(args.get("raison", ""))[:160]
 
@@ -183,17 +191,44 @@ class ArbitreOmbre:
         self.arbitre = arbitre
         self.divergences: list[str] = []
         self.accords = 0
+        # Les tours où le modèle n'a PAS pu se prononcer. Ils étaient comptés comme des
+        # accords, ce qui est la lecture la plus flatteuse de tout ce qui rate : modèle
+        # injoignable, réponse illisible, outil non appelé — autant de « le modèle est
+        # d'accord ». Mesuré à l'inverse en jeu : sur 14 appels réels, zéro repli et
+        # zéro divergence, donc des accords authentiques. C'est ce constat qui n'était
+        # pas démontrable avant de séparer les deux.
+        self.replis = 0
+        # Les incidents d'arbitrage, séparés des divergences : une exception n'est pas un
+        # désaccord, et la ranger parmi les désaccords gonflerait le seul chiffre qui doit
+        # rester propre.
+        self.incidents: list[str] = []
 
     @property
     def taux_divergence(self) -> float:
+        """Rapporté aux seuls tours où le modèle s'est PRONONCÉ.
+
+        Diviser par l'ensemble des appels diluerait le taux avec des tours où il n'a rien
+        dit, et un modèle absent afficherait 0 % de divergence — le chiffre d'un modèle
+        parfaitement d'accord.
+        """
         total = self.accords + len(self.divergences)
         return len(self.divergences) / total if total else 0.0
 
     def __call__(self, etat, options) -> int:
+        avant = getattr(self.arbitre, "replis", None)
         try:
             propose = self.arbitre(etat, options)
         except Exception as e:
-            self.divergences.append(f"arbitre en erreur : {type(e).__name__}")
+            # Une exception n'est pas une divergence : le modèle n'a rien proposé.
+            self.replis += 1
+            self.incidents.append(f"arbitre en erreur : {type(e).__name__}")
+            return 0
+        # Le compteur de replis de l'arbitre distingue « il a répondu 0 » de « on a mis 0
+        # faute de réponse ». Duck typing : un arbitre qui ne l'expose pas est traité
+        # comme avant, ses 0 comptant pour des accords.
+        apres = getattr(self.arbitre, "replis", None)
+        if avant is not None and apres is not None and apres > avant:
+            self.replis += 1
             return 0
         if isinstance(propose, int) and not isinstance(propose, bool) \
                 and 0 < propose < len(options):

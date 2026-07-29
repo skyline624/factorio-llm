@@ -169,15 +169,59 @@ def test_mode_ombre_compte_les_accords() -> None:
 
 
 def test_mode_ombre_survit_a_un_arbitre_qui_explose() -> None:
-    """Même un arbitre qui lève ne doit pas interrompre la boucle."""
+    """Même un arbitre qui lève ne doit pas interrompre la boucle.
+
+    L'incident est consigné à part : une exception n'est PAS un désaccord. La ranger
+    parmi les divergences gonflerait le seul chiffre qui doive rester propre — celui sur
+    lequel on décidera si le modèle apporte quelque chose.
+    """
     class _Explose:
         def __call__(self, etat, options):
             raise RuntimeError("boum")
 
     ombre = ArbitreOmbre(_Explose())
     i = ombre(_Etat(), _options())
-    ok = i == 0 and any("en erreur" in d for d in ombre.divergences)
-    rec("test_mode_ombre_survit_a_un_arbitre_qui_explose", ok, f"{ombre.divergences}")
+    ok = (i == 0 and not ombre.divergences and ombre.replis == 1
+          and any("en erreur" in x for x in ombre.incidents))
+    rec("test_mode_ombre_survit_a_un_arbitre_qui_explose", ok,
+        f"replis={ombre.replis} divergences={len(ombre.divergences)} "
+        f"incidents={ombre.incidents}")
+    assert ok
+
+
+def test_un_repli_nest_pas_un_accord() -> None:
+    """LA correction : un modèle qui n'a rien dit ne « valide » pas le déterministe.
+
+    Le repli rend 0, ce qui est la bonne conduite — c'est la décision du moteur seul.
+    Mais 0 « par défaut » et 0 « après réflexion » sont des faits opposés, et un seul
+    entier les confondait : modèle injoignable, réponse illisible ou outil non appelé se
+    lisaient tous « le modèle est d'accord », c'est-à-dire la conclusion la plus
+    flatteuse de tout ce qui rate.
+    """
+    # Une réponse sans appel d'outil : le modèle n'a pas répondu dans le format demandé.
+    ombre = ArbitreOmbre(_arbitre(_Reponse([])))
+    for _ in range(3):
+        ombre(_Etat(), _options())
+    ok = (ombre.replis == 3 and ombre.accords == 0 and not ombre.divergences)
+    rec("test_un_repli_nest_pas_un_accord", ok,
+        f"replis={ombre.replis} accords={ombre.accords} "
+        f"divergences={len(ombre.divergences)}")
+    assert ok
+
+
+def test_le_taux_ne_compte_que_les_tours_prononces() -> None:
+    """Un modèle absent afficherait sinon 0 % — le chiffre d'un modèle parfaitement d'accord."""
+    muet = ArbitreOmbre(_arbitre(_Reponse([])))
+    for _ in range(5):
+        muet(_Etat(), _options())
+    parle = ArbitreOmbre(_arbitre(_Reponse([_Appel('{"indice": 2, "raison": "mieux"}')])))
+    for _ in range(5):
+        parle(_Etat(), _options())
+    ok = (muet.taux_divergence == 0.0 and muet.accords + len(muet.divergences) == 0
+          and parle.taux_divergence == 1.0)
+    rec("test_le_taux_ne_compte_que_les_tours_prononces", ok,
+        f"muet : {muet.replis} repli(s), 0 prononcé | parlant : "
+        f"taux {parle.taux_divergence:.0%}")
     assert ok
 
 
@@ -197,6 +241,8 @@ def main() -> int:
         test_mode_ombre_ne_laisse_jamais_la_main,
         test_mode_ombre_compte_les_accords,
         test_mode_ombre_survit_a_un_arbitre_qui_explose,
+        test_un_repli_nest_pas_un_accord,
+        test_le_taux_ne_compte_que_les_tours_prononces,
         test_resumes_lisibles,
     ]
     for t in tests:

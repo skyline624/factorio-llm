@@ -242,7 +242,12 @@ def main(argv: list[str]) -> int:
               arbitrables=arbitrables, appels=appels, divergences=divergences, **m)
     if coord.arbitre is not None and hasattr(coord.arbitre, "divergences"):
         a = coord.arbitre
+        # Les REPLIS sont consignés à part : un modèle qui n'a pas pu se prononcer était
+        # compté comme d'accord, donc un modèle injoignable se lisait « le modèle valide
+        # le déterministe ». Sans ce chiffre, aucun taux d'accord n'est interprétable.
         jr.ecrire("arbitre", accords=a.accords, divergences=len(a.divergences),
+                  replis=getattr(a, "replis", 0),
+                  incidents=len(getattr(a, "incidents", []) or []),
                   taux=round(a.taux_divergence, 3))
 
     print(f"\n       {tour} tour(s), {(_tick(api) - t0) / 3600:.1f} min de jeu")
@@ -256,6 +261,15 @@ def main(argv: list[str]) -> int:
     part = (100.0 * arbitrables / tour) if tour else 0.0
     print(f"       arbitrage : {arbitrables} tour(s) à VRAI choix sur {tour} "
           f"({part:.0f} %), {appels} appel(s) au modèle, {divergences} divergence(s)")
+    if coord.arbitre is not None and hasattr(coord.arbitre, "accords"):
+        a = coord.arbitre
+        replis = getattr(a, "replis", 0)
+        prononces = a.accords + len(a.divergences)
+        print(f"       le modèle s'est PRONONCÉ {prononces} fois "
+              f"({a.accords} d'accord, {len(a.divergences)} en désaccord) et n'a rien "
+              f"pu dire {replis} fois")
+        if replis and not prononces:
+            print("       -> aucun avis exploitable : ne rien conclure de ce taux.")
     if arbitrables == 0:
         print("       -> aucun arbitrage possible : comparer avec et sans modèle ne "
               "mesurerait rien. C'est le nombre d'options qu'il faut traiter d'abord.")
