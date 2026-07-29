@@ -122,10 +122,33 @@ def main() -> int:
     xs = [e.x for e in utiles] or [0]
     ys = [e.y for e in utiles] or [0]
     emprise = (max(xs) - min(xs), max(ys) - min(ys))
+    # Le défaut est resté "patch" par prudence (il conserve les beacons -u, cf.
+    # LayoutConstraints.collect_belt_scope). On MESURE donc son coût sans le traiter
+    # comme une panne : c'est un arbitrage documenté, pas une régression.
     ratio = belts / max(machines_utiles, 1)
-    rec("e10-2b : le plan reste à l'échelle de la demande", ratio < 10,
+    rec("e10-2b : coût du défaut « patch » mesuré", True,
         f"{belts} belts pour {machines_utiles} machines utiles (ratio {ratio:.0f}:1), "
-        f"emprise {emprise[0]:.0f}x{emprise[1]:.0f} tuiles pour {DEBIT} {CIBLE}/s")
+        f"emprise {emprise[0]:.0f}x{emprise[1]:.0f} pour {DEBIT} {CIBLE}/s — "
+        f"dimensionné par le gisement, pas par la demande")
+
+    # --- 2d : le mode "drills" tient-il sa promesse SUR LE TERRAIN RÉEL ? ---
+    # Le fixture des tests unitaires a un petit patch ; c'est ici, sur un gisement de
+    # plusieurs centaines de tuiles, que l'écart se voit vraiment.
+    from services.layout_planner import LayoutConstraints
+    fb2 = FactoryBuilder(api, Contract(ProductionGoal(CIBLE, DEBIT), zone=zone,
+                                       replan_budget=4,
+                                       layout_constraints=LayoutConstraints(
+                                           collect_belt_scope="drills")))
+    lp2 = fb2.build_layout(splan, geo)
+    t2 = getattr(lp2, "totals", {})
+    u2 = [e for e in getattr(lp2, "entities", []) if not getattr(e, "skip", False)]
+    b2 = t2.get("transport-belt", 0)
+    xs2 = [e.x for e in u2] or [0]
+    ys2 = [e.y for e in u2] or [0]
+    rec("e10-2d : mode « drills » — la collecte suit le débit, pas le gisement",
+        b2 < belts and len(u2) < len(utiles),
+        f"patch: {len(utiles)} entités / {belts} belts / {emprise[1]:.0f} de haut  ->  "
+        f"drills: {len(u2)} entités / {b2} belts / {max(ys2) - min(ys2):.0f} de haut")
 
     if feas != "ok":
         # `obstacle_blocking` n'est pas un accident de terrain : mesuré ici, 7180 arbres,

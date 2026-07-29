@@ -1697,6 +1697,42 @@ def test_back_compat_s3d_empty_terrain() -> None:
         ok, f"feas={lp.feasibility}")
 
 
+def test_collect_belt_scope_drills() -> None:
+    """E10 (J4) : la belt de collecte dimensionnée aux DRILLS et non au gisement.
+
+    Mesuré en jeu avant l'option : pour 1 engrenage/s sur un patch de 738 tuiles, la
+    belt longeant tout le bord du patch donnait 505 entités dont 468 belts — 36 par
+    machine utile — sur une emprise de 382 x 440 tuiles, refusée par le terrain. Un
+    gisement plus grand donnait une usine plus grande à débit identique.
+
+    Ce qui est vérifié ici est la PROPRIÉTÉ : à demande égale, le mode "drills" produit
+    strictement moins de belts que "patch" et reste faisable. Les valeurs exactes
+    dépendent du fixture et ne prouveraient rien.
+    """
+    patch = _gears_plan(0.5, constraints=LayoutConstraints(collect_belt_scope="patch"))
+    drills = _gears_plan(0.5, constraints=LayoutConstraints(collect_belt_scope="drills"))
+    n_patch = len([e for e in patch.entities if e.role == "belt"])
+    n_drills = len([e for e in drills.entities if e.role == "belt"])
+    ok = (patch.feasibility == "ok" and drills.feasibility == "ok"
+          and n_drills < n_patch
+          # Les drills eux-mêmes sont inchangés : on ne compacte que la collecte.
+          and len([e for e in drills.entities if e.role == "drill"])
+          == len([e for e in patch.entities if e.role == "drill"]))
+    rec("test_collect_belt_scope_drills : moins de belts, mêmes drills, toujours faisable",
+        ok, f"patch={n_patch} belts -> drills={n_drills} belts "
+            f"(feas {patch.feasibility}/{drills.feasibility})")
+
+
+def test_collect_belt_scope_defaut_backcompat() -> None:
+    """Le défaut reste "patch" : aucun plan existant ne change de forme sans qu'on le demande."""
+    defaut = _gears_plan(0.5)
+    patch = _gears_plan(0.5, constraints=LayoutConstraints(collect_belt_scope="patch"))
+    ok = (len([e for e in defaut.entities if e.role == "belt"])
+          == len([e for e in patch.entities if e.role == "belt"]))
+    rec("test_collect_belt_scope_defaut_backcompat : défaut == patch", ok,
+        f"{len([e for e in defaut.entities if e.role == 'belt'])} belts dans les deux cas")
+
+
 def main() -> int:
     tests = [
         test_five_gears_layout,
@@ -1763,6 +1799,8 @@ def main() -> int:
         test_terrain_check_no_obstacle,
         test_terrain_check_obstacle_on_stage,
         test_replan_shift_offset_v_success,
+        test_collect_belt_scope_drills,
+        test_collect_belt_scope_defaut_backcompat,
         test_replan_rotate_facing_success,
         test_replan_budget_exhausted,
         test_replan_no_infinite_loop,

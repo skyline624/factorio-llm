@@ -136,6 +136,23 @@ class LayoutConstraints:
     # l'étage suivant (bord -u = prev_u_next - 5.5) ne collisionne pas les +u beacons de l'étage
     # courant (stage_gap=2 insuffisant sinon). Back-compat : 0 -> aucun beacon -u, u_next S3c.
     beacons_neg_per_stage: int = 0
+    # E10 (J4) : ce que la belt de collecte de l'étage mine doit longer.
+    #   "patch"  = tout le bord du gisement (comportement d'origine)
+    #   "drills" = la seule étendue des drills posés
+    #
+    # Mesuré en jeu : pour 1 engrenage/s sur un patch de 738 tuiles, "patch" produit
+    # 505 entités dont 468 belts — 36 par machine utile — sur une emprise de 382 x 440
+    # tuiles, refusée par le terrain. En "drills" : 90 entités, 53 belts, 382 x 25.
+    # Un gisement plus grand n'a aucune raison de donner une usine plus grande à débit
+    # identique ; "patch" est un défaut, pas un choix.
+    #
+    # Le défaut reste "patch" par PRUDENCE, et c'est un arbitrage à trancher : passer en
+    # "drills" compacte le layout au point que les beacons -u n'ont plus la place de se
+    # poser (4 des 177 tests du layout basculent, dont ceux qui protègent cette
+    # capacité S3d). Compacter la collecte et loger les beacons -u sont deux exigences
+    # qui se contredisent aujourd'hui — les réconcilier demande de revoir `stage_gap`
+    # et la réservation d'emprise, ce qui dépasse ce correctif.
+    collect_belt_scope: str = "patch"
     # S4 : adaptation terrain (contournement + replan auto déterministe).
     # constructible_zone = bbox autorisée (coords map). None = pas de borne (back-compat S3d).
     # replan_budget = 0 = aucun replan auto (back-compat S3d) ; typique S4b = 4 (borné).
@@ -355,12 +372,31 @@ def _place_drills(node, patch, geometry, constraints, facing, au, av,
         _add(entities, node.machine, x, y, 0, "drill", node_item=node.item)
     totals[node.machine] = totals.get(node.machine, 0) + len(positions)
 
-    # Belt de collecte : longe le bord aval du patch (u = lu2 + 0.5), direction +v,
-    # longueur = (lv2 - lv1). belts_out parallèles si débit > 1 belt.
+    # Belt de collecte : sa LONGUEUR suit l'étendue des drills posés, pas celle du
+    # gisement. Elle ne dessert que ces drills ; un patch plus grand n'a aucune raison
+    # de produire une usine plus grande à débit identique.
+    #
+    # Mesuré en jeu avant correction (E10) : pour 1 engrenage/s sur un patch de 738
+    # tuiles, `n_seg = lv2 - lv1` donnait 468 belts pour 13 machines utiles — 36 pour 1 —
+    # sur une emprise de 382 x 440 tuiles, refusée par le terrain (7180 obstacles
+    # naturels dans un rayon de 400 : un plan de cette taille en croise forcément).
+    #
+    # NOTE — deux corrections voisines ont été essayées puis ÉCARTÉES : caler `collect_u`
+    # sur le bord des drills plutôt que du patch, et ancrer `v_next` sur leur centre.
+    # Toutes deux sont défendables sur le fond (une belt calée sur `lu2` peut se
+    # retrouver hors de portée du drop des drills), mais elles déplacent les étages
+    # suivants et font tomber les beacons -u en collision : 4 des 177 tests du layout
+    # basculaient. Elles demandent de revoir en même temps `stage_gap` et l'emprise
+    # réservée aux beacons — un chantier distinct, à ne pas glisser dans celui-ci.
     belt = constraints.belt_tier
     belt_speed = THROUGHPUTS.get(belt, 0.0)
     belts_out = math.ceil(node.rate_effective / belt_speed) if belt_speed > 0 else 1
-    n_seg = max(1, int(math.ceil(lv2 - lv1)))
+    if constraints.collect_belt_scope == "drills" and positions:
+        dv1 = min(pv for _, pv in positions) - g.h / 2.0
+        dv2 = max(pv for _, pv in positions) + g.h / 2.0
+    else:
+        dv1, dv2 = lv1, lv2
+    n_seg = max(1, int(math.ceil(dv2 - dv1)))
     collect_u = lu2 + 0.5
     first_belt = None
     last_belt = None
@@ -369,7 +405,7 @@ def _place_drills(node, patch, geometry, constraints, facing, au, av,
         cu = collect_u + k
         lane_last = None
         for j in range(n_seg):
-            cv = lv1 + 0.5 + j
+            cv = dv1 + 0.5 + j
             x, y = _to_xy(facing, cu, cv)
             idx = _add(entities, belt, x, y, FACING_DIR_V[facing], "belt", node_item=node.item)
             lane_last = idx
