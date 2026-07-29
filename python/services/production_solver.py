@@ -130,6 +130,13 @@ class ProductionNode:
     # item fluide OU recette avec ingrédients/produits fluides -> "fluid"/"mixed".
     transport: str = "belt"
     phase: str = "solid"
+    # E4 : NOM de la recette retenue, à poser sur la machine (set_recipe_at). Il n'est
+    # pas déductible de `item` : une même sortie a souvent plusieurs recettes, et leurs
+    # noms diffèrent du produit (petroleum-gas <- "basic-oil-processing", solid-fuel <-
+    # "solid-fuel-from-heavy-oil" — cf. RECIPE_PREFERENCE). Le solveur a fait ce choix,
+    # il doit le transmettre, sinon la machine est posée sans savoir quoi produire.
+    # Vide pour les nœuds "mine" (un foreur n'a pas de recette).
+    recipe: str = ""
     # S2b-1 : pour les sinks (role="store", co-produits orphelins), item de la node
     # source qui produit ce co-produit. Additif, défaut vide -> nodes non-sink inchangés
     # (back-compat). Permet au layout d'insérer le sink juste après sa source et de
@@ -303,6 +310,9 @@ def solve(request: ProductionRequest, kb: KnowledgeBase) -> ProductionPlan:
             ingredients=ingredients,
             transport=transport, phase=phase,
             speed_bonus=meff.speed_bonus, productivity_bonus=meff.productivity_bonus,
+            # E4 : `Recipe.item` porte le NOM de la recette (recipes_by_product indexe
+            # par produit) — c'est lui qu'attend set_recipe, pas l'item produit.
+            recipe=recipe.item,
         )
         # S2b-1 : enregistrer les co-produits fluides (autres que l'item demandé) au
         # débit effectif de la source. Résolus en sinks après BFS si orphelins.

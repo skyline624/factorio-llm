@@ -203,6 +203,11 @@ class LayoutEntity:
     # modules (ex. ["speed-module-3","speed-module-3"]). Le poseur RCON fait ent.insert après
     # create_entity. Vérifiable live via scan_factory -> get_module_inventory (S3b-7/11).
     modules: list = field(default_factory=list)
+    # E4 : nom de la recette à poser sur la machine (set_recipe_at, via les options de
+    # pose de l'executor). Non déductible de `node_item` : le nom d'une recette diffère
+    # souvent de son produit (petroleum-gas <- "basic-oil-processing"). Vide pour tout ce
+    # qui n'est pas une machine à recette (belts, poles, drills, pipes).
+    recipe: str = ""
 
 
 @dataclass
@@ -297,8 +302,11 @@ def _swing_for(g_ins: Optional[EntityGeometry], default: float = 2.0) -> float:
     return g_ins.pickup_distance + g_ins.drop_distance
 
 
-def _add(entities, name, x, y, direction, role, node_item="") -> int:
-    entities.append(LayoutEntity(name, x, y, direction, role, node_item))
+def _add(entities, name, x, y, direction, role, node_item="", recipe="") -> int:
+    e = LayoutEntity(name, x, y, direction, role, node_item)
+    if recipe:
+        e.recipe = recipe
+    entities.append(e)
     return len(entities) - 1
 
 
@@ -698,7 +706,10 @@ def _place_stage(node, geometry, constraints, belt_speed, inserter_tp, inserter_
     machine_v = [v0 + i * (size_v + gap) for i in range(N)]
     for vv in machine_v:
         x, y = _to_xy(facing, u_machine, vv)
-        _add(entities, node.machine, x, y, 0, "machine", node_item=node.item)
+        # E4 : la recette voyage avec la machine. Sans elle, l'executor pose un
+        # assembleur qui ne produit rien — le plan « marche » et l'usine reste inerte.
+        _add(entities, node.machine, x, y, 0, "machine", node_item=node.item,
+             recipe=getattr(node, "recipe", ""))
     totals[node.machine] = totals.get(node.machine, 0) + N
 
     offset_out_u = half_u + 1.5    # belt_out à u_machine + offset_out_u

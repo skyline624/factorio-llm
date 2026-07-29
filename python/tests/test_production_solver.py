@@ -67,6 +67,28 @@ def node_of(plan, item):
     return next((n for n in plan.nodes if n.item == item), None)
 
 
+def test_recette_transmise_aux_noeuds() -> None:
+    """E4 : chaque nœud de craft porte le NOM de la recette retenue, les mines non.
+
+    Le solveur choisit la recette (`kb.recipe_of`) ; sans la transmettre, l'executor
+    pose un assembleur qui ne produit rien — le plan paraît correct et l'usine reste
+    inerte. Le nom n'est pas déductible du produit : une même sortie a souvent
+    plusieurs recettes aux noms différents (cf. RECIPE_PREFERENCE, petroleum-gas <-
+    "basic-oil-processing").
+    """
+    plan = solve(ProductionRequest("iron-gear-wheel", 1.0), sample_kb())
+    gear = node_of(plan, "iron-gear-wheel")
+    plaque = node_of(plan, "iron-plate")
+    mine = next((n for n in plan.nodes if n.role == "mine"), None)
+    ok = (gear is not None and gear.recipe == "iron-gear-wheel"
+          and plaque is not None and plaque.recipe == "iron-plate"
+          and (mine is None or mine.recipe == ""))
+    record("test_recette_transmise_aux_noeuds", ok,
+           f"gear={gear.recipe if gear else None} plaque={plaque.recipe if plaque else None} "
+           f"mine={mine.recipe if mine else 'aucune'!r}")
+    assert ok
+
+
 def test_yellow_belt_iron() -> None:
     print("\n[test] === COHÉRENCE : 48 stone-furnaces / yellow belt (15 plate/s) ===")
     kb = sample_kb()
@@ -284,6 +306,7 @@ def main() -> int:
     test_module_productivity_bonus()
     test_no_module_backcompat()
     test_electric_furnace_tier()
+    test_recette_transmise_aux_noeuds()
     return recap()
 
 
