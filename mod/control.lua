@@ -80,6 +80,11 @@ remote.add_interface("fl_tools", {
   get_tile = function(x, y)
     safe(function() return tools.get_tile(x, y) end)
   end,
+  -- E3 : etat electrique (reseau, charge, statut). Sans lui on sait poser une
+  -- centrale mais pas verifier qu'elle alimente.
+  get_power_state = function(x, y, radius)
+    safe(function() return tools.get_power_state(x, y, radius) end)
+  end,
   -- S4d : generation synchrone de chunks autour d'une position (resout out-of-map).
   -- request_to_generate_chunks + force_generate_chunk_requests. Non destructif.
   generate_terrain = function(x, y, radius)

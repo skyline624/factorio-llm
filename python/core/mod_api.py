@@ -139,6 +139,17 @@ class ModApi:
         Sert a vérifier ponctuellement water/out-of-map (frontière headless)."""
         return self._call("fl_tools", "get_tile", x, y)
 
+    def get_power_state(self, x: float, y: float, radius: float = 4.0) -> dict:
+        """Etat electrique autour de (x, y) — l'entite electrique la plus proche.
+
+        Retourne {found, name, x, y, status, networkId, connected, bufferEnergy,
+        bufferSize, productionKW, consumptionKW, satisfaction}. Distinctions utiles :
+        `networkId` absent = entite DEBRANCHEE (et pas seulement a court de courant) ;
+        `satisfaction` < 1 = reseau sous-dimensionne. Les statistiques passent par un
+        poteau du meme reseau (electric_network_statistics n'existe que sur un poteau) :
+        `noPole=True` si aucun n'est a portee."""
+        return self._call("fl_tools", "get_power_state", x, y, radius)
+
     def generate_terrain(self, x: float, y: float, radius: float = 30.0) -> dict:
         """Genere les chunks autour de (x, y) SYNCHRONE (resout le CONSTAT S1d/S1g
         out-of-map). request_to_generate_chunks + force_generate_chunk_requests (API

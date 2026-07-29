@@ -11,6 +11,7 @@
 local json = require("scripts.json")
 local player_mod = require("scripts.player")
 local utils_entity = require("scripts.utils_entity")
+local math_utils = require("scripts.utils_math")   -- E3 : distance (get_power_state)
 
 local M = {}
 
@@ -603,6 +604,96 @@ function M.get_tile(x, y)
   return json.encode({x = math.floor(x), y = math.floor(y), name = t.name})
 end
 
+-- get_power_state(x, y, radius) : etat ELECTRIQUE autour d'une position (E3).
+--
+-- Repond aux trois questions qu'aucun outil ne couvrait, et sans lesquelles on sait
+-- poser une centrale mais pas verifier qu'elle alimente quoi que ce soit :
+--   1. l'entite est-elle RELIEE a un reseau ?          -> networkId, connected
+--   2. le reseau tient-il la charge ?                  -> productionKW / consumptionKW
+--   3. sinon, pourquoi ?                               -> status (no_power / low_power)
+--
+-- Le point 2 impose un detour : electric_network_statistics n'existe QUE sur un poteau
+-- electrique. On cherche donc un poteau du MEME reseau (rayon elargi) pour lire les flux.
+-- Les compteurs de flux sont en joules par tick -> x60 pour des watts.
+--
+-- Non destructif. Retourne {found, name, x, y, status, networkId, connected,
+-- bufferEnergy, bufferSize, productionKW, consumptionKW, satisfaction} ou {found=false}.
+function M.get_power_state(x, y, radius)
+  local char = player_mod.get_ai_entity()
+  local surface = char and char.surface or game.surfaces.nauvis or game.surfaces[1]
+  if not surface then return json.encode({error = "aucune surface"}) end
+  local r = (radius and radius > 0) and radius or 4
+  local pos = {x = x, y = y}
+
+  -- 1. L'entite electrique la plus proche de la position visee.
+  local target, best_d = nil, nil
+  for _, e in ipairs(surface.find_entities_filtered({position = pos, radius = r})) do
+    if e.valid and e.type ~= "character" then
+      local okn, nid = pcall(function() return e.electric_network_id end)
+      local is_elec = okn and nid ~= nil
+      if not is_elec then
+        -- Une entite non alimentee n'a pas de network_id : on la retient quand meme
+        -- si elle CONSOMME de l'electricite, sinon on ne saurait pas dire « debranchee ».
+        local okb, buf = pcall(function() return e.electric_buffer_size end)
+        is_elec = okb and buf ~= nil
+      end
+      if is_elec then
+        local d = math_utils.distance(pos, e.position)
+        if not best_d or d < best_d then target, best_d = e, d end
+      end
+    end
+  end
+  if not target then return json.encode({found = false, x = x, y = y}) end
+
+  local out = {
+    found = true,
+    name = target.name,
+    x = r1(target.position.x),
+    y = r1(target.position.y),
+    status = utils_entity.status_name(target.status),
+  }
+  pcall(function() out.networkId = target.electric_network_id end)
+  pcall(function() out.connected = target.is_connected_to_electric_network() end)
+  pcall(function() out.bufferEnergy = r1(target.energy) end)
+  pcall(function() out.bufferSize = r1(target.electric_buffer_size) end)
+
+  -- 2. Statistiques du reseau : elles ne sont lisibles que via un POTEAU du meme reseau.
+  if out.networkId then
+    local pole = nil
+    for _, e in ipairs(surface.find_entities_filtered({position = pos, radius = 40,
+                                                       type = "electric-pole"})) do
+      local okn, nid = pcall(function() return e.electric_network_id end)
+      if okn and nid == out.networkId then pole = e break end
+    end
+    if pole then
+      local okst, stats = pcall(function() return pole.electric_network_statistics end)
+      if okst and stats then
+        local prec = defines.flow_precision_index.five_seconds
+        local function total(counts, category)
+          local sum = 0
+          for name, _ in pairs(counts or {}) do
+            local okf, v = pcall(function()
+              return stats.get_flow_count({name = name, category = category,
+                                           precision_index = prec})
+            end)
+            if okf and v then sum = sum + v end
+          end
+          return sum
+        end
+        -- joules/tick -> kW : x60 ticks/s / 1000.
+        local prod = total(stats.input_counts, "input") * 60 / 1000
+        local cons = total(stats.output_counts, "output") * 60 / 1000
+        out.productionKW = r1(prod)
+        out.consumptionKW = r1(cons)
+        if cons > 0 then out.satisfaction = r1(math.min(prod / cons, 9.9)) end
+      end
+    else
+      out.noPole = true   -- reseau sans poteau a portee : stats indisponibles
+    end
+  end
+  return json.encode(out)
+end
+
 -- generate_terrain(x, y, radius) : genere les chunks autour de (x, y) SYNCHRONE.
 -- request_to_generate_chunks(position, radius_chunks) + force_generate_chunk_requests()
 -- (API Factorio 2.0). Resout le CONSTAT S1d/S1g : sans ceci, walk_to (pathfinding) ne
@@ -729,6 +820,32 @@ function M.measure_entity(name, x, y, direction)
           end
         end
         box.pipe_connections = conns
+        -- E3 : positions REELLES des ports, via l'INSTANCE posee.
+        -- `pipe_connections[j].positions` (ci-dessus) vient du PROTOTYPE : ce sont les
+        -- positions canoniques NON rotees, a charge du consommateur d'appliquer la
+        -- rotation. `fluidbox.get_pipe_connections(i)` donne au contraire les positions
+        -- absolues effectives de l'entite posee ; on les rend relatives a son centre REEL
+        -- (create_entity ayant pu snapper la position demandee).
+        --   port  = tuile du port sur l'entite
+        --   voisin = tuile ou doit se trouver le tuyau qui s'y raccorde
+        -- Mesure (facing north) : boiler -> eau aux deux cotes (+-1, +0.5), vapeur au
+        -- nord (0, -0.5) ; offshore-pump -> sortie au centre, voisin (0, +1) ;
+        -- steam-engine -> entrees aux deux extremites (0, +-2).
+        local okpc, pcs2 = pcall(function() return ent.fluidbox.get_pipe_connections(i) end)
+        if okpc and pcs2 then
+          local ports = {}
+          for _, c in ipairs(pcs2) do
+            local p = {}
+            pcall(function()
+              p.x = r1(c.position.x - ent.position.x)
+              p.y = r1(c.position.y - ent.position.y)
+              p.tx = r1(c.target_position.x - ent.position.x)
+              p.ty = r1(c.target_position.y - ent.position.y)
+            end)
+            if p.x then table.insert(ports, p) end
+          end
+          if #ports > 0 then box.ports = ports end
+        end
         table.insert(boxes, box)
       end
     end
