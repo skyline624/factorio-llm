@@ -122,30 +122,60 @@ Deux règles :
 `agents-roadmap.md` §2 donne la progression de gameplay. Voici la même progression vue
 sous l'angle **« qu'est-ce qui bloque, concrètement »**.
 
+*(État au 29 juillet 2026 — les jalons J1.5 à J3 ont été franchis depuis la première
+rédaction de ce document, ainsi que le Coordinator V1.)*
+
 | # | Jalon | État | Ce qu'il exige de nouveau |
 |---|---|---|---|
 | **J0** | Bootstrap manuel (miner, fondre à la main) | **fait** | — |
 | **J1** | Micro-chaîne burner (drill→inserter→four) | **fait** (8/8 headless, 10/10 production) | — |
-| **J1.5** | **Correction d'erreur** : retirer/tourner une entité mal posée | **bloqué** | `remove_entity_at`, `rotate_entity_at` |
-| **J2** | **Électricité** (offshore-pump → boiler → steam-engine → poles) | **bloqué** | `PowerPlanner`, lecture du réseau électrique |
-| **J3** | **Automatisation réelle** : assembleurs + red science | **bloqué** | **`set_recipe`** — sans lui aucun assembleur ne fonctionne |
-| **J4** | Main bus + green science (circuits, splitters, underground) | planner **prêt** (S1), pose bloquée | `place_entity_at` étendu : `ug_type`, `priority` |
+| **J1.5** | **Correction d'erreur** : retirer/tourner une entité mal posée | **fait** (E2, 10/10) | `remove_entity_at`, `rotate_entity_at` livrés |
+| **J2** | **Électricité** (offshore-pump → boiler → steam-engine → poles) | **fait** (E3, 6/6 + 5/5) | `PowerPlanner`, `get_power_state`, `plan_transmission` |
+| **J3** | **Automatisation réelle** : machine électrique avec recette | **fait** (E4, 5/5 ; E5, 7/7 tout-électrique) | `set_recipe` livré, recette propagée solveur→machine |
+| **J3.5** | **Boucle autonome** : observe → diagnostique → décide → agit | **fait** (E6/E7/E8) | `FactoryDoctor`, `Coordinator`, `SiteFinder` |
+| **J4** | Main bus + green science (circuits, splitters, underground) | planner **prêt** (S1), pose **débloquée** mais jamais éprouvée sur un plan complet | poser un `LayoutPlan` de ~40 entités en jeu |
 | **J5** | Défense (murs, tourelles, munitions) | absent | `scan_enemies`, `get_pollution`, `get_alerts` |
 | **J6** | Pétrole / fluides / cracking | planner **prêt** (S2) | `get_fluid_contents`, agent `Refiner` |
 | **J7** | Trains (gisements distants) | absent | rails, signaux, gares, horaires |
 | **J8** | Robots de construction | absent | **ghosts** + roboports → change le mode d'exécution |
-| **J9** | Modules / beacons / électricité avancée | planner **prêt** (S3) | `modules` à la pose |
+| **J9** | Modules / beacons / électricité avancée | planner **prêt** (S3), pose débloquée (E2) | éprouver `modules` sur un plan réel |
 | **J10** | Fusée | absent | — (dérive de J4–J9) |
 | **J11** | Space Age (4 planètes) | absent | surfaces multiples, plateformes |
 
-**Lecture de ce tableau** : le projet a une avance considérable côté *planification*
-(S1 à S3 du LayoutPlanner savent déjà calculer bus, fluides et beacons) et un retard
-côté *actionneurs*. Trois primitives Lua manquantes bloquent J1.5, J3 et J4 — soit
-l'essentiel du jeu. **Le chemin critique est dans le mod, pas dans les agents.**
+**Ce que disait ce tableau, et ce qu'il dit maintenant.** À la première rédaction, trois
+primitives Lua manquantes bloquaient J1.5, J3 et J4 — l'essentiel du jeu — et la
+conclusion était que *le chemin critique est dans le mod, pas dans les agents*. C'est
+fait : le mod sait désormais retirer, tourner, régler une recette et transmettre les
+options de pose, et la boucle autonome tourne au-dessus.
+
+Le déséquilibre s'est inversé. Ce qui bloque maintenant n'est plus l'actionneur mais
+l'**épreuve du réel sur des plans complets** : `LayoutPlanner` S1–S3 calcule bus, fluides
+et beacons depuis longtemps, ces plans sont posables depuis E2, et **aucun ne l'a été**.
+Trois inconnues à lever pour J4 : le kit du mod couvre-t-il les ~40 entités, les poteaux
+du plan couvrent-ils les machines, le terrain accepte-t-il une telle emprise.
 
 ## 5. Catalogue des agents
 
-### A0 — `Coordinator` (stratège) — *à créer*
+### A0 — `Coordinator` (stratège) — *existe en V1 déterministe (E7/E8)*
+
+> **Réalisé.** `agents/coordinator.py` : boucle observe → diagnostique → décide → agit →
+> vérifie. `decide()` est une fonction **pure** (aucun appel RCON), donc tout le
+> curriculum se teste hors ligne — c'est ce qui rend un agent vérifiable. Bâtir est
+> délégué aux planners via `batir()` ; le Coordinator ne calcule aucune coordonnée.
+> Validé en jeu : depuis une carte rase, il bâtit l'énergie, puis la production,
+> s'arrête quand tout tourne, et répare quand on casse (5/5). `run()` enchaîne les tours
+> et s'arrête sur trois conditions, dont « la même action a échoué deux fois » — sans
+> quoi un agent bute indéfiniment sur ce qu'il ne sait pas résoudre.
+>
+> **Deux pièges rencontrés, à ne pas réintroduire** : une condition d'arrêt ne doit
+> jamais reposer sur une grandeur qui dépend de la charge (`production_kw > 0` faisait
+> rebâtir une centrale à chaque tour, un générateur ne produisant que ce qui est
+> consommé) ; et un test de réparation doit vérifier que la panne EXISTE avant de juger
+> la réaction.
+>
+> Reste à faire : `renforcer_energie`, `alimenter`, `evacuer`, `regler_recette` sont
+> décidés mais pas encore exécutés — seuls `ravitailler`, `relier` et les deux
+> constructions le sont.
 
 - **Objectif** : décider **quoi faire maintenant** et tenir un cap sur des heures de jeu.
 - **Arbitrage justifiant un LLM** : trancher entre quatre pressions concurrentes —
@@ -238,14 +268,21 @@ utilement ; mentionné pour mémoire.
 ## 6. Catalogue des services (le gros du travail)
 
 **Existants** : `perception`, `knowledge`, `production_solver`, `layout_planner`,
-`micro_planner`, `executor`, `llm`.
+`micro_planner`, `executor`, `llm`, **`power_planner`** (E3), **`factory_doctor`** (E6),
+**`site_finder`** (E8).
 
-**À créer**, par ordre d'utilité :
+**Réalisés depuis la première rédaction :**
+
+| Service | Ce qu'il a apporté |
+|---|---|
+| **`PowerPlanner`** (E3) | Dimensionnement **dérivé** de deux mesures (30 vapeur/s, 1200 eau/s) et deux constantes : 900 kW par moteur, 2 moteurs/boiler, 20 boilers/pompe tombent du calcul. `plan_transmission` relie la centrale aux machines (mesuré : 100+ tuiles entre eau et gisement sur carte réelle). |
+| **`FactoryDoctor`** (E6) | Distingue **DÉBRANCHÉE** de **sans courant** (deux réparations différentes), déclasse les entrées vides en conséquences quand une panne propre existe en amont, et ignore les organes de **transit** (un inserter qui attend est dans son régime normal). Vérifié en cassant une chaîne saine d'une manière connue. |
+| **`SiteFinder`** (E8) | `find_power_site` (la pompe va sur la **rive**, direction vers l'eau) et `place_pole_line` (chaîner sur les positions **réellement posées** : suivre le tracé théorique scinde le réseau sans qu'aucune pose n'échoue). |
+
+**Restent à créer**, par ordre d'utilité :
 
 | Service | Rôle | Pourquoi déterministe |
 |---|---|---|
-| **`PowerPlanner`** (J2) | Dimensionner et implanter la production électrique : `offshore-pump` → `boiler` (1,8 MW) → `steam-engine` (900 kW) → poles ; vérifier la **couverture** des consommateurs. | Arithmétique pure + géométrie. Le seul « choix » est le site, qui se déduit de `scan_water_edge`. |
-| **`FactoryDoctor`** (J3) | Comparer débit attendu / réel, **remonter la chaîne** jusqu'au goulet, produire un symptôme typé (`no_fuel`, `no_power`, `input_starved`, `output_blocked`, `ratio_insuffisant`). | C'est un parcours de graphe. **C'est la parade au mode d'échec n°1 de FLE.** |
 | **`CraftPlanner`** (J1–J3) | Que crafter à la main, dans quel ordre, en résolvant les *chicken-and-egg* (l'inserter exige des plaques qui exigent un four…). | Tri topologique sur les recettes + inventaire. |
 | **`TechResolver`** (J3) | Prérequis d'une technologie, coût en science packs, ordre de recherche. | Parcours de l'arbre technologique. |
 | **`SkillLibrary`** (J3+) | Mémoriser les plans **vérifiés** (objectif, terrain, débit obtenu) et les rejouer au lieu de recalculer. | Stockage + similarité. Réduit le coût LLM et la variance — cf. les 500 USD par run FLE. |
@@ -257,7 +294,13 @@ utilement ; mentionné pour mémoire.
 Classées par ordre de déblocage. La colonne API donne la fonction Factorio 2.x
 correspondante — toutes vérifiées dans la doc runtime.
 
-### P0 — bloquent le jeu entier (à faire en premier)
+### P0 — bloquent le jeu entier — ✅ **LIVRÉES (E2, 10/10 en jeu)**
+
+Les quatre primitives ci-dessous existent désormais dans `fl_ops`. Deux faits d'API
+mesurés à cette occasion : `belt_to_ground_type` est en **lecture seule** (le sens d'un
+underground se donne à la création, puis se relit et se corrige par rotation), et
+`char.mine_entity` rend les objets à l'inventaire là où `destroy()` les perd.
+
 
 | Primitive proposée | API Factorio 2.x | Ce qu'elle débloque |
 |---|---|---|
@@ -270,7 +313,7 @@ correspondante — toutes vérifiées dans la doc runtime.
 
 | Primitive | API | Usage |
 |---|---|---|
-| `get_power_state(x, y)` | `LuaEntity.electric_network_id` + statistiques du réseau | Savoir si une machine est **alimentée**, et si le réseau est en déficit. Sans ça, impossible de vérifier une usine électrique. |
+| ~~`get_power_state(x, y)`~~ ✅ **livrée (E3a)** | `LuaEntity.electric_network_id` + statistiques du réseau | Distingue débranchée / sans courant, et donne la charge. Deux pièges mesurés : `electric_network_statistics` n'existe **que sur un poteau**, et `LuaFlowStatistics` compte du point de vue de l'**entité** (`input_counts` = les consommateurs, `output_counts` = les producteurs — l'intuition inverse donne une production nulle sur une centrale qui tourne). |
 | `get_alerts()` | alertes de la force | La rétroaction la moins chère : machine sans énergie, entité détruite, attaque. Alimente `Coordinator` et `FactoryDoctor`. |
 | `get_research_state()` | `LuaForce.technologies`, `current_research`, `research_progress`, `research_queue` | Aujourd'hui on lance `research_technology` **à l'aveugle** : on ne sait ni ce qui est acquis, ni où en est la recherche. |
 
@@ -290,22 +333,34 @@ circuits (`get_wire_connector`, `get_control_behavior`) · blueprints (import/ex
 string) — un accélérateur considérable : un blueprint valide remplace des dizaines de
 poses unitaires.
 
-## 8. Ordre de chantier recommandé
+## 8. Ordre de chantier — état d'avancement
 
-1. **E2 — mod : les 4 primitives P0.** Petit chantier Lua, effet de levier maximal :
-   débloque J1.5, J3, J4 et J9 d'un coup. Rien d'autre ne devrait passer devant.
-2. **E3 — `PowerPlanner` + J2 (électricité).** Premier jalon où l'usine **cesse de
-   dépendre d'un humain** qui verse du charbon. C'est le vrai sens du mot autonomie ici.
-3. **E4 — J3 : première usine automatisée (red science)**, avec `set_recipe` et
-   `CraftPlanner`. Critère : débit soutenu 60 s.
-4. **E5 — `FactoryDoctor` + `Coordinator` V1 déterministe.** La boucle se referme :
-   observer, diagnostiquer, relancer. C'est le passage de « script piloté » à « agent ».
-5. **E6 — J4 : main bus + green science** (le LayoutPlanner S1 est prêt et attend).
-6. **E7 — `Defender`**, dès que la pollution atteint les nids.
-7. Ensuite : J6 fluides (S2 prêt), J7 trains, J8 robots — chacun changeant l'échelle.
+Les cinq premières étapes de cet ordre ont été exécutées et vérifiées en jeu. Chacune
+porte le numéro de chantier utilisé dans les messages de commit.
 
-Le LLM n'entre vraiment en scène qu'à l'étape 4, et d'abord comme *option* : la boucle
-doit tourner sans lui.
+| Étape | Chantier | État |
+|---|---|---|
+| 1 | **E2 — les 4 primitives P0** (`set_recipe_at`, `remove_entity_at`, `rotate_entity_at`, options de pose) | ✅ 10/10 |
+| 2 | **E3 — `get_power_state` + `PowerPlanner`** | ✅ 6/6 + 5/5 |
+| 3 | **E4 — première machine électrique avec recette** (recette propagée solveur → machine) | ✅ 5/5 |
+| 3b | **E5 — chaîne tout-électrique, entrée automatisée** + `plan_transmission` | ✅ 7/7 |
+| 4 | **E6/E7/E8 — `FactoryDoctor` + `Coordinator` V1 + `SiteFinder`** | ✅ 4/4, 5/5, 5/5 |
+| 5 | **J4 — main bus + green science** : poser un `LayoutPlan` complet (~40 entités) | **suivant** |
+| 6 | **`Defender`**, dès que la pollution atteint les nids | à venir |
+| 7 | J6 fluides (S2 prêt), J7 trains, J8 robots | à venir |
+
+**Le LLM n'est toujours pas entré en scène, et c'est conforme au plan** : la boucle
+tourne sans lui. `Coordinator.decide()` est le point d'insertion, le jour où plusieurs
+chemins se vaudront réellement — défense contre expansion contre recherche, ce qui
+commence à J5.
+
+**Ce que l'exécution a appris, et qui ne figurait pas dans le plan initial** : presque
+tous les défauts rencontrés étaient *invisibles au moment d'agir*. Une ligne de poteaux
+scindée en deux réseaux, un tuyau arrêté une tuile trop tôt, un dégagement de terrain
+qui détruit ce qu'on vient de poser, une lecture de flux inversée, une condition d'arrêt
+qui dépend de la charge : aucune pose n'échouait, aucune erreur n'était levée. **Seule la
+mesure du résultat les a révélés.** C'est ce qui justifie, rétrospectivement, d'avoir
+fait du critère de vérification une partie du livrable et non un à-côté.
 
 ## 9. Risques et angles morts
 

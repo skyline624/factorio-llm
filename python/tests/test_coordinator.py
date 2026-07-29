@@ -142,6 +142,72 @@ def test_inserter_ne_declenche_pas_de_reparation() -> None:
     assert ok
 
 
+class _CoordFactice:
+    """Coordinator dont on scripte les observations, pour tester la boucle `run`.
+
+    On ne simule pas le jeu : on remplace `observer` et `agir`, et on garde le vrai
+    `decide` et le vrai `run`. C'est le comportement de la BOUCLE qu'on teste.
+    """
+
+    def __init__(self, etats, agir_ok=True):
+        from agents.coordinator import Coordinator
+        self.etats = list(etats)
+        self.agir_ok = agir_ok
+        self.journal: list[str] = []
+        self.appels = 0
+        self.run = Coordinator.run.__get__(self)
+        self.tick = Coordinator.tick.__get__(self)
+
+    def observer(self):
+        self.appels += 1
+        return self.etats[min(self.appels - 1, len(self.etats) - 1)]
+
+    def agir(self, d):
+        return (self.agir_ok and d.action != "rien"), "factice"
+
+
+def test_run_sarrete_quand_tout_tourne() -> None:
+    """La boucle s'arrête d'elle-même dès qu'il n'y a plus rien à faire."""
+    casse = _etat([_m("electric-furnace", 0, 0, "no_fuel")])
+    sain = _etat([_m("electric-furnace", 0, 0, "working")])
+    c = _CoordFactice([casse, sain, sain])
+    decisions = c.run(max_ticks=10)
+    ok = (len(decisions) == 2 and decisions[0].action == "ravitailler"
+          and decisions[-1].action == "rien")
+    rec("test_run_sarrete_quand_tout_tourne", ok,
+        f"{[d.action for d in decisions]}")
+    assert ok
+
+
+def test_run_sarrete_si_ca_ne_progresse_plus() -> None:
+    """Une action qui échoue deux fois de suite arrête la boucle.
+
+    Sans cette garde, un agent bute indéfiniment sur un problème qu'il ne sait pas
+    résoudre — site introuvable, item manquant — en le rediagnostiquant à chaque tour.
+    Rendre la main en le disant vaut mieux que tourner en rond.
+    """
+    casse = _etat([_m("electric-furnace", 0, 0, "no_fuel")])
+    c = _CoordFactice([casse] * 10, agir_ok=False)
+    decisions = c.run(max_ticks=10)
+    ok = (len(decisions) == 2                       # deux tentatives, puis arrêt
+          and any("ne progresse plus" in j for j in c.journal))
+    rec("test_run_sarrete_si_ca_ne_progresse_plus", ok,
+        f"{len(decisions)} tour(s), journal={c.journal[-1][:60] if c.journal else ''}")
+    assert ok
+
+
+def test_run_respecte_le_plafond() -> None:
+    """Le plafond de tours est un filet, jamais la sortie normale : il doit tenir."""
+    # Des pannes différentes à chaque tour : jamais deux échecs identiques d'affilée.
+    etats = [_etat([_m("electric-furnace", 0, 0, "no_fuel")]),
+             _etat([_m("electric-furnace", 0, 0, "no_recipe")])] * 6
+    c = _CoordFactice(etats, agir_ok=False)
+    decisions = c.run(max_ticks=4)
+    ok = len(decisions) == 4
+    rec("test_run_respecte_le_plafond", ok, f"{len(decisions)} tour(s) pour un plafond de 4")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -152,6 +218,9 @@ def main() -> int:
         test_cause_inconnue_donne_inspecter,
         test_la_cause_la_plus_grave_est_traitee,
         test_inserter_ne_declenche_pas_de_reparation,
+        test_run_sarrete_quand_tout_tourne,
+        test_run_sarrete_si_ca_ne_progresse_plus,
+        test_run_respecte_le_plafond,
     ]
     for t in tests:
         t()

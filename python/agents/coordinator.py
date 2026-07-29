@@ -284,6 +284,41 @@ class Coordinator:
 
     # ----- BOUCLE -----
 
+    def run(self, max_ticks: int = 10) -> list[Decision]:
+        """Enchaîne les tours jusqu'à ce qu'il n'y ait plus rien à faire.
+
+        Trois façons de s'arrêter, et la deuxième est la plus importante :
+
+        1. **plus rien à faire** — la décision est `rien`, l'usine tourne ;
+        2. **on n'avance plus** — la même action échoue deux fois de suite. Sans cette
+           garde, un agent bute indéfiniment sur un problème qu'il ne sait pas résoudre
+           (un site introuvable, un item manquant) en le rediagnostiquant à chaque tour.
+           Mieux vaut rendre la main en le disant que tourner en rond ;
+        3. **plafond de tours** — filet de sécurité, jamais la sortie normale.
+
+        Retourne les décisions prises, dans l'ordre : c'est le compte rendu de ce que
+        l'agent a fait pendant qu'on ne le regardait pas.
+        """
+        decisions: list[Decision] = []
+        echecs_consecutifs = 0
+        derniere_action = ""
+        for _ in range(max_ticks):
+            d, agi, _ = self.tick()
+            decisions.append(d)
+            if d.action == "rien":
+                break
+            if not agi and d.action == derniere_action:
+                echecs_consecutifs += 1
+                if echecs_consecutifs >= 1:      # deux tentatives identiques en vain
+                    self.journal.append(
+                        f"arrêt : « {d.action} » a échoué deux fois de suite, "
+                        f"la boucle ne progresse plus")
+                    break
+            else:
+                echecs_consecutifs = 0
+            derniere_action = d.action
+        return decisions
+
     def tick(self) -> tuple[Decision, bool, EtatUsine]:
         """Un tour complet. Retourne (décision, a_agi, état APRÈS action.
 
