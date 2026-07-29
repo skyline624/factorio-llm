@@ -281,6 +281,131 @@ def test_option_avec_materiel_reste_prioritaire() -> None:
     assert ok
 
 
+def test_defendre_abandonnee_apres_trois_echecs() -> None:
+    """La défense n'échappe plus au garde-fou d'acharnement.
+
+    Elle y échappait d'une façon trompeuse : `tick` comptait ses échecs et le journal
+    annonçait « ABANDON de defendre après 3 échecs », mais `enumerer_options` ne lisait
+    pas ce compteur — l'option repartait faisable au tour suivant. La mémoire était
+    écrite et jamais relue.
+
+    Mesuré : 936 tours sur 952 à redécider `defendre`, dont 933 sans rien faire, tous
+    sur « aucune position de tourelle libre au nord ».
+    """
+    from agents.coordinator import SEUIL_ABANDON, enumerer_options
+    from services.threat_model import IMMINENTE
+    etat = _etat(machines=0)
+    etat.menace = _menace(IMMINENTE)
+    etat.echecs = {("defendre", "", 0, 0): SEUIL_ABANDON}
+    o = next((x for x in enumerer_options(etat) if x.action == "defendre"), None)
+    ok = (o is not None and not o.faisable and o.priorite == 0
+          and "on n'insiste plus" in o.raison)
+    rec("test_defendre_abandonnee_apres_trois_echecs", ok,
+        f"faisable={o.faisable if o else None} priorite={o.priorite if o else None}")
+    assert ok
+
+
+def test_defendre_abandonnee_laisse_dire_rien() -> None:
+    """Et l'agent DIT qu'il n'y a rien à faire, au lieu de retenter la même chose.
+
+    C'est l'effet utile : `decide` sait déjà répondre `rien` quand aucune option n'est
+    faisable. Encore fallait-il que la défense puisse cesser de l'être — sinon elle
+    restait la seule option, donc choisie, indéfiniment.
+    """
+    from agents.coordinator import SEUIL_ABANDON
+    from services.threat_model import IMMINENTE
+    etat = EtatUsine(machines=3, diagnostic=diagnose([]), reseau=7, production_kw=900.0,
+                     inventaire=dict(INVENTAIRE))
+    etat.menace = _menace(IMMINENTE)
+    etat.echecs = {("defendre", "", 0, 0): SEUIL_ABANDON}
+    d = decide(etat)
+    ok = d.action == "rien"
+    rec("test_defendre_abandonnee_laisse_dire_rien", ok, f"{d.action} — {d.raison[:70]}")
+    assert ok
+
+
+def test_l_abandon_de_defendre_se_leve() -> None:
+    """Il se lève dès que le compteur retombe : `tick` le vide au premier succès.
+
+    Un garde-fou qui ne se relâche jamais transformerait un échec passager en renoncement
+    définitif — les nids bougent, le matériel revient, le terrain se dégage.
+    """
+    from agents.coordinator import enumerer_options
+    from services.threat_model import IMMINENTE
+    etat = _etat(machines=0)
+    etat.menace = _menace(IMMINENTE)
+    etat.echecs = {}                      # ce que laisse un succès
+    o = next((x for x in enumerer_options(etat) if x.action == "defendre"), None)
+    ok = o is not None and o.faisable and o.priorite > 0
+    rec("test_l_abandon_de_defendre_se_leve", ok,
+        f"faisable={o.faisable if o else None} priorite={o.priorite if o else None}")
+    assert ok
+
+
+# L'inventaire de celui qui peut bâtir une évacuation : un bras et un coffre.
+OUTILLE = dict(INVENTAIRE, **{"inserter": 10, "wooden-chest": 5})
+
+
+def test_vidage_repete_devient_ramassage_permanent() -> None:
+    """Vider deux fois la sortie d'un four est une réparation ; quatre, c'est un aveu.
+
+    Mesuré sur une partie de 952 tours partie d'une carte propre : le même four est
+    retombé en `full_output` aux tours 152, 380, 608 et 831, chaque fois « réparé » par
+    un vidage manuel. Entre-temps le foreur en amont attendait `waiting_for_space` : la
+    chaîne entière s'arrêtait faute d'un ramassage de quelques secondes. C'est le
+    symétrique exact du ravitaillement — même seuil, autre bout de la machine.
+    """
+    from agents.coordinator import SEUIL_AUTOMATISATION
+    rows = [_m("electric-furnace", 10, 20, "full_output")]
+    premiere = decide(_etat(rows, inventaire=OUTILLE))
+    etat = _etat(rows, inventaire=OUTILLE)
+    etat.evacuations = {("electric-furnace", 10, 20): SEUIL_AUTOMATISATION}
+    apres = decide(etat)
+    ok = (premiere.action == "evacuer" and apres.action == "batir_evacuation"
+          and "ramassage permanent" in apres.raison)
+    rec("test_vidage_repete_devient_ramassage_permanent", ok,
+        f"1er passage={premiere.action} -> après {SEUIL_AUTOMATISATION} vidages="
+        f"{apres.action}")
+    assert ok
+
+
+def test_les_deux_compteurs_ne_se_confondent_pas() -> None:
+    """Une machine remplie dix fois n'a pas pour autant une sortie à automatiser.
+
+    Les deux mémoires visent la même machine et basculent vers deux constructions
+    opposées — l'une en amont, l'autre en aval. Les confondre ferait bâtir une chaîne
+    d'approvisionnement pour une sortie qui déborde, ce qui aggraverait le bouchon.
+    """
+    rows = [_m("electric-furnace", 10, 20, "full_output")]
+    etat = _etat(rows, inventaire=OUTILLE)
+    etat.ravitaillements = {("electric-furnace", 10, 20): 10}   # remplie, jamais vidée
+    d = decide(etat)
+    ok = d.action == "evacuer"
+    rec("test_les_deux_compteurs_ne_se_confondent_pas", ok,
+        f"{d.action} (ravitaillée 10 fois, vidée 0 fois)")
+    assert ok
+
+
+def test_evacuation_sans_coffre_est_declassee() -> None:
+    """Sans coffre où déposer, l'évacuation n'aboutira pas : elle est dite infaisable.
+
+    Même règle que pour la défense sans tourelle. Proposer en tête une construction dont
+    le matériel manque trompe l'arbitre exactement comme un humain — et ici, la reléguer
+    laisse `evacuer` reprendre la main, c'est-à-dire le dépannage qui, lui, est possible.
+    """
+    from agents.coordinator import SEUIL_AUTOMATISATION, enumerer_options
+    etat = _etat([_m("electric-furnace", 10, 20, "full_output")],
+                 inventaire={"coal": 100})            # ni bras ni coffre
+    etat.evacuations = {("electric-furnace", 10, 20): SEUIL_AUTOMATISATION}
+    o = next((x for x in enumerer_options(etat) if x.action == "batir_evacuation"), None)
+    ok = (o is not None and not o.faisable and o.priorite == 0
+          and "INFAISABLE" in o.raison and "wooden-chest" in o.raison)
+    rec("test_evacuation_sans_coffre_est_declassee", ok,
+        f"{o.action if o else None} faisable={o.faisable if o else None} "
+        f"{o.raison[-60:] if o else ''}")
+    assert ok
+
+
 def test_options_une_par_cause() -> None:
     """`enumerer_options` expose TOUTES les réparations légales, pas seulement la 1re.
 

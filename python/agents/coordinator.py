@@ -51,6 +51,7 @@ REPARATION: dict[str, tuple[str, str]] = {
     "entree_vide":         ("alimenter", "rien n'arrive en entrée"),
     "sortie_bloquee":      ("evacuer", "la sortie n'est pas ramassée"),
     "desactivee":          ("reactiver", "machine désactivée"),
+    "gisement_epuise":     ("redeployer_foreur", "plus de minerai sous l'emprise"),
 }
 
 # Ordre du curriculum : plus le nombre est grand, plus c'est urgent.
@@ -65,9 +66,11 @@ REPARATION: dict[str, tuple[str, str]] = {
 PRIORITE = {"defendre_urgence": 4, "reparer": 3, "batir_energie": 2, "defendre": 2,
             "batir_production": 1, "rien": 0}
 
-# Au-delà de ce nombre de ravitaillements MANUELS sur la même machine, on cesse de
-# remplir et on automatise. Remplir un réservoir est une réparation ; le remplir
-# indéfiniment est l'aveu qu'il manque une chaîne d'approvisionnement.
+# Au-delà de ce nombre d'interventions MANUELLES sur la même machine, on cesse de
+# dépanner et on automatise. Remplir un réservoir est une réparation ; le remplir
+# indéfiniment est l'aveu qu'il manque une chaîne d'approvisionnement. Le seuil vaut
+# aux DEUX bouts de la machine : ce qu'on remplit sans fin (entrée) comme ce qu'on vide
+# sans fin (sortie) désigne le même manque — un flux permanent qui n'a pas été bâti.
 #
 # Mesuré : un boiler brûle 0.45 charbon/s, soit ~110 s d'autonomie pour 50 unités. Un
 # agent qui ne fait que ravitailler y passe sa vie et ne construit plus rien.
@@ -102,6 +105,10 @@ BESOINS: dict[str, tuple[tuple[str, int], ...]] = {
     "defendre": (("gun-turret", 1),),
     "ravitailler": (("coal", 1),),
     "relier": (("small-electric-pole", 1),),
+    # Le cas nominal : un bras électrique et un coffre. `batir_evacuation` sait se
+    # rabattre sur un burner-inserter, mais déclarer le cas nominal garde la
+    # faisabilité honnête — une évacuation sans coffre où déposer n'aboutit jamais.
+    "batir_evacuation": (("inserter", 1), ("wooden-chest", 1)),
 }
 
 
@@ -117,6 +124,11 @@ class EtatUsine:
     # Combien de fois chaque machine a déjà été ravitaillée à la main, par position.
     # C'est la mémoire qui permet de distinguer un incident d'un besoin structurel.
     ravitaillements: dict = field(default_factory=dict)
+    # Symétrique du précédent, pour la SORTIE : combien de fois chaque machine a été
+    # vidée à la main. Mesuré en partie longue sur carte propre — `sortie_bloquee` est
+    # revenu aux tours 152, 380, 608 et 831 sur le même four, chaque fois « réparé ».
+    # Vider est une réparation ; vider indéfiniment est l'aveu qu'il manque un ramassage.
+    evacuations: dict = field(default_factory=dict)
     # Échecs consécutifs par (action, cible). Sans cette mémoire, une action impossible
     # est retentée indéfiniment : la boucle tourne sans avancer, ce qui ne se voit pas.
     echecs: dict = field(default_factory=dict)
@@ -283,6 +295,15 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
             action = "approvisionner"
             explication = (f"il ne reste que {stock} {COMBUSTIBLE} : les garder pour "
                            f"amorcer une chaîne plutôt que les brûler en un plein")
+        # Le même raisonnement à l'autre bout de la machine. Une sortie qu'on vide sans
+        # cesse n'est pas un incident qui se répète : c'est un ramassage qui manque.
+        # Mesuré : 4 vidages manuels sur le même four en 952 tours, et la chaîne bouchée
+        # à chaque fois entre-temps — le foreur en amont attendait `waiting_for_space`.
+        vidages = etat.evacuations.get((c.name, round(c.x), round(c.y)), 0)
+        if action == "evacuer" and vidages >= SEUIL_AUTOMATISATION:
+            action = "batir_evacuation"
+            explication = (f"déjà vidée {vidages} fois à la main — il lui faut un "
+                           f"ramassage permanent, pas un vidage de plus")
         # Une action qui a échoué SEUIL_ABANDON fois de suite sur cette cible est
         # reléguée exactement comme celle dont le matériel manque : priorité nulle et
         # `faisable=False`. Le même mécanisme pour la même raison — proposer en tête ce
@@ -301,10 +322,30 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
     # ici on n'ajoute que l'option correspondante.
     if etat.menace is not None and etat.menace.agir:
         urgent = etat.menace.niveau >= EN_COURS
+        # `defendre` passe par la MÊME mémoire d'échecs que tout le reste. Elle y
+        # échappait, et d'une façon particulièrement trompeuse : `tick` comptait bien ses
+        # échecs — le journal affichait « ABANDON de defendre après 3 échecs » — mais
+        # personne ne LISAIT ce compteur ici, si bien que l'option repartait faisable au
+        # tour suivant. La mémoire était écrite et jamais relue.
+        #
+        # Mesuré en partie longue : 936 tours sur 952 à redécider `defendre`, dont 933
+        # sans rien faire, tous sur le même motif « aucune position de tourelle libre au
+        # nord » — dès le tour 13 et jusqu'à la fin. Sept tourelles avaient été posées,
+        # les nids étaient à 290 tuiles, et il n'y avait plus rien à tenter.
+        #
+        # Le déclassement vaut aussi pour une menace EN COURS : si trois tentatives
+        # consécutives n'ont rien donné, s'acharner ne sauve pas l'usine, alors que
+        # réparer pendant ce temps a une valeur. Il se lève de lui-même au premier
+        # succès, `tick` vidant le compteur.
+        rates = etat.echecs.get(("defendre", "", 0, 0), 0)
+        renonce = rates >= SEUIL_ABANDON
         options.append(Decision(
             action="defendre",
-            raison=str(etat.menace),
-            priorite=PRIORITE["defendre_urgence" if urgent else "defendre"]))
+            raison=str(etat.menace) + (f" — ÉCHOUÉ {rates} fois, on n'insiste plus"
+                                       if renonce else ""),
+            priorite=0 if renonce else PRIORITE["defendre_urgence" if urgent
+                                                else "defendre"],
+            faisable=not renonce))
 
     # Les constructions passent par la MÊME mémoire d'échecs que les réparations.
     # Elles n'ont pas de cible, et la clé sans cible est ce qui les y rattache : sans
@@ -435,6 +476,10 @@ class Coordinator:
         self.munition = munition
         self.derniere_menace: Optional[Menace] = None
         self._ravitaillements: dict = {}
+        # Le même compteur pour la sortie. Séparé du précédent : une machine peut être
+        # ravitaillée souvent et vidée jamais, et confondre les deux ferait basculer la
+        # mauvaise extrémité.
+        self._evacuations: dict = {}
         # D'où part la chaîne qui alimente chaque machine : la tuile de sortie du foreur.
         # Sans ce point de départ, on ne peut pas SUIVRE le flux, et donc pas vérifier
         # qu'une chaîne bâtie transporte réellement quelque chose.
@@ -492,6 +537,7 @@ class Coordinator:
                     break
         etat.inventaire = perception.inventory(self.api)
         etat.ravitaillements = dict(self._ravitaillements)
+        etat.evacuations = dict(self._evacuations)
         etat.echecs = dict(self._echecs)
         # La menace est évaluée à CHAQUE tour : elle change sans qu'on y touche, alors
         # que l'usine ne change que quand on agit.
@@ -542,6 +588,35 @@ class Coordinator:
                 lambda api: suivre_flux(api, depart, c.name, (c.x, c.y)),
                 lambda r: bool(getattr(r, "continu", False)),
                 delai_ticks=120)
+
+        if d.action == "redeployer_foreur" and c is not None:
+            # Le critère n'est pas « une foreuse est posée » mais « une foreuse EXTRAIT ».
+            # Reposer une foreuse sur une tuile aussi pauvre que la précédente donnerait
+            # une pose réussie et une usine toujours à jeun.
+            def _foreuses(api):
+                r = api.inspect_at(self.zone[0], self.zone[1], self.rayon)
+                lignes = r.get("entities", []) if isinstance(r, dict) else []
+                dr = [e for e in lignes if "mining-drill" in str(e.get("name"))]
+                return ", ".join(str(e.get("status")) for e in dr) or "aucune foreuse"
+
+            return Attente(
+                "une foreuse extrait à nouveau",
+                _foreuses,
+                lambda s: "working" in s or "normal" in s,
+                delai_ticks=180)
+
+        if d.action == "batir_evacuation" and c is not None:
+            # Le critère n'est PAS « un coffre et un bras sont posés » — c'est exactement
+            # ce qu'on croyait vérifier en posant des inserters qui ne transportaient
+            # rien. Le seul fait qui compte est que la machine reparte, donc que sa
+            # sortie cesse d'être pleine. On laisse un délai : le bras met quelques
+            # secondes à sortir assez d'objets pour libérer la production.
+            return Attente(
+                f"la sortie de {c.name} ne bloque plus",
+                lambda api: self._statut_de(api, c.name, c.x, c.y),
+                lambda s: s not in ("full_output", "waiting_for_space_in_destination",
+                                    "absente"),
+                delai_ticks=180)
 
         if d.action == "relier" and c is not None:
             return Attente(
@@ -644,14 +719,42 @@ class Coordinator:
             return ok, f"renfort électrique : {detail}"
 
         if d.action == "evacuer":
-            # Dépannage : on enlève ce qui bouche. Si la sortie se remplit à nouveau,
-            # c'est qu'il manque une évacuation — même bascule que le ravitaillement,
-            # mais elle n'est pas encore bâtie : on le dit plutôt que de boucler.
+            # Dépannage : on enlève ce qui bouche. Chaque vidage est COMPTÉ, car c'est
+            # sa répétition qui distingue l'incident du manque structurel — au-delà de
+            # SEUIL_AUTOMATISATION, `enumerer_options` propose `batir_evacuation`.
             r = self.api.run_action(self.api.empty_output_at, c.x, c.y, c.name,
                                     timeout=20.0)
             ok = isinstance(r, dict) and r.get("ok") is True
-            return ok, (f"sortie de {c.name}@({c.x},{c.y}) vidée"
+            if ok:
+                cle = (c.name, round(c.x), round(c.y))
+                self._evacuations[cle] = self._evacuations.get(cle, 0) + 1
+            return ok, (f"sortie de {c.name}@({c.x},{c.y}) vidée "
+                        f"(n°{self._evacuations.get((c.name, round(c.x), round(c.y)), 0)})"
                         if ok else f"sortie de {c.name} non vidable : {r}")
+
+        if d.action == "batir_evacuation":
+            return self.batir_evacuation(c)
+
+        if d.action == "redeployer_foreur":
+            # Le foreur a vidé ses tuiles ; le gisement, lui, ne l'est pas. Mesuré :
+            # 23 unités sous l'emprise, 312 000 à quelques pas. On le RETIRE d'abord —
+            # `mine_entity` rend l'item, `destroy` le perdrait (leçon E2) — puis on
+            # laisse la construction choisir un ancrage sur du minerai réel.
+            #
+            # On ne rafistole pas sur place : c'est le même parti que `renforcer_energie`,
+            # qui ajoute une centrale plutôt que de retoucher l'ancienne. Le code de
+            # construction sait déjà ancrer sur du minerai ; le déplacer à la main
+            # demanderait de refaire ce calcul, et de le refaire moins bien.
+            # `remove_entity_at` vise une POSITION et rend les items ; `mine_entity`
+            # cible par nom dans un rayon et retirerait n'importe quelle foreuse, y
+            # compris une qui extrait très bien.
+            r = self.api.run_action(self.api.remove_entity_at, c.x, c.y, c.name,
+                                    timeout=30.0)
+            retire = isinstance(r, dict) and r.get("ok") is True
+            ok, detail = self.batir(Decision(action="batir_production",
+                                             raison="gisement épuisé sous la foreuse"))
+            return ok, (f"foreuse épuisée {'retirée' if retire else 'NON retirée'} "
+                        f"@({c.x},{c.y}) — nouvelle chaîne : {detail}")
 
         if d.action == "reactiver":
             r = self.api.run_action(self.api.enable_entity_at, c.x, c.y, c.name,
@@ -958,6 +1061,76 @@ class Coordinator:
         ok, detail = self.approvisionner(faux_symptome, besoin)
         return ok, (f"{machine}@{pose} fabrique « {item} » pour {cible.name} "
                     f"({bras}@{livraison[:2]}) — entrée : {detail}")
+
+    def batir_evacuation(self, cible, coffre: str = "wooden-chest") -> tuple[bool, str]:
+        """Pose un ramassage PERMANENT en sortie : un coffre, et un bras qui l'y verse.
+
+        Le pendant exact d'`approvisionner`, à l'autre bout de la machine. Mesuré sur une
+        partie de 952 tours partie d'une carte propre : le même four est retombé en
+        `full_output` aux tours 152, 380, 608 et 831, chaque fois « réparé » par un vidage
+        manuel — et entre-temps le foreur en amont attendait `waiting_for_space`. Toute la
+        chaîne s'arrêtait donc pour un ramassage de quelques secondes qui n'existait pas.
+
+        Le montage réutilise ce qui est déjà éprouvé (E19b) : `place_inserter_vers` pose
+        le bras, LIT son pickup et son drop réels, et tourne jusqu'à ce que les deux
+        tombent où il faut. Un inserter mal orienté se pose sans erreur et ne transporte
+        rien — le croire sur parole est précisément ce qui a coûté un run.
+
+        On pose, on teste, on RETIRE et on essaie la position suivante : abandonner au
+        premier échec ne posait rien du tout, autre leçon d'E19.
+        """
+        import math
+        from services import site_finder
+
+        inv = (self.api.get_state() or {}).get("inventory", {}) or {}
+        # Électrique par défaut : la machine bouchée est sur le réseau, donc le courant
+        # est là. Le burner ne sert que de repli — il faut le nourrir, et un bras à
+        # nourrir est exactement le genre de dépendance qu'on cherche à supprimer ici.
+        bras = "inserter" if inv.get("inserter", 0) else "burner-inserter"
+        if not inv.get(bras, 0):
+            return False, f"aucun bras disponible pour évacuer {cible.name}"
+        if not inv.get(coffre, 0):
+            return False, f"aucun {coffre} pour recevoir la sortie de {cible.name}"
+
+        essais: list[str] = []
+        # Les distances croissent parce que l'emprise varie : un four 2×2 et une
+        # assembleuse 3×3 n'offrent pas leurs bords au même endroit, et rien dans la
+        # ligne d'entité ne donne la bounding box (même raison qu'au relais d'entrée).
+        for d in (2.5, 3.5, 4.5):
+            for ux, uy in ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)):
+                kx = math.floor(cible.x + ux * d) + 0.5
+                ky = math.floor(cible.y + uy * d) + 0.5
+                if not site_finder.can_place(self.api, coffre, kx, ky):
+                    continue
+                r = self.api.run_action(self.api.place_entity_at, coffre, kx, ky,
+                                        "north", None, timeout=20.0)
+                if not (isinstance(r, dict) and r.get("ok")):
+                    essais.append(f"({kx},{ky}) : coffre refusé")
+                    continue
+                # Le bras PUISE dans la machine et DÉPOSE dans le coffre : la machine
+                # est la SOURCE, d'où `source_types`.
+                pose = site_finder.place_inserter_vers(
+                    self.api, (kx, ky), (cible.x, cible.y), coffre, nom=bras,
+                    source_types=(cible.name,))
+                if pose is not None:
+                    if bras == "burner-inserter":
+                        self.api.run_action(self.api.move_items_at, "coal", bras,
+                                            pose[0], pose[1], self.AMORCE_BRAS, True,
+                                            timeout=20.0)
+                    cle = (cible.name, round(cible.x), round(cible.y))
+                    # La mémoire est REMISE À ZÉRO : la machine a désormais un ramassage,
+                    # et un prochain bouchon serait un incident neuf, pas la suite de
+                    # l'ancien. Sans cela, la bascule se redéclencherait au premier hoquet
+                    # et l'on empilerait les coffres.
+                    self._evacuations.pop(cle, None)
+                    return True, (f"évacuation de {cible.name}@({cible.x},{cible.y}) : "
+                                  f"{bras}@({pose[0]},{pose[1]}) verse dans un {coffre}"
+                                  f"@({kx},{ky})")
+                essais.append(f"({kx},{ky}) : aucun bras ne relie")
+                self.api.run_action(self.api.remove_entity_at, kx, ky, coffre,
+                                    timeout=20.0)
+        return False, (f"aucune place pour évacuer {cible.name} — "
+                       f"{' ; '.join(essais[:3]) if essais else 'aucun emplacement libre'}")
 
     def approvisionner(self, cible, item: str = "coal") -> tuple[bool, str]:
         """Bâtit une chaîne mine -> belt -> inserter vers une machine à combustible.

@@ -46,12 +46,21 @@ STATUTS: dict[str, tuple[str, int, str]] = {
     "full_output":                    ("sortie_bloquee", 1, "sortie pleine"),
     "waiting_for_space_in_destination": ("sortie_bloquee", 1, "sortie encombrée"),
     "disabled":                       ("desactivee", 2, "désactivée"),
+    # Le foreur a vidé les tuiles sous son emprise. Mesuré en partie longue : 1 tuile et
+    # 23 unités restantes sous la foreuse, pendant que 487 tuiles et 312 000 unités du
+    # MÊME gisement attendaient à quelques pas. L'usine était morte de faim au milieu de
+    # l'abondance, et le statut n'était pas dans cette table : personne ne l'a vu.
+    "no_minable_resources":           ("gisement_epuise", 2, "plus de minerai sous l'emprise"),
     "other":                          ("indetermine", 0, "statut non interprété par le mod"),
 }
 
 # Causes dont la machine est elle-même responsable : elles ne viennent pas de l'amont.
 CAUSES_PROPRES = frozenset({"sans_courant", "courant_insuffisant", "sans_combustible",
-                            "sans_recette", "debranchee", "desactivee"})
+                            "sans_recette", "debranchee", "desactivee",
+                            # Un gisement épuisé ne vient pas de l'amont : le foreur EST
+                            # l'amont. C'est même la panne qui affame tout le reste, donc
+                            # celle qui doit déclasser les « entrée vide » en aval.
+                            "gisement_epuise"})
 
 # Types dont l'état ne fait que REFLÉTER celui du voisinage. Un inserter passe sa vie à
 # attendre le prochain objet : « entrée vide » y est un état normal, pas une panne. Le
@@ -103,9 +112,22 @@ class Diagnostic:
 
 
 def _classer(status: Optional[str]) -> tuple[str, int, str]:
+    """Statut du mod -> (cause, gravité, explication).
+
+    Un statut ABSENT de la table n'est pas anodin : c'est un état que ce diagnostic n'a
+    jamais rencontré, donc dont il ne sait rien. Le classer en gravité 0 le rendait
+    MUET — mesuré, un `no_minable_resources` a laissé l'usine à l'arrêt 60 tours durant
+    pendant que l'agent décidait « rien, tout va bien ». Une panne qu'on ne sait pas
+    nommer doit se voir : gravité 1 et cause `inconnu`, ce qui la porte devant l'agent
+    (et, s'il en a un, devant l'Enquêteur) au lieu de la faire disparaître.
+
+    `other` reste à 0, et c'est différent : le mod l'emploie pour des états normaux
+    d'inactivité, il ne signale rien en propre. On distingue « le mod ne sait pas
+    interpréter » de « nous ne connaissons pas ce statut ».
+    """
     if not status:
         return ("indetermine", 0, "statut illisible")
-    return STATUTS.get(status, ("indetermine", 0, f"statut inconnu : {status}"))
+    return STATUTS.get(status, ("inconnu", 1, f"statut jamais rencontré : {status}"))
 
 
 def diagnose(rows: list[dict], power: Optional[dict] = None) -> Diagnostic:

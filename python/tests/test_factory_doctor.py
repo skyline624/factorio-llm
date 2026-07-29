@@ -110,12 +110,52 @@ def test_entree_vide_seule_reste_une_cause() -> None:
 
 
 def test_statut_non_interprete_ne_produit_rien() -> None:
-    """`other` est le fourre-tout du mod : on n'en conclut rien plutôt que d'inventer."""
-    d = diagnose([_m("stone-furnace", 0, 0, "other"),
-                  _m("assembling-machine-1", 5, 0, "statut-inexistant")])
+    """`other` est le fourre-tout du mod : on n'en conclut rien plutôt que d'inventer.
+
+    Le mod l'emploie notamment pour l'inactivité normale — un four qui n'a rien à fondre
+    n'est pas en panne. En faire un symptôme noierait le diagnostic sous du bruit.
+    """
+    d = diagnose([_m("stone-furnace", 0, 0, "other")])
     ok = d.sain and not d.symptomes
     rec("test_statut_non_interprete_ne_produit_rien", ok,
         f"sain={d.sain} symptomes={len(d.symptomes)}")
+    assert ok
+
+
+def test_statut_jamais_rencontre_se_voit() -> None:
+    """Un statut ABSENT de la table doit se voir — le taire laisse l'usine mourir.
+
+    Ce test dit l'inverse du précédent, et la distinction est le sujet : « le mod ne sait
+    pas interpréter » (`other`) n'est pas « nous ne connaissons pas ce statut ».
+
+    Mesuré : `no_minable_resources` ne figurait pas dans la table. Le foreur avait vidé
+    ses tuiles — 23 unités sous l'emprise, 312 000 à quelques pas dans le même gisement —
+    et le diagnostic rendait ZÉRO cause. L'agent a décidé « rien, tout va bien » pendant
+    60 tours, production strictement plate. Une panne qu'on ne sait pas nommer doit être
+    portée devant l'agent, pas effacée : gravité 1, et l'Enquêteur pourra s'en saisir.
+    """
+    d = diagnose([_m("assembling-machine-1", 5, 0, "statut-inexistant")])
+    causes = d.causes
+    ok = (len(causes) == 1 and causes[0].cause == "inconnu"
+          and causes[0].gravite == 1 and "statut-inexistant" in causes[0].detail)
+    rec("test_statut_jamais_rencontre_se_voit", ok,
+        f"{[(s.cause, s.gravite, s.racine) for s in d.symptomes]}")
+    assert ok
+
+
+def test_gisement_epuise_est_une_cause_propre() -> None:
+    """Le foreur à sec affame tout l'aval : c'est LUI la cause, pas les machines à jeun.
+
+    Sans cela, l'agent traiterait le four « entrée vide » — c'est-à-dire la conséquence —
+    et rebâtirait une alimentation vers une foreuse qui n'a plus rien à extraire.
+    """
+    d = diagnose([_m("electric-mining-drill", 0, 0, "no_minable_resources"),
+                  _m("electric-furnace", 3, 0, "no_ingredients")])
+    racines = [s for s in d.causes]
+    ok = (len(racines) == 1 and racines[0].cause == "gisement_epuise"
+          and racines[0].gravite == 2)
+    rec("test_gisement_epuise_est_une_cause_propre", ok,
+        f"{[(s.name, s.cause, s.racine) for s in d.symptomes]}")
     assert ok
 
 
@@ -147,6 +187,8 @@ def main() -> int:
         test_cause_distinguee_du_symptome,
         test_entree_vide_seule_reste_une_cause,
         test_statut_non_interprete_ne_produit_rien,
+        test_statut_jamais_rencontre_se_voit,
+        test_gisement_epuise_est_une_cause_propre,
         test_gravite_ordonne_le_diagnostic,
         test_resume_lisible,
     ]
