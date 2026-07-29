@@ -658,9 +658,11 @@ class Coordinator:
             # gisement d'`iron-plate` — qui n'existe pas — et a recommencé 559 fois.
             # Approvisionner et produire sont deux problèmes ; les confondre condamne la
             # boucle à chercher un minerai de plaque de fer.
+            # Un ingrédient qui a une recette se FABRIQUE : c'est `produire`, pas
+            # `approvisionner`. Confondre les deux condamnait la boucle à chercher un
+            # gisement de plaques de fer — mesuré, 559 tours d'affilée.
             if (self.api.get_recipe(besoin) or {}).get("ingredients"):
-                return False, (f"{c.name} attend « {besoin} », qui se FABRIQUE : c'est "
-                               f"une chaîne de production à bâtir, pas un gisement à relier")
+                return self.produire(c, besoin)
             return self.approvisionner(c, besoin)
 
         return False, f"{d.action} : pas encore automatisé"
@@ -773,6 +775,140 @@ class Coordinator:
                                                                px, py):
                 return (px, py)
         return None
+
+    # Quelle machine sait faire quoi. La catégorie vient de la recette elle-même
+    # (`get_recipe`), pas d'une devinette sur le nom de l'item.
+    MACHINE_POUR = {"smelting": "stone-furnace", "crafting": "assembling-machine-1",
+                    "basic-crafting": "assembling-machine-1",
+                    "advanced-crafting": "assembling-machine-1"}
+
+    def produire(self, cible, item: str) -> tuple[bool, str]:
+        """Bâtit de quoi FABRIQUER `item` et l'apporter à `cible`.
+
+        C'est le verrou que la première partie longue a désigné : l'agent savait relier un
+        gisement à une machine, jamais fabriquer ce qu'une machine attend. Une assembleuse
+        réclamant des plaques restait donc à l'arrêt pendant qu'il cherchait — en vain —
+        un gisement de plaques de fer.
+
+        Le montage tient en trois gestes, tous déjà éprouvés séparément :
+          1. poser la machine qui sait faire `item`, à portée de bras de la cible ;
+          2. la relier à la cible par un inserter, vérifié par LECTURE ;
+          3. l'approvisionner en son ingrédient — c'est `approvisionner`, inchangé.
+
+        On ne traite qu'UN étage : si l'ingrédient se fabrique lui aussi, on le dit au
+        lieu de descendre récursivement. Une chaîne à trois étages posée d'un coup est
+        exactement ce que le benchmark FLE voit échouer chez les agents ; mieux vaut un
+        étage qui marche et un constat clair sur le suivant.
+        """
+        import math
+        from services import site_finder
+
+        recette = self.api.get_recipe(item) or {}
+        ingredients = recette.get("ingredients") or []
+        if not ingredients:
+            return False, f"« {item} » n'a pas de recette : il s'extrait, il ne se produit pas"
+        categorie = str(recette.get("category", "crafting"))
+        machine = self.MACHINE_POUR.get(categorie)
+        if machine is None:
+            return False, f"aucune machine connue pour la catégorie « {categorie} »"
+        premier = ingredients[0]
+        besoin = premier.get("name") if isinstance(premier, dict) else str(premier)
+        if (self.api.get_recipe(besoin) or {}).get("ingredients"):
+            return False, (f"« {item} » demande « {besoin} », qui se fabrique aussi : "
+                           f"il faudrait deux étages, on n'en bâtit qu'un")
+
+        inv = perception.inventory(self.api)
+        if inv.get(machine, 0) < 1:
+            return False, f"aucun {machine} en inventaire pour fabriquer « {item} »"
+
+        # OÙ est la matière première : c'est elle qui commande la géométrie. Les trois
+        # pièces doivent s'aligner — gisement, machine, cible — sinon la belt arrive du
+        # mauvais côté et la machine se retrouve enfermée entre sa livraison et un mur.
+        # Mesuré : four posé à l'est de l'assembleuse, gisement à l'ouest, belt contrainte
+        # de contourner et s'arrêtant en diagonale. Chaîne complète, four à jeun.
+        source = self.choisir_gisement(besoin, (cible.x, cible.y), self.PORTEE_APPRO)
+        if source is None:
+            return False, (f"aucun gisement de « {besoin} » à moins de "
+                           f"{self.PORTEE_APPRO:.0f} tuiles pour fabriquer « {item} »")
+        gx, gy = source.x - cible.x, source.y - cible.y
+        if abs(gx) >= abs(gy):
+            vers_source = (1.0 if gx > 0 else -1.0, 0.0)
+        else:
+            vers_source = (0.0, 1.0 if gy > 0 else -1.0)
+
+        # 1. La machine, à portée de bras de la cible — mais avec de la PLACE DERRIÈRE.
+        #
+        # Mesuré : posée à trois tuiles, le bras de livraison d'un côté et l'assembleuse
+        # de l'autre, elle se retrouvait enfermée. Sa propre belt d'alimentation arrivait
+        # à trois tuiles sans plus pouvoir la charger — chaîne complète, machine à jeun.
+        # Une machine intermédiaire a DEUX faces à desservir, pas une.
+        # La machine se pose de PRÉFÉRENCE du côté du gisement, avec deux tuiles libres
+        # en amont pour sa belt et son bras d'entrée. Mais une position n'est retenue que
+        # si un bras peut RÉELLEMENT livrer la cible depuis là : `can_place` ne le dit
+        # pas. Mesuré — à trois tuiles, un four 2×2 et une assembleuse 2.4×2.4 se
+        # touchent presque, et aucun inserter ne tient entre les deux. On pose, on teste,
+        # on retire, on essaie la suivante ; abandonner au premier échec ne posait rien.
+        ux, uy = vers_source
+        perp = (-uy, ux)
+        directions = [(ux, uy), perp, (-perp[0], -perp[1]), (-ux, -uy)]
+        # 3 ou 4 tuiles, pas plus : un inserter ne relie que des VOISINS.
+        candidats = [(vx * k, vy * k) for k in (3.0, 4.0) for vx, vy in directions]
+        bras = "burner-inserter" if inv.get("burner-inserter", 0) else "inserter"
+
+        pose, livraison = None, None
+        essais: list[str] = []
+        for exigeant in (True, False):        # d'abord l'idéal, puis ce qui reste
+            for dx, dy in candidats:
+                mx = math.floor(cible.x + dx) + 0.5
+                my = math.floor(cible.y + dy) + 0.5
+                if not site_finder.can_place(self.api, machine, mx, my):
+                    continue
+                vx = 0.0 if dx == 0 else (1.0 if dx > 0 else -1.0)
+                vy = 0.0 if dy == 0 else (1.0 if dy > 0 else -1.0)
+                if exigeant and not all(
+                        site_finder.can_place(self.api, "transport-belt",
+                                              mx + vx * j, my + vy * j)
+                        for j in (2.0, 3.0)):
+                    continue
+                r = self.api.run_action(self.api.place_entity_at, machine, mx, my,
+                                        "north", None, timeout=30.0)
+                if not (isinstance(r, dict) and r.get("ok")):
+                    continue
+                if categorie != "smelting":
+                    self.api.run_action(self.api.set_recipe_at, mx, my, item, machine,
+                                        timeout=20.0)
+                # Le bras qui livre : il PUISE dans la machine et DÉPOSE dans la cible —
+                # l'inverse d'un bras d'alimentation, d'où `source_types`.
+                livraison = site_finder.place_inserter_vers(
+                    self.api, (cible.x, cible.y), (mx, my), cible.name, nom=bras,
+                    source_types=(machine,))
+                if livraison is not None:
+                    pose = (mx, my)
+                    break
+                essais.append(f"({mx},{my}) : aucun bras ne livre")
+                self.api.run_action(self.api.remove_entity_at, mx, my, machine,
+                                    timeout=20.0)
+            if pose is not None:
+                break
+        if pose is None:
+            return False, (f"aucune place pour un {machine} qui puisse livrer "
+                           f"{cible.name} — {' ; '.join(essais[:3])}")
+
+        if bras == "burner-inserter":
+            self.api.run_action(self.api.move_items_at, "coal", bras, livraison[0],
+                                livraison[1], self.AMORCE_BRAS, True, timeout=20.0)
+        # Un four brûle : sans amorce il ne fondra rien, et la boucle le verra `no_fuel`.
+        if machine == "stone-furnace":
+            self.api.run_action(self.api.move_items_at, "coal", machine, pose[0], pose[1],
+                                self.AMORCE_BRAS * 2, True, timeout=20.0)
+
+        # 4. L'entrée : c'est exactement le problème déjà résolu.
+        faux_symptome = Symptome(name=machine, x=pose[0], y=pose[1],
+                                 cause="entree_vide", gravite=2,
+                                 detail=f"doit recevoir {besoin}")
+        ok, detail = self.approvisionner(faux_symptome, besoin)
+        return ok, (f"{machine}@{pose} fabrique « {item} » pour {cible.name} "
+                    f"({bras}@{livraison[:2]}) — entrée : {detail}")
 
     def approvisionner(self, cible, item: str = "coal") -> tuple[bool, str]:
         """Bâtit une chaîne mine -> belt -> inserter vers une machine à combustible.
@@ -939,6 +1075,19 @@ class Coordinator:
                 break
         if not belts:
             return False, f"aucune belt posée entre le foreur et {cible.name}"
+        if pose_ins is None:
+            # Ultime essai, une fois la belt à sa position DÉFINITIVE. Les tentatives
+            # précédentes ont eu lieu après chaque recul, donc sur une belt encore en
+            # cours d'allongement, et triées depuis un bout périmé. Mesuré : un
+            # emplacement valable existait à une tuile du four et n'avait jamais été
+            # essayé dans le bon ordre.
+            jf: list = []
+            pose_ins = site_finder.place_inserter_vers(
+                self.api, (cible.x, cible.y), (cible.x, cible.y), cible.name, nom=bras,
+                essais=40, journal=jf)
+            if pose_ins is None:
+                essais.append("dernier essai depuis la belt définitive : "
+                              + " ; ".join(jf[:6]))
         if pose_ins is None:
             return False, (f"belt posée ({len(belts)} segments) mais aucun inserter "
                            f"n'atteint {cible.name} depuis la belt — {' | '.join(essais)}")
