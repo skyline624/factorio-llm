@@ -541,6 +541,37 @@ class Coordinator:
     AMORCE = 50
     AMORCE_BRAS = 5
 
+    def _relais_de_retour(self, drill, depart, bras: str, foreur: str):
+        """Une tuile par où faire passer la belt pour qu'un bras puisse réalimenter le foreur.
+
+        Retourne la position de RELAIS (sur le trajet de la belt), ou None si aucune ne
+        convient. Le bras se tiendra entre ce relais et le foreur.
+
+        On cherche une tuile à DEUX pas du bord du foreur, avec une tuile libre entre les
+        deux : c'est la seule configuration où un inserter peut à la fois puiser et
+        redonner. Le drop du foreur est exclu — c'est là que la belt commence, et le bras
+        n'y tiendrait pas.
+        """
+        import math
+        from services.site_finder import can_place
+
+        dx0, dy0 = math.floor(depart[0]) + 0.5, math.floor(depart[1]) + 0.5
+        # Milieux des quatre côtés d'une emprise 2×2, puis la tuile juste au-delà.
+        cotes = ((1.5, -0.5), (1.5, 0.5), (-1.5, -0.5), (-1.5, 0.5),
+                 (-0.5, 1.5), (0.5, 1.5), (-0.5, -1.5), (0.5, -1.5))
+        for ox, oy in cotes:
+            bx = math.floor(drill.x + ox) + 0.5
+            by = math.floor(drill.y + oy) + 0.5
+            ux, uy = (1.0 if ox > 0 else -1.0, 0.0) if abs(ox) > abs(oy) \
+                else (0.0, 1.0 if oy > 0 else -1.0)
+            px, py = bx + ux, by + uy
+            if (bx, by) == (dx0, dy0) or (px, py) == (dx0, dy0):
+                continue                      # le drop : la belt y commence déjà
+            if can_place(self.api, bras, bx, by) and can_place(self.api, "transport-belt",
+                                                               px, py):
+                return (px, py)
+        return None
+
     def approvisionner(self, cible, item: str = "coal") -> tuple[bool, str]:
         """Bâtit une chaîne mine -> belt -> inserter vers une machine à combustible.
 
@@ -651,6 +682,16 @@ class Coordinator:
         etat_mod = self.api.get_state()
         portee = 0.0 if etat_mod.get("test_mode") else 8.0
 
+        # Un RELAIS pour le bras de retour, avant même de tracer la belt.
+        #
+        # Le foreur déverse sur la tuile qui touche son bord : la belt commence donc
+        # collée à lui, et il ne reste aucune place pour un inserter qui devrait se tenir
+        # ENTRE la belt et le foreur. Chercher mieux ne sert à rien — la géométrie
+        # l'interdit. On fait donc passer la belt à DEUX tuiles du foreur en un point
+        # choisi : le bras tient alors au milieu, prend sur la belt et redonne au foreur.
+        # Sans lui la chaîne n'est pas perpétuelle, elle a juste une plus longue amorce.
+        relais = self._relais_de_retour(drill, depart, bras, foreur) if burner else None
+
         vx, vy = depart[0] - cible.x, depart[1] - cible.y
         if abs(vx) >= abs(vy):
             ux, uy = (1.0 if vx > 0 else -1.0), 0.0
@@ -660,11 +701,24 @@ class Coordinator:
         complete = False
         pose_ins = None
         essais: list[str] = []
+        # Le premier tronçon passe par le RELAIS, s'il en existe un : c'est ce détour
+        # de deux tuiles qui rend la chaîne perpétuelle.
+        # Le second tronçon repart DU RELAIS, jamais de la dernière tuile posée :
+        # `place_belt_line` s'arrête AVANT sa tuile d'arrivée, si bien que le relais
+        # lui-même restait vide et que la suite le contournait. Le bras de retour ne
+        # trouvait alors rien sur quoi puiser, alors que sa place existait bel et bien.
+        origine = depart
+        if relais is not None:
+            seg0, _ = site_finder.place_belt_line(self.api, depart, relais, portee=portee)
+            belts.extend(seg0)
+            origine = relais
+
         for recul in (4.0, 3.0, 2.0):
             arrivee = (cible.x + ux * recul, cible.y + uy * recul)
             seg, complete = site_finder.place_belt_line(
-                self.api, belts[-1] if belts else depart, arrivee, portee=portee)
+                self.api, origine, arrivee, portee=portee)
             belts.extend(seg)
+            origine = belts[-1] if belts else origine
             essais.append(f"recul {recul:.0f} -> {len(seg)} segment(s), "
                           f"bout {belts[-1] if belts else 'aucun'}")
             if not belts:
@@ -690,7 +744,8 @@ class Coordinator:
         if burner:
             jb: list = []
             boucle = site_finder.place_inserter_vers(
-                self.api, (drill.x, drill.y), belts[0], foreur, nom=bras, journal=jb)
+                self.api, (drill.x, drill.y), relais or belts[0], foreur, nom=bras,
+                journal=jb)
             if boucle is None:
                 essais.append("retour au foreur : " + " ; ".join(jb[:6]))
             for pos in (pose_ins, boucle):
