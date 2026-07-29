@@ -523,7 +523,90 @@ class Coordinator:
                 if isinstance(r, dict) and r.get("ok"):
                     return True, f"poteau posé en ({x},{y}) pour {c.name}"
             return False, f"aucune position de poteau libre autour de {c.name}"
+
+        if d.action == "regler_recette":
+            # Une machine sans recette ne produit rien et n'appelle rien : elle attend.
+            # La recette à poser n'est pas une devinette — c'est l'objectif du contrat,
+            # c'est-à-dire ce que l'agent est venu fabriquer ici.
+            objectif = getattr(getattr(getattr(self, "builder", None), "contract", None),
+                               "goal", None)
+            recette = getattr(objectif, "item", None)
+            if not recette:
+                return False, "aucun objectif de production : recette inconnue"
+            # La machine sait-elle FAIRE cette recette ? Mesuré : poser « iron-plate »
+            # (catégorie `smelting`) sur une assembleuse la fait refuser en silence — la
+            # pose « réussit » et la machine reste sans recette. Une recette qui ne
+            # correspond pas à la machine n'est pas un pis-aller, c'est une erreur : on
+            # préfère le dire que de régler n'importe quoi pour faire tomber le symptôme.
+            cat = (self.api.get_recipe(recette) or {}).get("category")
+            permises = ((self.api.describe(c.name) or {}).get("entity")
+                        or {}).get("craftingCategories") or []
+            if cat and permises and cat not in permises:
+                return False, (f"{c.name} ne fait pas de « {cat} » : « {recette} » lui "
+                               f"est étrangère (elle sait : {', '.join(permises[:3])})")
+            r = self.api.run_action(self.api.set_recipe_at, c.x, c.y, recette, c.name,
+                                    timeout=20.0)
+            ok = isinstance(r, dict) and r.get("ok") is True
+            return ok, (f"recette « {recette} » réglée sur {c.name}@({c.x},{c.y})"
+                        if ok else f"recette « {recette} » refusée par {c.name}")
+
+        if d.action == "renforcer_energie":
+            # Le réseau existe mais ne suit pas. On ne rafistole pas une centrale : on en
+            # ajoute une, ce que `batir_energie` sait déjà faire. Le raccordement au
+            # réseau existant se fait par la ligne de poteaux, comme pour la première.
+            ok, detail = self.batir(Decision(action="batir_energie",
+                                             raison="réseau sous-dimensionné"))
+            return ok, f"renfort électrique : {detail}"
+
+        if d.action == "evacuer":
+            # Dépannage : on enlève ce qui bouche. Si la sortie se remplit à nouveau,
+            # c'est qu'il manque une évacuation — même bascule que le ravitaillement,
+            # mais elle n'est pas encore bâtie : on le dit plutôt que de boucler.
+            r = self.api.run_action(self.api.empty_output_at, c.x, c.y, c.name,
+                                    timeout=20.0)
+            ok = isinstance(r, dict) and r.get("ok") is True
+            return ok, (f"sortie de {c.name}@({c.x},{c.y}) vidée"
+                        if ok else f"sortie de {c.name} non vidable : {r}")
+
+        if d.action == "reactiver":
+            r = self.api.run_action(self.api.enable_entity_at, c.x, c.y, c.name,
+                                    timeout=20.0)
+            ok = isinstance(r, dict) and r.get("ok") is True
+            return ok, (f"{c.name}@({c.x},{c.y}) réactivée" if ok
+                        else f"{c.name} non réactivable : {r}")
+
+        if d.action == "alimenter":
+            # « Rien n'arrive en entrée » est le même problème que « plus de combustible » :
+            # il manque une chaîne. On réutilise donc `approvisionner`, avec l'ingrédient
+            # que la machine attend au lieu du charbon.
+            besoin = self._ingredient_manquant(c)
+            if besoin is None:
+                return False, f"ingrédient attendu par {c.name} inconnu"
+            return self.approvisionner(c, besoin)
+
         return False, f"{d.action} : pas encore automatisé"
+
+    def _ingredient_manquant(self, c) -> Optional[str]:
+        """Ce que la machine attend en entrée. Lu, pas supposé.
+
+        Un four à minerai attend la ressource du contrat ; une machine à recette attend
+        le premier ingrédient de celle-ci. Rendre None plutôt que deviner : approvisionner
+        le mauvais item bâtirait une chaîne entière vers rien.
+        """
+        from services.site_finder import _entites_a
+        ligne = next((e for e in _entites_a(self.api, c.x, c.y, 1.5)
+                      if e.get("name") == c.name), None)
+        recette = (ligne or {}).get("recipe")
+        if recette and recette != "none":
+            info = self.api.get_recipe(recette)
+            ingredients = (info or {}).get("ingredients") or []
+            if ingredients:
+                premier = ingredients[0]
+                return premier.get("name") if isinstance(premier, dict) else str(premier)
+        # Un four n'a pas de recette réglée : il fond ce qu'on lui donne.
+        if "furnace" in str((ligne or {}).get("type", "")) or "furnace" in c.name:
+            return self.ressource
+        return None
 
     # ----- APPROVISIONNER (automatiser ce qu'on remplissait à la main) -----
 

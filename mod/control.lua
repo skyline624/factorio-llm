@@ -133,6 +133,14 @@ remote.add_interface("fl_ops", {
   set_recipe_at = function(x, y, recipe, entity_name)
     safe(function() local ok, d = operations.set_recipe_at(x, y, recipe, entity_name) reply_ack(ok, d) end)
   end,
+  -- E14 : reparer deux pannes que le diagnostic savait nommer sans savoir traiter --
+  -- une sortie saturee et une machine desactivee.
+  empty_output_at = function(x, y, entity_name)
+    safe(function() local ok, d = operations.empty_output_at(x, y, entity_name) reply_ack(ok, d) end)
+  end,
+  enable_entity_at = function(x, y, entity_name)
+    safe(function() local ok, d = operations.enable_entity_at(x, y, entity_name) reply_ack(ok, d) end)
+  end,
   move_items = function(item_name, entity_name, max_count, to_entity)
     safe(function() local ok, d = operations.move_items(item_name, entity_name, max_count, to_entity) reply_ack(ok, d) end)
   end,

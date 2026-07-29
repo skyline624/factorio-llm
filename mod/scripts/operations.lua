@@ -117,6 +117,27 @@ function M.set_recipe_at(x, y, recipe, entity_name)
   return true, string.format("en file (recipe %s at %.1f,%.1f)", tostring(recipe), x, y)
 end
 
+-- empty_output_at(x, y, entity_name) : vide la SORTIE d'une machine vers l'inventaire IA.
+-- Une sortie pleine arrete une machine aussi surement qu'un reservoir vide. Contrairement
+-- a move_items, le produit n'a pas a etre NOMME -- ce qu'on ignore justement quand on
+-- decouvre une machine a l'arret.
+function M.empty_output_at(x, y, entity_name)
+  if not require_entity() then return false, "aucun avatar IA" end
+  if type(x) ~= "number" or type(y) ~= "number" then return false, "x,y numeriques requis" end
+  task_manager.queue(task_manager.new_empty_output_at(x, y, entity_name))
+  return true, string.format("en file (empty at %.1f,%.1f)", x, y)
+end
+
+-- enable_entity_at(x, y, entity_name) : reactive une entite desactivee. `active=false`
+-- arrete une machine sans qu'aucun ingredient ne manque ; aucune autre reparation n'y
+-- changerait rien.
+function M.enable_entity_at(x, y, entity_name)
+  if not require_entity() then return false, "aucun avatar IA" end
+  if type(x) ~= "number" or type(y) ~= "number" then return false, "x,y numeriques requis" end
+  task_manager.queue(task_manager.new_enable_entity_at(x, y, entity_name))
+  return true, string.format("en file (enable at %.1f,%.1f)", x, y)
+end
+
 -- ===== Transfert d'items =====
 
 -- move_items(item_name, entity_name, max_count, to_entity) : deplace des items entre

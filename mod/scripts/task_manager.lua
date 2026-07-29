@@ -61,6 +61,8 @@ local RESEARCHING = "researching"
 local REMOVING_AT = "removing_at"
 local ROTATING_AT = "rotating_at"
 local SETTING_RECIPE = "setting_recipe"
+local EMPTYING_AT = "emptying_at"
+local ENABLING_AT = "enabling_at"
 
 -- ===== Storage =====
 
@@ -785,6 +787,69 @@ local function state_setting_recipe(char, params)
     got == params.recipe)
 end
 
+-- Vide l'inventaire de SORTIE d'une machine vers l'inventaire IA. Une sortie pleine
+-- arrete la machine aussi surement qu'un reservoir vide, et le depannage est le meme :
+-- on enleve ce qui bouche. Contrairement a move_items, on n'a pas besoin de NOMMER le
+-- produit -- ce qu'on ignore justement quand on decouvre une machine a l'arret.
+local function state_emptying_at(char, params)
+  local target = {x = params.x, y = params.y}
+  if out_of_reach(char, target, "reach") then
+    M._complete("walk closer first", false)
+    return
+  end
+  local ent = entity_at(char, params.x, params.y, params.entity_name)
+  if not ent then
+    M._complete("aucune entite a cette position", false)
+    return
+  end
+  local out = nil
+  pcall(function() out = ent.get_output_inventory() end)
+  if not out then
+    M._complete(ent.name .. " n'a pas d'inventaire de sortie", false)
+    return
+  end
+  local inv = player_mod.get_ai_inventory()
+  local pris = 0
+  for _, st in pairs(out.get_contents()) do
+    local n = st.count
+    if inv then
+      local ok, mis = pcall(function() return inv.insert({name = st.name, count = n}) end)
+      if ok and mis and mis > 0 then
+        out.remove({name = st.name, count = mis})
+        pris = pris + mis
+      end
+    end
+  end
+  -- On RELIT la sortie : un transfert partiel (inventaire IA plein) n'est pas un succes.
+  local reste = 0
+  for _, st in pairs(out.get_contents()) do reste = reste + st.count end
+  M._complete(string.format("vide %d item(s) de %s, reste %d", pris, ent.name, reste),
+    pris > 0)
+end
+
+-- Reactive une entite desactivee. `active = false` arrete une machine sans qu'aucun
+-- ingredient ne manque : le statut le dit, mais aucune autre reparation n'y changerait
+-- rien.
+local function state_enabling_at(char, params)
+  local target = {x = params.x, y = params.y}
+  if out_of_reach(char, target, "reach") then
+    M._complete("walk closer first", false)
+    return
+  end
+  local ent = entity_at(char, params.x, params.y, params.entity_name)
+  if not ent then
+    M._complete("aucune entite a cette position", false)
+    return
+  end
+  if not pcall(function() ent.active = true end) then
+    M._complete("reactivation refusee: " .. ent.name, false)
+    return
+  end
+  local actif = nil
+  pcall(function() actif = ent.active end)
+  M._complete(string.format("%s actif=%s", ent.name, tostring(actif)), actif == true)
+end
+
 -- ===== Etat MOVING_ITEMS (synchrone, 1 tick) =====
 
 -- Nombre max d'inventaires d'une entite (pcall : certaines entites n'exposent pas la methode).
@@ -1027,6 +1092,10 @@ function M.tick()
     state_rotating_at(char, cur)
   elseif cur.type == SETTING_RECIPE then
     state_setting_recipe(char, cur)
+  elseif cur.type == EMPTYING_AT then
+    state_emptying_at(char, cur)
+  elseif cur.type == ENABLING_AT then
+    state_enabling_at(char, cur)
   elseif cur.type == MOVING_ITEMS then
     state_moving_items(char, cur)
   elseif cur.type == CRAFTING then
@@ -1102,6 +1171,14 @@ end
 
 function M.new_set_recipe_at(x, y, recipe, entity_name)
   return {type = SETTING_RECIPE, x = x, y = y, recipe = recipe, entity_name = entity_name}
+end
+
+function M.new_empty_output_at(x, y, entity_name)
+  return {type = EMPTYING_AT, x = x, y = y, entity_name = entity_name}
+end
+
+function M.new_enable_entity_at(x, y, entity_name)
+  return {type = ENABLING_AT, x = x, y = y, entity_name = entity_name}
 end
 
 function M.new_move_items(item_name, entity_name, max_count, to_entity)

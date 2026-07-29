@@ -276,6 +276,25 @@ class ModApi:
         """
         return self._call("fl_ops", "set_recipe_at", x, y, recipe, entity_name)
 
+    def empty_output_at(self, x: float, y: float,
+                        entity_name: Optional[str] = None) -> dict:
+        """Vide la SORTIE d'une machine vers l'inventaire de l'IA. Asynchrone.
+
+        Une sortie pleine arrête une machine aussi sûrement qu'un réservoir vide.
+        Contrairement à `move_items_at`, le produit n'a pas à être NOMMÉ — ce qu'on
+        ignore justement quand on découvre une machine à l'arrêt.
+        """
+        return self._call("fl_ops", "empty_output_at", x, y, entity_name)
+
+    def enable_entity_at(self, x: float, y: float,
+                         entity_name: Optional[str] = None) -> dict:
+        """Réactive une entité désactivée. Asynchrone.
+
+        `active = false` arrête une machine sans qu'aucun ingrédient ne manque : le
+        statut le dit, mais aucune autre réparation n'y changerait rien.
+        """
+        return self._call("fl_ops", "enable_entity_at", x, y, entity_name)
+
     def move_items(self, item_name: str, entity_name: str, max_count: int = 0,
                    to_entity: bool = True) -> dict:
         """Deplace des items entre l'inventaire IA et les entites du nom (rayon 32).
