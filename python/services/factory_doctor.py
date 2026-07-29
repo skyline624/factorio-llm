@@ -1,0 +1,189 @@
+"""FactoryDoctor — pourquoi une usine ne produit pas. Déterministe.
+
+Le benchmark Factorio Learning Environment (arXiv 2503.09617) identifie le débogage
+systémique comme le premier mode d'échec des agents LLM : « focusing on individual
+machines rather than topology ». Ils regardent la machine qui affiche une erreur, pas
+celle qui la cause. La parade retenue par ce projet est de ne PAS confier ce diagnostic
+à un modèle : lire l'état réel, classer, et remonter à la cause racine est un algorithme.
+
+Deux principes :
+
+1. **Distinguer la cause du symptôme.** Un four `waiting_for_source_items` n'a rien qui
+   cloche : c'est le drill en amont, sans courant, qui est en faute. Réparer le four ne
+   servirait à rien. Le diagnostic propage donc les pannes vers l'aval et ne retient
+   comme causes que les machines dont le problème est *propre*.
+
+2. **Une entité DÉBRANCHÉE n'est pas une entité sans courant.** `networkId` absent =
+   personne ne l'a reliée ; `no_power` = elle est reliée à un réseau à sec. Ce sont deux
+   réparations différentes (poser un poteau / agrandir la centrale), et c'est exactement
+   le genre de nuance qu'un statut brut ne donne pas.
+
+Sortie : des symptômes typés, triés par gravité, avec un texte lisible destiné au
+journal d'un agent — le Coordinator décidera quoi faire, il n'a pas à interpréter des
+statuts Factorio.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Optional
+
+# Statut renvoyé par le mod (utils_entity.status_name) -> (cause, gravité, explication).
+# gravité : 2 = arrêté, 1 = ralenti ou en attente, 0 = normal.
+# `other` est le fourre-tout du mod pour les statuts qu'il ne mappe pas : on ne peut
+# rien en conclure, et prétendre le contraire produirait de faux diagnostics.
+STATUTS: dict[str, tuple[str, int, str]] = {
+    "working":                        ("ok", 0, "en production"),
+    "normal":                         ("ok", 0, "en production"),
+    "no_power":                       ("sans_courant", 2, "reliée à un réseau sans courant"),
+    "low_power":                      ("courant_insuffisant", 1, "réseau sous-dimensionné"),
+    "no_fuel":                        ("sans_combustible", 2, "réservoir vide"),
+    "no_ingredients":                 ("entree_vide", 2, "aucun ingrédient"),
+    "item_ingredient_shortage":       ("entree_vide", 2, "ingrédient manquant"),
+    "waiting_for_source_items":       ("entree_vide", 2, "rien à traiter en entrée"),
+    "no_input_fluid":                 ("entree_vide", 2, "aucun fluide en entrée"),
+    "no_recipe":                      ("sans_recette", 2, "aucune recette réglée"),
+    "full_output":                    ("sortie_bloquee", 1, "sortie pleine"),
+    "waiting_for_space_in_destination": ("sortie_bloquee", 1, "sortie encombrée"),
+    "disabled":                       ("desactivee", 2, "désactivée"),
+    "other":                          ("indetermine", 0, "statut non interprété par le mod"),
+}
+
+# Causes dont la machine est elle-même responsable : elles ne viennent pas de l'amont.
+CAUSES_PROPRES = frozenset({"sans_courant", "courant_insuffisant", "sans_combustible",
+                            "sans_recette", "debranchee", "desactivee"})
+
+# Types dont l'état ne fait que REFLÉTER celui du voisinage. Un inserter passe sa vie à
+# attendre le prochain objet : « entrée vide » y est un état normal, pas une panne. Le
+# signaler comme cause noierait le diagnostic sous des symptômes qui ne se réparent pas.
+# Ces entités ne peuvent être une cause racine que par une panne PROPRE (courant, etc.).
+TYPES_TRANSIT = frozenset({"inserter", "transport-belt", "underground-belt", "splitter",
+                           "loader", "pipe", "pipe-to-ground", "pump"})
+
+
+@dataclass
+class Symptome:
+    """Un problème constaté sur une machine, avec ce qu'on en sait."""
+    name: str
+    x: float
+    y: float
+    cause: str
+    gravite: int
+    detail: str
+    racine: bool = True        # False = conséquence probable d'une panne en amont
+
+    def __str__(self) -> str:
+        marque = "CAUSE " if self.racine else "effet "
+        return f"{marque}{self.name}@({self.x},{self.y}) : {self.cause} — {self.detail}"
+
+
+@dataclass
+class Diagnostic:
+    symptomes: list[Symptome] = field(default_factory=list)
+    machines: int = 0
+    en_panne: int = 0
+    notes: list[str] = field(default_factory=list)
+
+    @property
+    def sain(self) -> bool:
+        return self.en_panne == 0
+
+    @property
+    def causes(self) -> list[Symptome]:
+        """Les problèmes à traiter, les conséquences étant écartées."""
+        return [s for s in self.symptomes if s.racine and s.gravite > 0]
+
+    def resume(self) -> str:
+        if self.sain:
+            return f"{self.machines} machine(s), aucune en panne"
+        tetes = self.causes[:3]
+        suite = "" if len(self.causes) <= 3 else f" (+{len(self.causes) - 3} autre(s))"
+        return (f"{self.en_panne}/{self.machines} machine(s) en panne — "
+                + " ; ".join(str(s) for s in tetes) + suite)
+
+
+def _classer(status: Optional[str]) -> tuple[str, int, str]:
+    if not status:
+        return ("indetermine", 0, "statut illisible")
+    return STATUTS.get(status, ("indetermine", 0, f"statut inconnu : {status}"))
+
+
+def diagnose(rows: list[dict], power: Optional[dict] = None) -> Diagnostic:
+    """Diagnostique un ensemble de machines déjà observées.
+
+    `rows` : entités telles que les rend `scan_area`/`scan_factory` (name, x, y, status).
+    `power` : {(x, y): état get_power_state}, optionnel — il permet la distinction
+    débranché / sans courant, que le statut seul ne donne pas.
+
+    Fonction pure : aucun appel RCON, donc testable sans serveur. La collecte est faite
+    par l'appelant (`diagnose_zone` ci-dessous).
+    """
+    diag = Diagnostic(machines=len(rows))
+    power = power or {}
+
+    for r in rows:
+        name = str(r.get("name", "?"))
+        x, y = float(r.get("x", 0.0)), float(r.get("y", 0.0))
+        cause, gravite, detail = _classer(r.get("status"))
+
+        # Une machine électrique sans réseau n'est pas « sans courant » : elle n'est
+        # reliée à rien. La réparation diffère (poser un poteau vs agrandir la centrale).
+        etat = power.get((x, y))
+        if etat and etat.get("found") and cause in ("sans_courant", "courant_insuffisant"):
+            if etat.get("networkId") is None:
+                cause, gravite, detail = ("debranchee", 2,
+                                          "aucun réseau électrique ne la dessert")
+            else:
+                sat = etat.get("satisfaction")
+                prod = etat.get("productionKW")
+                detail += (f" (réseau {etat.get('networkId')}, production {prod} kW"
+                           + (f", satisfaction {sat}" if sat is not None else "") + ")")
+
+        if gravite > 0:
+            s = Symptome(name, x, y, cause, gravite, detail)
+            # Un organe de transit qui attend ne signale rien : c'est son régime normal.
+            # Seule une panne propre (courant, combustible) en fait une cause.
+            if r.get("type") in TYPES_TRANSIT and cause not in CAUSES_PROPRES:
+                s.racine = False
+                s.gravite = min(s.gravite, 1)
+                s.detail += " — organe de transit, état normal en l'absence de flux"
+            diag.symptomes.append(s)
+
+    # Propagation : si au moins une machine a une panne PROPRE, celles qui manquent
+    # seulement d'entrée en sont probablement la conséquence. On ne les efface pas —
+    # on les déclasse, pour que le lecteur voie la chaîne sans être noyé.
+    propres = [s for s in diag.symptomes if s.cause in CAUSES_PROPRES]
+    if propres:
+        for s in diag.symptomes:
+            if s.cause == "entree_vide" and s.racine:
+                s.racine = False
+                s.detail += " — probable conséquence d'une panne en amont"
+        diag.notes.append(
+            f"{len(propres)} panne(s) propre(s) détectée(s) : les machines à l'entrée "
+            f"vide sont traitées comme des conséquences, pas comme des causes")
+
+    diag.en_panne = sum(1 for s in diag.symptomes if s.gravite > 0)
+    diag.symptomes.sort(key=lambda s: (not s.racine, -s.gravite, s.name))
+    return diag
+
+
+def diagnose_zone(api, x: float, y: float, radius: float = 30.0,
+                  types: tuple[str, ...] = ("mining-drill", "furnace", "assembling-machine",
+                                            "inserter", "generator", "boiler")) -> Diagnostic:
+    """Observe une zone puis la diagnostique.
+
+    Le personnage doit être à portée : `scan_area` est centré sur LUI et non sur (x, y).
+    L'appelant s'y téléporte ou s'y rend au préalable.
+    """
+    sa = api.scan_area(radius)
+    rows = [e for e in (sa.get("entities", []) if isinstance(sa, dict) else [])
+            if e.get("type") in types]
+    power: dict[tuple[float, float], dict] = {}
+    for r in rows:
+        cause, gravite, _ = _classer(r.get("status"))
+        # On n'interroge le réseau que si le statut évoque l'électricité : chaque appel
+        # est un aller-retour RCON.
+        if cause in ("sans_courant", "courant_insuffisant"):
+            rx, ry = float(r.get("x", 0.0)), float(r.get("y", 0.0))
+            power[(rx, ry)] = api.get_power_state(rx, ry, 2.0)
+    return diagnose(rows, power)
