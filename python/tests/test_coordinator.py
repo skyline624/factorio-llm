@@ -281,6 +281,74 @@ def test_option_avec_materiel_reste_prioritaire() -> None:
     assert ok
 
 
+def test_sous_objectif_il_etend_au_lieu_de_ne_rien_faire() -> None:
+    """Un agent qui VISE cesse de se satisfaire de « ça tourne ».
+
+    Mesuré : « 4 machine(s) en état de marche » etait une raison de ne rien faire, et
+    `rien` occupait 100 tours sur 114 pendant que la production plafonnait. Avec un
+    objectif, la même usine devient insuffisante — et c'est là que des dilemmes
+    apparaissent, donc qu'un arbitre a quelque chose à trancher.
+    """
+    etat = _etat(machines=4)
+    etat.objectif, etat.debit, etat.objectif_item = 1.0, 0.4, "iron-plate"
+    d = decide(etat)
+    ok = d.action == "etendre_production" and "0.40" in d.raison
+    rec("test_sous_objectif_il_etend_au_lieu_de_ne_rien_faire", ok,
+        f"{d.action} — {d.raison[:70]}")
+    assert ok
+
+
+def test_objectif_tenu_il_ne_fait_rien() -> None:
+    """Et il s'arrête quand l'objectif est tenu : agrandir sans fin n'est pas un but."""
+    etat = _etat(machines=4)
+    etat.objectif, etat.debit = 1.0, 1.2
+    d = decide(etat)
+    ok = d.action == "rien"
+    rec("test_objectif_tenu_il_ne_fait_rien", ok, f"{d.action} — {d.raison[:60]}")
+    assert ok
+
+
+def test_debit_non_mesure_ne_declenche_rien() -> None:
+    """Sans mesure, pas d'action : `debit=None` n'est pas « débit nul ».
+
+    C'est la distinction qui a manqué ailleurs et coûté cher : une lecture impossible
+    prise pour un zéro ferait agrandir une usine sur une mesure qui n'existe pas.
+    """
+    etat = _etat(machines=4)
+    etat.objectif, etat.debit = 1.0, None
+    d = decide(etat)
+    ok = d.action == "rien"
+    rec("test_debit_non_mesure_ne_declenche_rien", ok,
+        f"{d.action} (objectif fixé, débit inconnu)")
+    assert ok
+
+
+def test_sans_objectif_le_comportement_est_inchange() -> None:
+    """Back-compat stricte : sans objectif, l'agent maintient — comme avant."""
+    etat = _etat(machines=4)
+    etat.debit = 0.0                      # même un débit nul ne déclenche rien
+    d = decide(etat)
+    ok = d.action == "rien" and etat.objectif is None
+    rec("test_sans_objectif_le_comportement_est_inchange", ok,
+        f"{d.action} (aucun objectif fixé)")
+    assert ok
+
+
+def test_reparer_passe_avant_etendre() -> None:
+    """Le curriculum ne change pas : une panne l'emporte sur l'agrandissement.
+
+    Une usine cassée qu'on agrandit est exactement le reproche que le benchmark FLE
+    adresse aux agents LLM — empiler du neuf devant du cassé.
+    """
+    from agents.coordinator import enumerer_options
+    etat = _etat([_m("electric-furnace", 0, 0, "no_fuel")], machines=4)
+    etat.objectif, etat.debit = 1.0, 0.1
+    options = [o.action for o in enumerer_options(etat)]
+    ok = options[0] == "ravitailler" and "etendre_production" in options
+    rec("test_reparer_passe_avant_etendre", ok, f"{options}")
+    assert ok
+
+
 def test_defendre_abandonnee_apres_trois_echecs() -> None:
     """La défense n'échappe plus au garde-fou d'acharnement.
 

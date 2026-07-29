@@ -27,9 +27,13 @@ même chose. `--depuis-reference` remet le serveur dans l'état figé au préala
 (`python -m services.save_ref figer`). Sans cela, on compare des parties qui n'ont pas
 commencé au même endroit — et l'écart qu'on lit est du bruit, non un effet du modèle.
 
+**Un agent qui VISE n'est pas un agent qui maintient.** `--objectif N` fixe un débit en
+items/s : sous ce débit, l'usine « qui tourne » ne suffit plus et l'agent l'agrandit.
+Sans l'option, il maintient l'existant — le comportement d'avant, conservé tel quel.
+
 Usage :
     python run_partie_longue.py [minutes_de_jeu] [--vitesse N] [--ombre]
-                                [--depuis-reference]
+                                [--depuis-reference] [--objectif ITEMS_PAR_S]
 
 Le journal est écrit en continu (JSONL) : il se lit PENDANT que la partie tourne, ce qui
 est le seul moyen de surveiller sans interrompre.
@@ -103,6 +107,10 @@ def _mesures(api, coord, rcon=None) -> dict:
         "coal": inv.get("coal", 0),
         # Gardé : c'est ce que l'agent a SOUS LA MAIN, donc ce qu'il peut dépenser.
         "iron_plate": inv.get("iron-plate", 0),
+        # Le débit que l'agent a lui-même mesuré, et l'objectif qu'il vise. C'est la
+        # SÉRIE qui dit si une extension a servi ; le point ne dit rien.
+        "debit": round(coord._debit, 3) if getattr(coord, "_debit", None) else None,
+        "objectif": getattr(coord, "objectif_par_s", None),
         # Ce que l'usine a produit — la seule des deux qui mesure l'usine.
         "produites": _produites(rcon) if rcon is not None else -1,
     }
@@ -123,6 +131,12 @@ def main(argv: list[str]) -> int:
             vitesse = float(argv[argv.index("--vitesse") + 1])
         except (IndexError, ValueError):
             pass
+    objectif = None
+    if "--objectif" in argv:
+        try:
+            objectif = float(argv[argv.index("--objectif") + 1])
+        except (IndexError, ValueError):
+            objectif = None
 
     # La restauration vient AVANT toute connexion : elle arrête le serveur, remet la save
     # en place et le relance. Un client obtenu plus tôt pointerait sur un processus mort.
@@ -167,7 +181,8 @@ def main(argv: list[str]) -> int:
     else:
         pos = (api.get_state().get("character") or {}).get("position") or {}
         zone = (float(pos.get("x", 0.0)), float(pos.get("y", 0.0)))
-    coord = Coordinator(api, zone=zone, rayon=30.0, ombre=ombre)
+    coord = Coordinator(api, zone=zone, rayon=30.0, ombre=ombre,
+                        objectif_par_s=objectif)
 
     ticks_vises = int(minutes * 60 * 60)
     t0 = _tick(api)
@@ -255,10 +270,21 @@ def main(argv: list[str]) -> int:
           f"{m['arretees']} arrêtée(s) — plus {m['passifs']} organe(s) passif(s)")
     print(f"       production : {m['produites']} iron-plate depuis le début "
           f"(dont {m['iron_plate']} en inventaire)")
+    if objectif is not None:
+        atteint = m["debit"] is not None and m["debit"] >= objectif * 0.9
+        print(f"       objectif : {m['debit']} {'≥' if atteint else '<'} {objectif} "
+              f"iron-plate/s — {'TENU' if atteint else 'non tenu'}")
     print(f"       écarts : {m['ecarts']} constaté(s), {m['constats']} enquête(s) "
           f"dont {m['inconnus']} sans conclusion")
     # LE chiffre qui décide si une comparaison avec/sans modèle a un sens.
     part = (100.0 * arbitrables / tour) if tour else 0.0
+    # En mode OMBRE, l'indice rendu est toujours 0 par construction : le déterministe
+    # garde la main. Compter les divergences sur cet indice donnait donc invariablement
+    # zéro, y compris quand le modèle avait proposé autre chose — mesuré, l'arbitre en
+    # comptait une pendant que cette ligne affichait « 0 divergence ». La source de vérité
+    # est l'arbitre lui-même dès qu'il en tient le compte.
+    if coord.arbitre is not None and hasattr(coord.arbitre, "divergences"):
+        divergences = len(coord.arbitre.divergences)
     print(f"       arbitrage : {arbitrables} tour(s) à VRAI choix sur {tour} "
           f"({part:.0f} %), {appels} appel(s) au modèle, {divergences} divergence(s)")
     if coord.arbitre is not None and hasattr(coord.arbitre, "accords"):

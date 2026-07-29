@@ -44,6 +44,28 @@ def nearest(api: ModApi, name: str) -> Optional[tuple[float, float, int]]:
     return (float(r["x"]), float(r["y"]), int(r.get("distance", 0)))
 
 
+def production_cumulee(api: ModApi, item: str) -> int:
+    """Combien d'unités de `item` l'usine a produites depuis le début. -1 si illisible.
+
+    La statistique du jeu, et non l'inventaire du personnage. L'inventaire ne mesurait la
+    production que par accident : il montait parce que l'agent vidait les machines À LA
+    MAIN, et il se fige au moment précis où un ramassage automatique existe — on lirait
+    « l'usine ne produit plus » quand elle devient autonome. Le compteur du jeu, lui, ne
+    dépend pas de la destination des objets.
+
+    Rendre -1 plutôt que 0 sur une lecture impossible : 0 est une valeur PLAUSIBLE (une
+    usine neuve n'a rien produit), et la confondre avec une panne de mesure ferait
+    conclure « débit nul » là où l'on ne sait pas.
+    """
+    try:
+        brut = api.rcon.query_lua(
+            "local s = game.forces.player.get_item_production_statistics(game.surfaces[1]) "
+            f"rcon.print(s.get_input_count('{item}'))")
+        return int(str(brut).strip())
+    except (AttributeError, ValueError, TypeError):
+        return -1
+
+
 def recipe_of(api: ModApi, item: str) -> Optional[list[tuple[str, int]]]:
     """Recette craftable d'un item -> [(ingredient, quantité), ...] ou None.
 

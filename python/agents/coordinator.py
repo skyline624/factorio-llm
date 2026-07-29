@@ -64,7 +64,18 @@ REPARATION: dict[str, tuple[str, str]] = {
 #     défendables s'équivalent — et donc le premier endroit où un arbitre LLM aurait
 #     quelque chose à apporter.
 PRIORITE = {"defendre_urgence": 4, "reparer": 3, "batir_energie": 2, "defendre": 2,
-            "batir_production": 1, "rien": 0}
+            "batir_production": 1, "etendre_production": 1, "rien": 0}
+
+# Fenêtre minimale, en ticks de JEU, pour mesurer un débit. Deux observations rapprochées
+# donnent un rapport dominé par le bruit : une plaque de plus sur trente ticks vaut
+# 2 items/s, une de moins vaut zéro. On ne décide pas d'agrandir une usine sur ce
+# genre de chiffre — en dessous, on garde la mesure précédente et on le dit.
+FENETRE_DEBIT = 600
+
+# Marge sous l'objectif en deçà de laquelle on considère qu'il n'est PAS tenu. Sans elle,
+# une usine calibrée juste oscillerait autour de sa cible et l'agent l'agrandirait
+# indéfiniment sur du bruit de mesure.
+MARGE_OBJECTIF = 0.9
 
 # Au-delà de ce nombre d'interventions MANUELLES sur la même machine, on cesse de
 # dépanner et on automatise. Remplir un réservoir est une réparation ; le remplir
@@ -129,6 +140,15 @@ class EtatUsine:
     # revenu aux tours 152, 380, 608 et 831 sur le même four, chaque fois « réparé ».
     # Vider est une réparation ; vider indéfiniment est l'aveu qu'il manque un ramassage.
     evacuations: dict = field(default_factory=dict)
+    # Ce que l'usine produit RÉELLEMENT, en items/s de jeu, et ce qu'on lui demande.
+    # `debit=None` signifie « pas encore mesurable », ce qui n'est pas « zéro » : une
+    # seule observation ne donne aucun débit, et conclure sur une mesure absente est
+    # exactement ce qu'un agent ne doit pas faire.
+    # `objectif=None` : aucun objectif fixé, l'agent se contente de maintenir — c'est le
+    # comportement d'avant, conservé tel quel.
+    debit: Optional[float] = None
+    objectif: Optional[float] = None
+    objectif_item: str = ""
     # Échecs consécutifs par (action, cible). Sans cette mémoire, une action impossible
     # est retentée indéfiniment : la boucle tourne sans avancer, ce qui ne se voit pas.
     echecs: dict = field(default_factory=dict)
@@ -357,7 +377,24 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
              PRIORITE["batir_energie"]),
             ("batir_production", etat.a_de_l_energie and etat.machines == 0,
              "du courant, mais aucune machine pour en profiter",
-             PRIORITE["batir_production"])):
+             PRIORITE["batir_production"]),
+            # L'usine tourne, mais tient-elle son objectif ? Sans cette option, « 4
+            # machines en état de marche » etait une raison de ne RIEN faire : mesuré,
+            # `rien` occupait 100 tours sur 114 pendant que la production plafonnait.
+            # Un agent qui maintient n'a jamais de dilemme ; un agent qui VISE doit
+            # choisir entre réparer, se défendre et grandir — et c'est là seulement qu'un
+            # arbitre a quelque chose à trancher.
+            #
+            # La condition exige un débit MESURÉ : proposer d'étendre sur `debit=None`
+            # (première observation, lecture impossible) serait agir sans savoir.
+            ("etendre_production",
+             (etat.objectif is not None and etat.debit is not None
+              and etat.machines > 0
+              and etat.debit < etat.objectif * MARGE_OBJECTIF),
+             (f"{etat.debit:.2f} {etat.objectif_item}/s produits pour "
+              f"{etat.objectif:.2f} demandés : l'usine tient, elle ne suffit pas"
+              if etat.debit is not None and etat.objectif is not None else ""),
+             PRIORITE["etendre_production"])):
         if not condition:
             continue
         rates = etat.echecs.get((action, "", 0, 0), 0)
@@ -453,7 +490,9 @@ class Coordinator:
                  combustible: str = "coal", builder=None,
                  arbitre: Optional[Arbitre] = None,
                  tourelle: str = "gun-turret", munition: str = "firearm-magazine",
-                 ombre: bool = False, enqueteur=None):
+                 ombre: bool = False, enqueteur=None,
+                 objectif_par_s: Optional[float] = None,
+                 objectif_item: str = "iron-plate"):
         self.api = api
         self.zone = zone
         self.rayon = rayon
@@ -480,6 +519,19 @@ class Coordinator:
         # ravitaillée souvent et vidée jamais, et confondre les deux ferait basculer la
         # mauvaise extrémité.
         self._evacuations: dict = {}
+        # L'OBJECTIF, et de quoi mesurer s'il est tenu. Sans objectif, l'agent maintient
+        # ce qui existe : c'est ce qu'il faisait, et c'est conservé tel quel. Avec, il
+        # compare sa production réelle a ce qu'on lui demande — et « 4 machines en état
+        # de marche » cesse d'être une raison de ne rien faire.
+        self.objectif_par_s = objectif_par_s
+        self.objectif_item = objectif_item
+        self._cumul: Optional[int] = None       # production cumulée à la dernière mesure
+        self._tick_cumul: Optional[int] = None
+        self._debit: Optional[float] = None     # dernier débit calculé, en items/s de jeu
+        # Le bâti vu à la dernière observation : « étendre » se vérifie par une usine plus
+        # GRANDE, et l'attente est construite après l'action, donc trop tard pour observer
+        # l'avant.
+        self._machines_vues = 0
         # D'où part la chaîne qui alimente chaque machine : la tuile de sortie du foreur.
         # Sans ce point de départ, on ne peut pas SUIVRE le flux, et donc pas vérifier
         # qu'une chaîne bâtie transporte réellement quelque chose.
@@ -539,12 +591,47 @@ class Coordinator:
         etat.ravitaillements = dict(self._ravitaillements)
         etat.evacuations = dict(self._evacuations)
         etat.echecs = dict(self._echecs)
+        etat.debit, etat.objectif = self._mesurer_debit(), self.objectif_par_s
+        etat.objectif_item = self.objectif_item
+        self._machines_vues = etat.machines
         # La menace est évaluée à CHAQUE tour : elle change sans qu'on y touche, alors
         # que l'usine ne change que quand on agit.
         etat.menace = evaluer(self.api.scan_threats(self.zone[0], self.zone[1], 300.0),
                               usine=self.zone)
         self.derniere_menace = etat.menace
         return etat
+
+    def _mesurer_debit(self) -> Optional[float]:
+        """Le débit réel, en items/s de jeu, ou None s'il n'est pas encore mesurable.
+
+        Un débit est une DIFFÉRENCE : il faut deux lectures et l'écart de ticks entre
+        elles. La première observation d'une partie ne peut donc rien rendre, et c'est
+        None qu'elle doit rendre — pas zéro, qui se lirait « l'usine ne produit rien » et
+        déclencherait une extension sur une mesure qui n'existe pas.
+
+        `game.speed` n'entre pas dans le calcul : accélérer le jeu ne change pas le nombre
+        de ticks par seconde de jeu, seulement leur vitesse d'écoulement réelle.
+        """
+        if self.objectif_par_s is None:
+            return None                       # personne ne demande rien : rien à mesurer
+        cumul = perception.production_cumulee(self.api, self.objectif_item)
+        if cumul < 0:
+            return self._debit                # lecture impossible : on garde l'ancienne
+        tick = self.api.get_tick()
+        tick = int(tick.get("tick", 0)) if isinstance(tick, dict) else 0
+        precedent, tick_precedent = self._cumul, self._tick_cumul
+        if precedent is None or tick_precedent is None or tick <= tick_precedent:
+            self._cumul, self._tick_cumul = cumul, tick
+            return self._debit
+        ecart = tick - tick_precedent
+        if ecart < FENETRE_DEBIT:
+            # Fenêtre trop courte : on ne remplace pas la mesure précédente par du bruit,
+            # et l'on ne déplace pas non plus le repère — sinon deux tours rapprochés
+            # empêcheraient toute mesure d'aboutir.
+            return self._debit
+        self._debit = (cumul - precedent) / (ecart / 60.0)
+        self._cumul, self._tick_cumul = cumul, tick
+        return self._debit
 
     # ----- CE QU'ON ATTEND D'UNE ACTION -----
 
@@ -588,6 +675,19 @@ class Coordinator:
                 lambda api: suivre_flux(api, depart, c.name, (c.x, c.y)),
                 lambda r: bool(getattr(r, "continu", False)),
                 delai_ticks=120)
+
+        if d.action == "etendre_production":
+            # « Étendre » veut dire une usine plus GRANDE. Le critère n'est pas le débit :
+            # il monte de lui-même avec le temps, une extension ratée passerait donc pour
+            # une réussite. On compare au bâti vu à l'observation — l'attente étant
+            # construite après l'action, c'est le seul « avant » disponible.
+            vues = self._machines_vues
+            return Attente(
+                f"l'usine compte plus de {vues} machine(s)",
+                lambda api: diagnose_zone(api, self.zone[0], self.zone[1],
+                                          self.rayon).machines,
+                lambda n: isinstance(n, int) and n > vues,
+                delai_ticks=180)
 
         if d.action == "redeployer_foreur" and c is not None:
             # Le critère n'est pas « une foreuse est posée » mais « une foreuse EXTRAIT ».
@@ -654,6 +754,16 @@ class Coordinator:
             return False, "rien à faire"
         if d.action in ("batir_energie", "batir_production"):
             return self.batir(d)
+        if d.action == "etendre_production":
+            # Une chaîne de PLUS, sur du minerai que le planner ancre lui-même. Même
+            # parti que `renforcer_energie` et `redeployer_foreur` : on ajoute au lieu de
+            # retoucher, ce qui réutilise du code éprouvé au lieu d'en inventer.
+            #
+            # Traité ICI, parmi les actions sans cible : plus bas, le garde
+            # `if d.cible is None` l'aurait renvoyée comme « déléguée » sans rien faire.
+            ok, detail = self.batir(Decision(action="batir_production",
+                                             raison="objectif de débit non tenu"))
+            return ok, f"extension de la production : {detail}"
         if d.action == "defendre":
             return self.defendre()
         if d.action == "approvisionner" and d.cible is not None:
