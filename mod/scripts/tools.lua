@@ -532,6 +532,97 @@ function M.scan_patch(resource, radius)
   })
 end
 
+-- scan_patches(resource, radius, max) : les gisements DISTINCTS, separes et decrits.
+--
+-- `scan_patch` rend une bbox unique pour tout ce qu'il trouve. Mesure en jeu : 1052
+-- tuiles de charbon dans un rayon de 300 -> une boite de 318x240 tuiles qui n'entoure
+-- aucun gisement reel. On ne peut ni s'y ancrer, ni comparer deux sites.
+--
+-- Ici les tuiles sont groupees par CELLULES de 16 adjacentes (flood-fill 8-connexe sur
+-- une grille grossiere) : deux gisements separes par une bande vide deviennent deux
+-- entrees. Chacune porte de quoi CHOISIR -- centre, taille, richesse, distance -- au
+-- lieu du seul « le plus proche », qui n'est pas toujours le meilleur : un gisement a
+-- 60 tuiles borde d'un nid vaut moins qu'un autre a 90 tuiles tranquille.
+local CELL = 16
+
+function M.scan_patches(resource, radius, max_patches)
+  local char = player_mod.get_ai_entity()
+  local surface = char and char.surface or game.surfaces.nauvis or game.surfaces[1]
+  if not surface then return json.encode({error = "aucune surface"}) end
+  local origin = char and char.position or {x = 0, y = 0}
+  local r = math.min((radius and radius > 0) and radius or 300, 500)
+  local nmax = math.min((max_patches and max_patches > 0) and max_patches or 8, 20)
+
+  local ok, res = pcall(function()
+    return surface.find_entities_filtered{name = resource, area = {
+      left_top = {x = origin.x - r, y = origin.y - r},
+      right_bottom = {x = origin.x + r, y = origin.y + r}}}
+  end)
+  if not ok or not res or #res == 0 then
+    return json.encode({resource = resource, patches = {}, count = 0,
+                        origin = {x = r1(origin.x), y = r1(origin.y)}})
+  end
+
+  -- Index par cellule.
+  local cells, ordre = {}, {}
+  for _, e in ipairs(res) do
+    local cx = math.floor(e.position.x / CELL)
+    local cy = math.floor(e.position.y / CELL)
+    local k = cx .. ":" .. cy
+    if not cells[k] then
+      cells[k] = {cx = cx, cy = cy, list = {}}
+      table.insert(ordre, k)
+    end
+    table.insert(cells[k].list, e)
+  end
+
+  -- Flood-fill 8-connexe sur les cellules occupees.
+  local vues, patches = {}, {}
+  for _, k0 in ipairs(ordre) do
+    if not vues[k0] then
+      local pile, groupe = {k0}, {}
+      vues[k0] = true
+      while #pile > 0 do
+        local k = table.remove(pile)
+        local c = cells[k]
+        table.insert(groupe, c)
+        for dx = -1, 1 do for dy = -1, 1 do
+          local vk = (c.cx + dx) .. ":" .. (c.cy + dy)
+          if cells[vk] and not vues[vk] then
+            vues[vk] = true
+            table.insert(pile, vk)
+          end
+        end end
+      end
+      local x1, y1, x2, y2 = math.huge, math.huge, -math.huge, -math.huge
+      local n, amount = 0, 0
+      for _, c in ipairs(groupe) do
+        for _, e in ipairs(c.list) do
+          local p = e.position
+          if p.x < x1 then x1 = p.x end if p.x > x2 then x2 = p.x end
+          if p.y < y1 then y1 = p.y end if p.y > y2 then y2 = p.y end
+          n = n + 1
+          local oka, a = pcall(function() return e.amount end)
+          if oka and a then amount = amount + a end
+        end
+      end
+      local cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+      table.insert(patches, {
+        x = r1(cx), y = r1(cy), count = n, amount = math.floor(amount),
+        x1 = math.floor(x1), y1 = math.floor(y1),
+        x2 = math.floor(x2), y2 = math.floor(y2),
+        dist = r1(math.sqrt((cx - origin.x) ^ 2 + (cy - origin.y) ^ 2)),
+      })
+    end
+  end
+
+  table.sort(patches, function(a, b) return a.dist < b.dist end)
+  local sortie = {}
+  for i = 1, math.min(#patches, nmax) do table.insert(sortie, patches[i]) end
+  return json.encode({resource = resource, patches = sortie, count = #res,
+                      groupes = #patches, origin = {x = r1(origin.x), y = r1(origin.y)}})
+end
+
 -- scan_water_edge(radius) : tiles d'eau adjacents à terre (bord d'un plan d'eau).
 -- Retourne {tiles:[{x,y}], bbox, count, origin}. Non destructif. Sert à positionner
 -- un offshore-pump (2x1) sur une tuile d'eau au bord, connectée à la terre ferme.

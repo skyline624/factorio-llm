@@ -113,6 +113,20 @@ class ModApi:
         (chaque tuile = 1 entite resource ; total_amount = somme des initial_amount)."""
         return self._call("fl_tools", "scan_patch", resource, radius)
 
+    def scan_patches(self, resource: str, radius: float = 300.0,
+                     max_patches: int = 8) -> dict:
+        """Les gisements DISTINCTS d'une ressource, séparés et décrits. Non destructif.
+
+        Retourne {resource, patches:[{x,y,count,amount,x1,y1,x2,y2,dist}], count,
+        groupes, origin}, trié par distance.
+
+        `scan_patch` (singulier) rend une bbox unique pour TOUT ce qu'il trouve : mesuré,
+        1052 tuiles de charbon donnaient une boîte de 318×240 qui n'entoure aucun
+        gisement réel. On ne peut ni s'y ancrer, ni comparer deux sites — donc pas
+        choisir. Ici chaque gisement est une entrée, avec de quoi arbitrer.
+        """
+        return self._call("fl_tools", "scan_patches", resource, radius, max_patches)
+
     def scan_water_edge(self, radius: float = 200.0) -> dict:
         """Tiles d'eau adjacents à terre (bord d'un plan d'eau) pour offshore-pump.
         Retourne {tiles:[{x,y}], bbox, count, origin}. Non destructif."""

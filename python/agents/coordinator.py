@@ -624,6 +624,46 @@ class Coordinator:
     AMORCE = 50
     AMORCE_BRAS = 5
 
+    def choisir_gisement(self, resource: str, depuis: tuple[float, float],
+                         portee_max: float = 60.0):
+        """Quel gisement exploiter. Le déterministe énumère, l'arbitre choisit.
+
+        C'est le premier arbitrage du projet où plusieurs réponses se valent réellement :
+        mesuré en jeu, un gisement de fer à 174 tuiles n'en contient que 136 quand un
+        autre, à 280, en contient 738. Ni la distance ni la taille ne domine, et un
+        gisement bordé d'un nid perdra sa belt avant d'avoir servi.
+
+        Le veto du déterministe porte sur la LÉGALITÉ (portée d'une belt), jamais sur la
+        préférence. L'option 0 reste « le plus proche » — le comportement historique,
+        donc ce que fait la boucle si aucun arbitre n'est branché ou s'il défaille.
+        """
+        from services.gisements import enumerer
+        options = enumerer(self.api, resource, depuis, portee_max=portee_max)
+        if not options:
+            return None
+        if self.arbitre is None or len(options) == 1:
+            return options[0]
+        # On emprunte le contrat de l'arbitre tel quel : des `Decision` décrivant chacune
+        # une option, et un indice en retour. Rien de neuf à apprendre pour le modèle.
+        propositions = [Decision(action="exploiter_gisement", raison=str(g),
+                                 priorite=PRIORITE["batir_production"])
+                        for g in options]
+        try:
+            i = self.arbitre(self.observer_leger(), propositions)
+        except Exception as e:
+            self.journal.append(f"arbitrage du gisement en erreur : {type(e).__name__}")
+            i = 0
+        if not isinstance(i, int) or isinstance(i, bool) or not 0 <= i < len(options):
+            i = 0
+        if i != 0:
+            self.journal.append(f"gisement choisi hors du plus proche : {options[i]}")
+        return options[i]
+
+    def observer_leger(self) -> EtatUsine:
+        """État minimal pour un arbitrage annexe, sans repayer un diagnostic complet."""
+        return EtatUsine(machines=0, inventaire=perception.inventory(self.api),
+                         menace=self.derniere_menace)
+
     def _relais_de_retour(self, drill, depart, bras: str, foreur: str):
         """Une tuile par où faire passer la belt pour qu'un bras puisse réalimenter le foreur.
 
@@ -671,14 +711,18 @@ class Coordinator:
         from services.micro_planner import MicroRequest, plan_micro
         from services.executor import execute_micro
 
+        # Quel gisement : une décision, pas un calcul. Cf. `choisir_gisement`.
+        choix = self.choisir_gisement(item, (cible.x, cible.y), self.PORTEE_APPRO)
+        if choix is None:
+            return False, (f"aucun gisement de {item} à moins de {self.PORTEE_APPRO:.0f} "
+                           f"tuiles : c'est un problème de train, pas de belt")
+        # On s'ancre sur une TUILE réelle du gisement retenu, jamais sur son centre : le
+        # centre d'une boîte peut tomber sur un trou (piège déjà payé avec `scan_patch`).
         sp = self.builder._scan_patch_local(item)
         ancre = self.builder._anchor_on_ore(sp, 4) if sp.get("sample") else None
         if ancre is None:
-            return False, f"aucun gisement de {item} exploitable"
+            ancre = (choix.x, choix.y)
         distance = math.hypot(ancre[0] - cible.x, ancre[1] - cible.y)
-        if distance > self.PORTEE_APPRO:
-            return False, (f"gisement de {item} à {distance:.0f} tuiles : trop loin pour "
-                           f"une belt (limite {self.PORTEE_APPRO:.0f}), il faudrait un train")
 
         # 0. De quoi amorcer. Si la réserve a fondu, on va la reprendre à la main sur le
         #    gisement — c'est ce que fait un joueur, et c'est la seule sortie quand le

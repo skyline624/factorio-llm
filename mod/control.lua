@@ -65,6 +65,10 @@ remote.add_interface("fl_tools", {
   scan_patch = function(resource, radius)
     safe(function() return tools.scan_patch(resource, radius) end)
   end,
+  -- E16 : les gisements SEPARES, pour pouvoir en choisir un plutot que subir le plus proche.
+  scan_patches = function(resource, radius, max_patches)
+    safe(function() return tools.scan_patches(resource, radius, max_patches) end)
+  end,
   -- S2a : bord d'un plan d'eau (tiles d'eau adjacents à terre) pour offshore-pump.
   scan_water_edge = function(radius)
     safe(function() return tools.scan_water_edge(radius) end)
