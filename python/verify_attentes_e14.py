@@ -30,7 +30,7 @@ from agents.coordinator import Coordinator, Decision
 from core.mod_api import ModApi
 from core.rcon import get_rcon
 from services.factory_doctor import Symptome
-from services.flux import BRAS_MAL_ORIENTE, INTERROMPUE, suivre_flux
+from services.flux import BRAS_MAL_ORIENTE, INTERROMPUE, reparer_flux, suivre_flux
 
 RESULTS: list[tuple[str, bool, str]] = []
 
@@ -43,10 +43,21 @@ def rec(name: str, ok: bool, detail: str) -> None:
 def _chaine(rcon) -> tuple:
     """(foreur, drop, boiler, bras) tels qu'ils sont RÉELLEMENT sur la carte."""
     brut = str(rcon.query_lua(
+        # Le foreur RETENU est le plus proche du boiler, pas le premier venu : plusieurs
+        # chaînes peuvent coexister sur la carte, et suivre le flux d'un foreur vers un
+        # boiler qui n'est pas le sien produit un « chemin qui tourne en rond » où rien
+        # n'est cassé. Le test accuserait alors le produit d'un défaut qui est le sien.
         "local s = game.surfaces[1] local d, b, i = nil, nil, nil "
-        "for _, e in pairs(s.find_entities_filtered{type='mining-drill'}) do d = e end "
         "for _, e in pairs(s.find_entities_filtered{name='boiler'}) do b = e end "
-        "for _, e in pairs(s.find_entities_filtered{type='inserter'}) do i = e end "
+        "if not b then rcon.print('INCOMPLET') return end "
+        "local md = 1e9 "
+        "for _, e in pairs(s.find_entities_filtered{type='mining-drill'}) do "
+        "local q = (e.position.x-b.position.x)^2 + (e.position.y-b.position.y)^2 "
+        "if q < md then md = q d = e end end "
+        "local mi = 1e9 "
+        "for _, e in pairs(s.find_entities_filtered{type='inserter'}) do "
+        "local q = (e.position.x-b.position.x)^2 + (e.position.y-b.position.y)^2 "
+        "if q < mi then mi = q i = e end end "
         "if not (d and b and i) then rcon.print('INCOMPLET') return end "
         "rcon.print(string.format('%.1f;%.1f;%.1f;%.1f;%.1f;%.1f;%.1f;%.1f', "
         "d.position.x, d.position.y, d.drop_position.x, d.drop_position.y, "
@@ -78,6 +89,13 @@ def main() -> int:
     print(f"       . foreur@{foreur} drop={depart} -> boiler@{boiler}, bras@{bras}")
 
     # --- 1 : la chaîne saine est reconnue continue ---
+    # Un run précédent a pu laisser une cassure : on la répare AVANT de mesurer, sinon
+    # les injections suivantes s'ajouteraient à une panne préexistante et le test
+    # accuserait le produit de ce qu'il a lui-même laissé.
+    if not suivre_flux(api, depart, "boiler", boiler).continu:
+        ok_r, det_r = reparer_flux(api, depart, "boiler", boiler)
+        print(f"       . chaîne laissée cassée par un run précédent -> "
+              f"{'remise en état' if ok_r else 'IRRÉPARABLE'} ({det_r[:80]})")
     r0 = suivre_flux(api, depart, "boiler", boiler)
     rec("e14-1 : la chaîne bâtie est reconnue continue", r0.continu, str(r0))
     if not r0.continu:
@@ -99,10 +117,10 @@ def main() -> int:
         not r1.continu and r1.cause == INTERROMPUE,
         f"{r1.cause} en {r1.rupture} (segment détruit en {trou})")
 
-    # On remet la tuile en place pour isoler la cassure suivante.
-    if trou:
-        api.run_action(api.place_entity_at, "transport-belt", trou[0], trou[1],
-                       "east", None, timeout=20.0)
+    # Remise en état par le SERVICE, pas par une direction devinée : reposer la belt
+    # avec un « east » en dur laissait la ligne coupée dès qu'elle tournait, et la
+    # cassure suivante mesurait alors deux pannes au lieu d'une.
+    reparer_flux(api, depart, "boiler", boiler)
 
     # --- 3 : un segment RETOURNÉ (le défaut d'E13 : rien ne manque) ---
     vire = str(rcon.query_lua(

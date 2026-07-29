@@ -38,10 +38,21 @@ def rec(name: str, ok: bool, detail: str) -> None:
 
 def _chaine(rcon) -> tuple:
     brut = str(rcon.query_lua(
+        # Le foreur RETENU est le plus proche du boiler, pas le premier venu : plusieurs
+        # chaînes peuvent coexister sur la carte, et suivre le flux d'un foreur vers un
+        # boiler qui n'est pas le sien produit un « chemin qui tourne en rond » où rien
+        # n'est cassé. Le test accuserait alors le produit d'un défaut qui est le sien.
         "local s = game.surfaces[1] local d, b, i = nil, nil, nil "
-        "for _, e in pairs(s.find_entities_filtered{type='mining-drill'}) do d = e end "
         "for _, e in pairs(s.find_entities_filtered{name='boiler'}) do b = e end "
-        "for _, e in pairs(s.find_entities_filtered{type='inserter'}) do i = e end "
+        "if not b then rcon.print('INCOMPLET') return end "
+        "local md = 1e9 "
+        "for _, e in pairs(s.find_entities_filtered{type='mining-drill'}) do "
+        "local q = (e.position.x-b.position.x)^2 + (e.position.y-b.position.y)^2 "
+        "if q < md then md = q d = e end end "
+        "local mi = 1e9 "
+        "for _, e in pairs(s.find_entities_filtered{type='inserter'}) do "
+        "local q = (e.position.x-b.position.x)^2 + (e.position.y-b.position.y)^2 "
+        "if q < mi then mi = q i = e end end "
         "if not (d and b) then rcon.print('INCOMPLET') return end "
         "rcon.print(string.format('%.1f;%.1f;%.1f;%.1f', "
         "d.drop_position.x, d.drop_position.y, b.position.x, b.position.y))")).strip()
@@ -70,6 +81,10 @@ def main() -> int:
     depart, boiler = ch
     print(f"       . flux de {depart} vers boiler@{boiler}")
 
+    if not suivre_flux(api, depart, "boiler", boiler).continu:
+        ok_r, det_r = reparer_flux(api, depart, "boiler", boiler)
+        print(f"       . chaîne laissée cassée par un run précédent -> "
+              f"{'remise en état' if ok_r else 'IRRÉPARABLE'} ({det_r[:70]})")
     sain = suivre_flux(api, depart, "boiler", boiler)
     rec("e14c-0 : la chaîne de départ est saine", sain.continu, str(sain))
     if not sain.continu:

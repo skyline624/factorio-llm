@@ -105,6 +105,36 @@ def main() -> int:
     rcon.query_lua(f"local p = game.players[1] if p and p.character then {ins} end "
                    f"rcon.print('ok')")
 
+    # MISE EN CONDITION : un gisement de charbon à portée de marche.
+    #
+    # Ce test mesure la CONTRAINTE DE PORTÉE à la pose, pas l'endurance du personnage.
+    # Sur cette carte le charbon le plus proche est à 187 tuiles, derrière huit nids avec
+    # `peaceful=false` : y envoyer un joueur nu ne mesurerait que sa mort. On seme donc un
+    # petit gisement à une trentaine de tuiles, exactement comme on complète l'inventaire.
+    # Rien de ce qui est MESURÉ ensuite — marche, portée, pose, flux — n'est simulé.
+    depart_j = _pos(api)
+    proche = rcon.query_lua(
+        f"local s = game.surfaces[1] "
+        f"rcon.print(s.count_entities_filtered{{position={{{depart_j[0]},{depart_j[1]}}}, "
+        f"radius=70, name='coal'}})")
+    try:
+        assez = int(str(proche).strip()) > 40
+    except ValueError:
+        assez = False
+    if not assez:
+        seme = rcon.query_lua(
+            f"local s = game.surfaces[1] local n = 0 "
+            f"local ox, oy = {depart_j[0] + 25.0}, {depart_j[1] + 25.0} "
+            f"s.request_to_generate_chunks({{ox, oy}}, 3) s.force_generate_chunk_requests() "
+            f"for dx = -3, 3 do for dy = -3, 3 do "
+            f"local x, y = math.floor(ox + dx), math.floor(oy + dy) "
+            f"if s.get_tile(x, y).collides_with('water_tile') == false "
+            f"and s.count_entities_filtered{{area={{{{x, y}}, {{x + 1, y + 1}}}}}} == 0 then "
+            f"s.create_entity{{name='coal', position={{x, y}}, amount=2000}} n = n + 1 "
+            f"end end end rcon.print(n)")
+        print(f"       . mise en condition : {str(seme).strip()} tuiles de charbon "
+              f"semées à 35 tuiles (le gisement naturel est à 187, derrière 8 nids)")
+
     sp = api.scan_patch("coal", 400.0)
     ech = sp.get("sample") or []
     if not ech:

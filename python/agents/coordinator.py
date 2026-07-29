@@ -607,7 +607,11 @@ class Coordinator:
             drill_size=taille, furnace_size=3))
         mp.entities = [e for e in mp.entities if e.role == "drill"]
         mp.totals = {foreur: 1}
-        rap = execute_micro(self.api, mp, generate=False, approach=False, timeout=30.0)
+        # `approach=True` : en production le mod refuse toute pose au-delà de
+        # `build_distance` (« walk closer first », mesuré à 10 tuiles). Le foreur est sur
+        # le gisement, donc à des dizaines de tuiles de la machine qu'on alimente — il
+        # FAUT y aller. En test_mode l'approche est un téléport, elle ne coûte rien.
+        rap = execute_micro(self.api, mp, generate=False, approach=True, timeout=90.0)
         if not rap.ok or not rap.placed:
             return False, f"foreur non posé sur {item} : {rap.missing or rap.blocked[:1]}"
         drill = rap.placed[0]
@@ -642,6 +646,11 @@ class Coordinator:
         # les quatre côtés d'une machine, pas ses coins. Une arrivée oblique laisse la
         # belt décalée en x ET en y — 50 segments posés, et le seul emplacement libre se
         # trouvait en diagonale du boiler, d'où aucun dépôt n'est possible.
+        # En `test_mode` le character headless bâtit à n'importe quelle distance : faire
+        # marcher l'avatar le long de la belt ne servirait qu'à ralentir les tests.
+        etat_mod = self.api.get_state()
+        portee = 0.0 if etat_mod.get("test_mode") else 8.0
+
         vx, vy = depart[0] - cible.x, depart[1] - cible.y
         if abs(vx) >= abs(vy):
             ux, uy = (1.0 if vx > 0 else -1.0), 0.0
@@ -654,7 +663,7 @@ class Coordinator:
         for recul in (4.0, 3.0, 2.0):
             arrivee = (cible.x + ux * recul, cible.y + uy * recul)
             seg, complete = site_finder.place_belt_line(
-                self.api, belts[-1] if belts else depart, arrivee)
+                self.api, belts[-1] if belts else depart, arrivee, portee=portee)
             belts.extend(seg)
             essais.append(f"recul {recul:.0f} -> {len(seg)} segment(s), "
                           f"bout {belts[-1] if belts else 'aucun'}")
@@ -822,7 +831,11 @@ class Coordinator:
             facing=4, anchor=ancre, drill_tier="electric-mining-drill",
             inserter_tier="inserter", furnace_tier="electric-furnace",
             drill_size=3, furnace_size=3))
-        rap = execute_micro(self.api, mp, generate=False, approach=False, timeout=30.0)
+        # `approach=True` : en production le mod refuse toute pose au-delà de
+        # `build_distance` (« walk closer first », mesuré à 10 tuiles). Le foreur est sur
+        # le gisement, donc à des dizaines de tuiles de la machine qu'on alimente — il
+        # FAUT y aller. En test_mode l'approche est un téléport, elle ne coûte rien.
+        rap = execute_micro(self.api, mp, generate=False, approach=True, timeout=90.0)
         if not rap.ok:
             return False, f"chaîne non posée : {rap.missing or rap.blocked[:1]}"
         ancrage = self.dernier_poteau or ancre

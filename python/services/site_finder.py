@@ -138,7 +138,8 @@ def place_pole_line(api, depart: tuple[float, float], arrivee: tuple[float, floa
 
 def place_belt_line(api, depart: tuple[float, float], arrivee: tuple[float, float],
                     belt: str = "transport-belt", timeout: float = 20.0,
-                    garde: int = 200) -> tuple[list[tuple[float, float]], bool]:
+                    garde: int = 200, portee: float = 0.0
+                    ) -> tuple[list[tuple[float, float]], bool]:
     """Pose une belt de `depart` vers `arrivee`, en L, chaque segment ORIENTÉ vers l'aval.
 
     L'orientation est ce qui distingue une belt d'une file d'objets décoratifs : une
@@ -162,7 +163,18 @@ def place_belt_line(api, depart: tuple[float, float], arrivee: tuple[float, floa
         y += 1.0 if y1 > y else -1.0
 
     poses: list[tuple[float, float]] = []
+    # `portee` > 0 : le personnage SUIT la belt au lieu de la dérouler sur place.
+    #
+    # Mesuré en production, joueur connecté : `build_distance` vaut 10, et le mod refuse
+    # toute pose au-delà — « walk closer first ». Une ligne de quarante tuiles posée sans
+    # bouger s'arrête donc au dixième segment. Le mode test masquait entièrement la
+    # contrainte : le character headless bâtit à n'importe quelle distance.
+    ancre = None
     for i, (bx, by) in enumerate(tuiles):
+        if portee > 0.0:
+            if ancre is None or math.hypot(bx - ancre[0], by - ancre[1]) > portee - 2.0:
+                api.run_action(api.walk_to, bx, by, timeout=max(timeout, 90.0))
+                ancre = (bx, by)
         suivant = tuiles[i + 1] if i + 1 < len(tuiles) else (x1, y1)
         dx, dy = suivant[0] - bx, suivant[1] - by
         if abs(dx) >= abs(dy):
