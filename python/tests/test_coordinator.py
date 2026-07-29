@@ -391,8 +391,19 @@ class _CoordFactice:
         self.journal: list[str] = []
         self.appels = 0
         self.arbitre = None          # `tick` le lit ; ces tests portent sur la boucle
+        self.api = None
+        self.ecarts: list = []
         self.run = Coordinator.run.__get__(self)
         self.tick = Coordinator.tick.__get__(self)
+
+    def _attente(self, d):
+        """Aucune attente ici : ces tests portent sur l'enchaînement des tours.
+
+        La vérification des attentes est éprouvée séparément (`test_attente_*`), avec un
+        faux api qui rend de vraies mesures — la mêler à la boucle rendrait les deux
+        moins lisibles.
+        """
+        return None
 
     def observer(self):
         self.appels += 1
@@ -444,6 +455,153 @@ def test_run_respecte_le_plafond() -> None:
     assert ok
 
 
+class _ApiMesure:
+    """Un api réduit à ce que les attentes lisent : des entités et un réseau."""
+
+    def __init__(self, entites=(), network=None):
+        self.entites = list(entites)
+        self.network = network
+        self.attentes_lues = 0
+
+    def inspect_at(self, x, y, radius=0.5):
+        # Recherche par AIRE, comme le mod : une entité est présente dès que son EMPRISE
+        # touche la zone interrogée. Filtrer sur son centre — ce que faisait le mod avant
+        # E13 — rendait invisible toute machine large sous le point demandé.
+        self.attentes_lues += 1
+        return {"entities": [
+            e for e in self.entites
+            if abs(e["x"] - x) <= radius + e.get("w", 0.5)
+            and abs(e["y"] - y) <= radius + e.get("h", 0.5)]}
+
+    def get_power_state(self, x, y, radius=4.0):
+        return {"networkId": self.network}
+
+    def run_action(self, fn, *args, timeout=None):
+        return {"ok": True}
+
+    def wait(self, ticks):
+        return {"ok": True}
+
+
+def _coord_mesure(api):
+    from agents.coordinator import Coordinator
+    c = Coordinator.__new__(Coordinator)
+    c.api = api
+    c.zone = (0.0, 0.0)
+    c.tourelle = "gun-turret"
+    c._chaines = {}
+    return c
+
+
+def test_attente_ravitailler_tenue_et_decue() -> None:
+    """Un réservoir encore à sec après ravitaillement doit être CONSTATÉ.
+
+    C'est le cas le plus simple, et pourtant celui que la boucle ne voyait pas : elle
+    journalisait « ravitaillement de boiler » sans jamais relire le statut.
+    """
+    from agents.coordinator import Decision
+    from services.factory_doctor import Symptome
+    cible = Symptome(name="boiler", x=0.0, y=0.0, cause="sans_combustible",
+                     gravite=2, detail="vide")
+    d = Decision(action="ravitailler", raison="", cible=cible)
+
+    plein = _coord_mesure(_ApiMesure([{"name": "boiler", "x": 0.0, "y": 0.0,
+                                       "status": "working"}]))
+    tenue, _ = plein._attente(d).evaluer(plein.api)
+
+    sec = _coord_mesure(_ApiMesure([{"name": "boiler", "x": 0.0, "y": 0.0,
+                                     "status": "no_fuel"}]))
+    decue, observe = sec._attente(d).evaluer(sec.api)
+
+    ok = tenue and not decue and "no_fuel" in observe
+    rec("test_attente_ravitailler_tenue_et_decue", ok,
+        f"machine alimentée -> {tenue}, machine encore à sec -> {decue} ({observe})")
+    assert ok
+
+
+def test_attente_machine_absente_est_un_echec() -> None:
+    """Une machine introuvable ne doit jamais compter comme réparée.
+
+    Sans cette garde, une entité qu'on croit avoir posée et qui n'existe pas produirait
+    le même journal qu'une réparation réussie.
+    """
+    from agents.coordinator import Decision
+    from services.factory_doctor import Symptome
+    cible = Symptome(name="boiler", x=0.0, y=0.0, cause="sans_combustible",
+                     gravite=2, detail="vide")
+    c = _coord_mesure(_ApiMesure([]))
+    tenue, observe = c._attente(Decision(action="ravitailler", raison="",
+                                         cible=cible)).evaluer(c.api)
+    ok = not tenue and "absente" in observe
+    rec("test_attente_machine_absente_est_un_echec", ok, f"tenue={tenue} ({observe})")
+    assert ok
+
+
+def test_attente_approvisionner_suit_le_flux() -> None:
+    """LE critère du chantier : une chaîne posée mais rompue doit être vue comme rompue.
+
+    Trois des six défauts d'E13 (raccord retourné, bras qui dépose à côté, belt trouée)
+    se manifestaient tous par « chaîne bâtie » suivi d'un boiler qui restait vide. Ici la
+    chaîne EXISTE — 4 belts, un bras — mais le bras dépose dans le vide, et l'attente
+    doit le refuser.
+    """
+    from agents.coordinator import Decision
+    from services.factory_doctor import Symptome
+    cible = Symptome(name="boiler", x=8.0, y=0.0, cause="sans_combustible",
+                     gravite=2, detail="vide")
+    d = Decision(action="approvisionner", raison="", cible=cible)
+
+    belts = [{"name": "transport-belt", "type": "transport-belt", "x": 0.5 + i,
+              "y": 0.5, "direction": "east"} for i in range(4)]
+    bras_ok = {"name": "burner-inserter", "type": "inserter", "x": 4.5, "y": 0.5,
+               "pickupX": 3.5, "pickupY": 0.5, "dropX": 7.6, "dropY": 0.5}
+    bras_ko = dict(bras_ok, dropX=4.5, dropY=-1.7)     # dépose au nord, dans le vide
+    boiler = {"name": "boiler", "type": "boiler", "x": 8.0, "y": 0.5,
+              "w": 1.3, "h": 0.8}          # emprise 3x2, mesurée en jeu
+
+    bon = _coord_mesure(_ApiMesure(belts + [bras_ok, boiler]))
+    bon._chaines[("boiler", 8, 0)] = (0.5, 0.5)
+    tenue, _ = bon._attente(d).evaluer(bon.api)
+
+    casse = _coord_mesure(_ApiMesure(belts + [bras_ko, boiler]))
+    casse._chaines[("boiler", 8, 0)] = (0.5, 0.5)
+    decue, observe = casse._attente(d).evaluer(casse.api)
+
+    ok = tenue and not decue and "bras_depose_dans_le_vide" in observe
+    rec("test_attente_approvisionner_suit_le_flux", ok,
+        f"chaîne saine -> {tenue}, bras qui dépose à côté -> {decue}")
+    assert ok, observe
+
+
+def test_ecart_journalise_quand_lattente_est_decue() -> None:
+    """La boucle doit consigner l'écart, sinon il n'existe pas pour la suite."""
+    from agents.coordinator import Coordinator, Decision, EtatUsine
+    from services.factory_doctor import Symptome
+    cible = Symptome(name="boiler", x=0.0, y=0.0, cause="sans_combustible",
+                     gravite=2, detail="vide")
+    api = _ApiMesure([{"name": "boiler", "x": 0.0, "y": 0.0, "status": "no_fuel"}])
+    c = _coord_mesure(api)
+    c.journal, c.ecarts, c.arbitre = [], [], None
+    c.observer = lambda: EtatUsine()
+    c.agir = lambda d: (True, "factice")
+    c.tick = Coordinator.tick.__get__(c)
+    c._attente = Coordinator._attente.__get__(c)
+    # `decide` sur un état vide rendrait « rien » : on force la décision à vérifier.
+    import agents.coordinator as mod
+    vrai_decide = mod.decide
+    mod.decide = lambda etat, arbitre=None: Decision(action="ravitailler", raison="",
+                                                     cible=cible)
+    try:
+        c.tick()
+    finally:
+        mod.decide = vrai_decide
+    ok = len(c.ecarts) == 1 and c.ecarts[0].action == "ravitailler" \
+        and any("ÉCART" in j for j in c.journal)
+    rec("test_ecart_journalise_quand_lattente_est_decue", ok,
+        f"{len(c.ecarts)} écart(s) : {c.ecarts[0] if c.ecarts else '-'}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -469,6 +627,10 @@ def main() -> int:
         test_run_sarrete_quand_tout_tourne,
         test_run_sarrete_si_ca_ne_progresse_plus,
         test_run_respecte_le_plafond,
+        test_attente_ravitailler_tenue_et_decue,
+        test_attente_machine_absente_est_un_echec,
+        test_attente_approvisionner_suit_le_flux,
+        test_ecart_journalise_quand_lattente_est_decue,
     ]
     for t in tests:
         t()

@@ -505,6 +505,21 @@ function M.scan_patch(resource, radius)
     local oka, amt = pcall(function() return re.initial_amount end)
     if oka and amt then total_amount = total_amount + amt end
   end
+  -- Le sample est trie par distance a l'observateur, et c'est essentiel : sans tri, il
+  -- rendait les 12 PREMIERES entites de l'ordre d'iteration du moteur. Mesure en jeu --
+  -- joueur en (0,-41), charbon a 64 tuiles au sud-ouest, sample[0] a 258 tuiles au nord.
+  -- Tous les appelants ancrent sur sample[1] en le croyant proche : l'agent partait
+  -- traverser 258 tuiles de terrain hostile, et `approvisionner` aurait conclu « trop
+  -- loin pour une belt, il faudrait un train » alors qu'un gisement etait a portee.
+  --
+  -- La `bbox` reste l'enveloppe de TOUS les gisements du rayon (1171 tuiles de charbon
+  -- sur plusieurs patches n'ont pas de boite commune qui ait un sens) : on ancre sur une
+  -- tuile du sample, jamais sur le centre de la bbox.
+  table.sort(resources, function(a, b)
+    local da = (a.position.x - origin.x) ^ 2 + (a.position.y - origin.y) ^ 2
+    local db = (b.position.x - origin.x) ^ 2 + (b.position.y - origin.y) ^ 2
+    return da < db
+  end)
   local sample = {}
   for i = 1, math.min(#resources, 12) do
     table.insert(sample, {x = math.floor(resources[i].position.x), y = math.floor(resources[i].position.y)})

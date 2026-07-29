@@ -33,7 +33,7 @@ associe l'action qui répare, chacune correspondant à une primitive existante.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Protocol
+from typing import Any, Callable, Optional, Protocol
 
 from services import perception
 from services.factory_doctor import Diagnostic, Symptome, diagnose_zone
@@ -122,6 +122,59 @@ class EtatUsine:
         machines (`sans_courant`) et traité en réparation, ce qui est sa place.
         """
         return self.reseau is not None
+
+
+@dataclass
+class Attente:
+    """Ce qui doit être VRAI après une action pour qu'elle ait servi à quelque chose.
+
+    C'est la pièce qui manquait pour que l'agent sache qu'il a échoué. Jusqu'ici la
+    boucle relisait bien l'état après avoir agi, mais ne le confrontait à rien : « j'ai
+    agi » n'était jamais opposé à « ça a marché ». Une chaîne posée dont aucun charbon ne
+    sortait était donc journalisée « chaîne bâtie », et le tour suivant passait à autre
+    chose.
+
+    L'attente est une MESURE, pas un raisonnement : une grandeur lue dans le jeu et un
+    prédicat dessus. Elle est donc vérifiable hors ligne avec un faux api.
+    """
+    description: str
+    mesurer: Callable[[Any], Any]
+    satisfait: Callable[[Any], bool]
+    delai_ticks: int = 0          # laisser le jeu réagir avant de conclure
+
+    def evaluer(self, api) -> tuple[bool, str]:
+        """(tenue, ce qui a été observé). Une mesure impossible n'est jamais un succès."""
+        if self.delai_ticks:
+            try:
+                api.run_action(api.wait, self.delai_ticks,
+                               timeout=max(30.0, self.delai_ticks / 10.0))
+            except Exception:
+                pass              # l'attente reste évaluable, simplement plus tôt
+        try:
+            valeur = self.mesurer(api)
+        except Exception as e:
+            return False, f"mesure impossible ({type(e).__name__})"
+        try:
+            return bool(self.satisfait(valeur)), str(valeur)[:120]
+        except Exception as e:
+            return False, f"critère illisible ({type(e).__name__}) sur {str(valeur)[:60]}"
+
+
+@dataclass
+class Ecart:
+    """Une action qui a été menée à son terme sans produire l'effet attendu.
+
+    C'est le signal qui n'existait pas, et sans lequel aucune enquête ne peut être
+    déclenchée — on ne cherche pas la cause d'un problème qu'on n'a pas vu.
+    """
+    action: str
+    attendu: str
+    observe: str
+    cible: Optional[Symptome] = None
+
+    def __str__(self) -> str:
+        ou = f" @({self.cible.x},{self.cible.y})" if self.cible else ""
+        return f"ÉCART {self.action}{ou} : attendu « {self.attendu} », observé {self.observe}"
 
 
 @dataclass
@@ -300,7 +353,15 @@ class Coordinator:
         self.munition = munition
         self.derniere_menace: Optional[Menace] = None
         self._ravitaillements: dict = {}
+        # D'où part la chaîne qui alimente chaque machine : la tuile de sortie du foreur.
+        # Sans ce point de départ, on ne peut pas SUIVRE le flux, et donc pas vérifier
+        # qu'une chaîne bâtie transporte réellement quelque chose.
+        self._chaines: dict = {}
         self.journal: list[str] = []
+        # Les actions menées à leur terme sans produire leur effet. C'est le signal sur
+        # lequel une enquête pourra être déclenchée ; sans lui, l'agent est aveugle à
+        # ses propres échecs.
+        self.ecarts: list[Ecart] = []
         # Mémoire de la boucle : où raccorder la prochaine chaîne, et ce qui a été bâti.
         self.dernier_poteau: Optional[tuple[float, float]] = None
         self.derniere_centrale = None
@@ -336,6 +397,71 @@ class Coordinator:
                               usine=self.zone)
         self.derniere_menace = etat.menace
         return etat
+
+    # ----- CE QU'ON ATTEND D'UNE ACTION -----
+
+    @staticmethod
+    def _statut_de(api, nom: str, x: float, y: float) -> str:
+        """Statut de la machine `nom` autour de (x, y), ou « absente ».
+
+        « Absente » n'est pas une valeur de repli commode : c'est un constat qui compte.
+        Une machine qu'on croyait avoir posée et qui n'est nulle part est un échec bien
+        plus grave qu'une machine en panne, et il ne doit pas se confondre avec elle.
+        """
+        r = api.inspect_at(x, y, 1.5)
+        for e in (r.get("entities", []) if isinstance(r, dict) else []):
+            if e.get("name") == nom:
+                return str(e.get("status", "?"))
+        return "absente"
+
+    def _attente(self, d: Decision) -> Optional[Attente]:
+        """Ce qu'il faudra constater pour que `d` compte comme réussie.
+
+        Toutes ces mesures se lisent avec l'existant (`inspect_at`, `get_power_state`,
+        `suivre_flux`). Une action sans attente connue rend None : on ne prétend pas
+        vérifier ce qu'on ne sait pas mesurer, et le silence vaut mieux qu'un faux
+        satisfecit.
+        """
+        c = d.cible
+        if d.action == "ravitailler" and c is not None:
+            return Attente(
+                f"{c.name} n'est plus à sec",
+                lambda api: self._statut_de(api, c.name, c.x, c.y),
+                lambda s: s not in ("no_fuel", "absente"),
+                delai_ticks=30)
+
+        if d.action == "approvisionner" and c is not None:
+            from services.flux import suivre_flux
+            depart = self._chaines.get((c.name, round(c.x), round(c.y)))
+            if depart is None:
+                return None                  # aucune chaîne bâtie : rien à suivre
+            return Attente(
+                f"le charbon atteint {c.name} par la chaîne",
+                lambda api: suivre_flux(api, depart, c.name, (c.x, c.y)),
+                lambda r: bool(getattr(r, "continu", False)),
+                delai_ticks=120)
+
+        if d.action == "relier" and c is not None:
+            return Attente(
+                f"{c.name} appartient à un réseau",
+                lambda api: (api.get_power_state(c.x, c.y, 3.0) or {}).get("networkId"),
+                lambda n: n is not None,
+                delai_ticks=30)
+
+        if d.action == "defendre":
+            def _tourelles_sans_munitions(api):
+                r = api.inspect_at(self.zone[0], self.zone[1], 16.0)
+                lignes = r.get("entities", []) if isinstance(r, dict) else []
+                tours = [e for e in lignes if e.get("name") == self.tourelle]
+                return f"{len(tours)} tourelle(s), " + ", ".join(
+                    str(e.get("status")) for e in tours[:6])
+            return Attente(
+                "les tourelles posées ont des munitions",
+                _tourelles_sans_munitions,
+                lambda s: "no_ammo" not in s and not s.startswith("0 "),
+                delai_ticks=30)
+
+        return None
 
     # ----- AGIT -----
 
@@ -548,7 +674,12 @@ class Coordinator:
 
         # La chaîne existe : on oublie l'historique de remplissage manuel de cette
         # machine, sinon la boucle voudrait l'automatiser à nouveau au prochain incident.
-        self._ravitaillements.pop((cible.name, round(cible.x), round(cible.y)), None)
+        cle = (cible.name, round(cible.x), round(cible.y))
+        self._ravitaillements.pop(cle, None)
+        # On retient d'où part le flux — la tuile de sortie du foreur. C'est ce qui
+        # permettra de le SUIVRE et de constater qu'il n'arrive pas, plutôt que de
+        # s'en tenir au fait que la chaîne a été posée.
+        self._chaines[cle] = depart
         # Le compte rendu dit ce que la chaîne vaut RÉELLEMENT. Une belt trouée ne
         # transporte rien et un foreur sans réalimentation s'arrête quand son amorce est
         # brûlée : annoncer « chaîne bâtie » dans ces cas-là ferait croire le problème
@@ -729,4 +860,16 @@ class Coordinator:
         d = decide(etat, self.arbitre)
         agi, detail = self.agir(d)
         self.journal.append(f"{d} -> {'agi' if agi else 'sans effet'} ({detail})")
-        return d, agi, (self.observer() if agi else etat)
+        if not agi:
+            return d, agi, etat
+
+        # L'action a été menée à son terme. Reste à savoir si elle a SERVI — ce qui
+        # n'est pas la même question, et c'est celle qu'on ne posait pas.
+        attente = self._attente(d)
+        if attente is not None:
+            tenue, observe = attente.evaluer(self.api)
+            if not tenue:
+                ecart = Ecart(d.action, attente.description, observe, d.cible)
+                self.ecarts.append(ecart)
+                self.journal.append(str(ecart))
+        return d, agi, self.observer()
