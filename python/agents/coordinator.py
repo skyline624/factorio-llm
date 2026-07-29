@@ -67,7 +67,17 @@ class EtatUsine:
 
     @property
     def a_de_l_energie(self) -> bool:
-        return self.reseau is not None and self.production_kw > 0
+        """Un réseau existe-t-il ? — et NON « produit-il en ce moment ».
+
+        Piège déjà rencontré en mesurant les centrales : un générateur ne produit que ce
+        qui est consommé. Une centrale neuve qui n'alimente encore rien affiche 0 kW.
+        Exiger `production_kw > 0` faisait conclure « pas d'énergie » et rebâtir une
+        centrale à chaque tour, indéfiniment.
+
+        Le manque RÉEL de courant n'est pas déduit ici : il est diagnostiqué sur les
+        machines (`sans_courant`) et traité en réparation, ce qui est sa place.
+        """
+        return self.reseau is not None
 
 
 @dataclass
@@ -128,11 +138,25 @@ class Coordinator:
     ne peut pas être simulé.
     """
 
-    def __init__(self, api, zone: tuple[float, float] = (0.0, 0.0), rayon: float = 30.0):
+    def __init__(self, api, zone: tuple[float, float] = (0.0, 0.0), rayon: float = 30.0,
+                 ressource: str = "iron-ore", demande_kw: float = 900.0,
+                 combustible: str = "coal", builder=None):
         self.api = api
         self.zone = zone
         self.rayon = rayon
+        self.ressource = ressource
+        self.demande_kw = demande_kw
+        self.combustible = combustible
         self.journal: list[str] = []
+        # Mémoire de la boucle : où raccorder la prochaine chaîne, et ce qui a été bâti.
+        self.dernier_poteau: Optional[tuple[float, float]] = None
+        self.derniere_centrale = None
+        if builder is None:
+            from agents.base import Contract
+            from agents.factory_builder import FactoryBuilder
+            from services.knowledge import ProductionGoal
+            builder = FactoryBuilder(api, Contract(goal=ProductionGoal("iron-plate", 0.5)))
+        self.builder = builder
 
     # ----- OBSERVE -----
 
@@ -159,12 +183,15 @@ class Coordinator:
     def agir(self, d: Decision) -> tuple[bool, str]:
         """Exécute une décision. Retourne (agi, détail).
 
-        Seules les réparations à portée d'une primitive sont traitées ici. Bâtir une
-        centrale ou une chaîne relève du FactoryBuilder : le Coordinator décide QUOI,
-        pas COMMENT — c'est la frontière posée par la roadmap.
+        Les réparations ponctuelles sont traitées ici ; bâtir est DÉLÉGUÉ aux planners
+        et à l'executor via `batir()`. Le Coordinator décide QUOI, pas COMMENT — c'est
+        la frontière posée par la roadmap, et elle tient : aucune coordonnée n'est
+        calculée dans ce fichier.
         """
         if d.action == "rien":
             return False, "rien à faire"
+        if d.action in ("batir_energie", "batir_production"):
+            return self.batir(d)
         if d.cible is None:
             return False, f"{d.action} : délégué (aucune cible ponctuelle)"
 
@@ -187,6 +214,73 @@ class Coordinator:
                     return True, f"poteau posé en ({x},{y}) pour {c.name}"
             return False, f"aucune position de poteau libre autour de {c.name}"
         return False, f"{d.action} : pas encore automatisé"
+
+    # ----- BÂTIR (délégué aux planners + executor) -----
+
+    def batir(self, d: Decision) -> tuple[bool, str]:
+        """Bâtit ce que la décision demande, en composant les services existants.
+
+        `preparer` est le seul point où le Coordinator touche au terrain : générer les
+        chunks est indispensable en headless (sans quoi `can_place` refuse tout sur du
+        non-généré) et ne détruit rien. Le dégagement de la végétation, lui, reste à
+        l'appelant : raser sans discernement détruit ce qu'on vient de bâtir.
+        """
+        from services.executor import execute_micro
+        from services.micro_planner import MicroRequest, plan_micro
+        from services.layout_planner import ResourcePatch
+        from services.power_planner import PowerRequest, plan_power
+        from services import site_finder
+
+        def preparer(x, y):
+            self.api.generate_terrain(x, y, 25.0)
+
+        if d.action == "batir_energie":
+            site = site_finder.find_power_site(self.api, vers=self.zone,
+                                               preparer=preparer)
+            if site is None:
+                return False, "aucune rive exploitable pour une centrale"
+            plan = plan_power(PowerRequest(demand_kw=self.demande_kw),
+                              origin=site.origine, pump_pos=site.pompe,
+                              pump_direction=site.direction)
+            if not plan.ok:
+                return False, f"centrale non planifiable : {plan.feasibility}"
+            # 50 unités : ~2 minutes de marche à pleine charge (0.45 charbon/s par
+            # boiler). En donner 100 vidait l'inventaire dès la première centrale et le
+            # tour suivant échouait sur `missing`. Le ravitaillement est justement une
+            # réparation que la boucle sait faire — inutile de tout donner d'un coup.
+            rap = execute_micro(self.api, plan, fuel=self.combustible, fuel_count=50,
+                                generate=False, approach=False, timeout=40.0)
+            if not rap.ok:
+                return False, (f"centrale non bâtie : missing={rap.missing} "
+                               f"blocked={rap.blocked[:1]}")
+            # Relier la centrale à la zone de travail, sans quoi elle n'alimente rien.
+            depart = next(((p.x, p.y) for p in rap.placed if p.role == "pole"),
+                          site.origine)
+            ligne, complete = site_finder.place_pole_line(self.api, depart, self.zone)
+            self.derniere_centrale = rap
+            self.dernier_poteau = ligne[-1] if ligne else depart
+            return True, (f"centrale bâtie ({len(rap.placed)} entités) à "
+                          f"{site.distance_a(self.zone):.0f} tuiles, ligne de "
+                          f"{len(ligne)} poteaux ({'complète' if complete else 'INTERROMPUE'})")
+
+        # batir_production : micro-chaîne électrique ancrée sur du minerai réel.
+        sp = self.builder._scan_patch_local(self.ressource)
+        ancre = self.builder._anchor_on_ore(sp, 4) if sp.get("sample") else None
+        if ancre is None:
+            return False, f"aucun gisement de {self.ressource} exploitable"
+        preparer(ancre[0], ancre[1])
+        mp = plan_micro(MicroRequest(
+            patch=ResourcePatch(resource=self.ressource, tiles=[], bbox=(0, 0, 0, 0)),
+            facing=4, anchor=ancre, drill_tier="electric-mining-drill",
+            inserter_tier="inserter", furnace_tier="electric-furnace",
+            drill_size=3, furnace_size=3))
+        rap = execute_micro(self.api, mp, generate=False, approach=False, timeout=30.0)
+        if not rap.ok:
+            return False, f"chaîne non posée : {rap.missing or rap.blocked[:1]}"
+        ancrage = self.dernier_poteau or ancre
+        poteaux = site_finder.place_supply_poles(self.api, rap.placed, ancrage)
+        return True, (f"chaîne posée ({len(rap.placed)} machines) sur {self.ressource}, "
+                      f"{len(poteaux)} poteau(x) de desserte")
 
     # ----- BOUCLE -----
 
