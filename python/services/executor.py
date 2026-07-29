@@ -84,8 +84,10 @@ RETRY_OFFSETS: tuple[tuple[float, float], ...] = (
     (1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0),
 )
 
-# Entités à combustible dont le nom ne commence pas par "burner-".
-_BURNER_NAMES = frozenset({"stone-furnace", "steel-furnace"})
+# Entités à combustible dont le nom ne commence pas par "burner-". Le `boiler` en fait
+# partie : il brûle du charbon pour produire la vapeur d'une centrale. Sans lui dans
+# cette liste, l'executor pose une centrale complète et ne l'allume jamais.
+_BURNER_NAMES = frozenset({"stone-furnace", "steel-furnace", "boiler"})
 
 
 def _place_opts(e) -> Optional[dict]:

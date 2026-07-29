@@ -668,7 +668,15 @@ function M.get_power_state(x, y, radius)
     if pole then
       local okst, stats = pcall(function() return pole.electric_network_statistics end)
       if okst and stats then
-        local prec = defines.flow_precision_index.five_seconds
+        -- Les categories sont du point de vue de l'ENTITE, pas du reseau :
+        --   input_counts  = entites qui ont RECU de l'energie -> les CONSOMMATEURS
+        --   output_counts = entites qui en ont FOURNI          -> les PRODUCTEURS
+        -- Mesure en jeu : sur un reseau centrale + four, input_counts={electric-furnace}
+        -- et output_counts={steam-engine}. L'intuition inverse (« ce qui entre dans le
+        -- reseau = la production ») donne une production nulle et un diagnostic faux.
+        -- Fenetre : one_minute. five_seconds sort a zero juste apres la mise en route,
+        -- ce qui ferait conclure a tort a une centrale en panne.
+        local prec = defines.flow_precision_index.one_minute
         local function total(counts, category)
           local sum = 0
           for name, _ in pairs(counts or {}) do
@@ -681,8 +689,8 @@ function M.get_power_state(x, y, radius)
           return sum
         end
         -- joules/tick -> kW : x60 ticks/s / 1000.
-        local prod = total(stats.input_counts, "input") * 60 / 1000
-        local cons = total(stats.output_counts, "output") * 60 / 1000
+        local prod = total(stats.output_counts, "output") * 60 / 1000
+        local cons = total(stats.input_counts, "input") * 60 / 1000
         out.productionKW = r1(prod)
         out.consumptionKW = r1(cons)
         if cons > 0 then out.satisfaction = r1(math.min(prod / cons, 9.9)) end
