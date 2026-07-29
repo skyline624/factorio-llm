@@ -306,15 +306,25 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
             raison=str(etat.menace),
             priorite=PRIORITE["defendre_urgence" if urgent else "defendre"]))
 
-    if not etat.a_de_l_energie:
-        options.append(Decision(action="batir_energie",
-                                raison=("aucun réseau alimenté : rien d'électrique ne "
-                                        "fonctionnera avant"),
-                                priorite=PRIORITE["batir_energie"]))
-    elif etat.machines == 0:
-        options.append(Decision(action="batir_production",
-                                raison="du courant, mais aucune machine pour en profiter",
-                                priorite=PRIORITE["batir_production"]))
+    # Les constructions passent par la MÊME mémoire d'échecs que les réparations.
+    # Elles n'ont pas de cible, et la clé sans cible est ce qui les y rattache : sans
+    # cela, `batir_energie` était retenté 1241 fois d'affilée — mesuré. Bâtir est
+    # justement ce qui coûte le plus cher à recommencer pour rien.
+    for action, condition, raison, prio in (
+            ("batir_energie", not etat.a_de_l_energie,
+             "aucun réseau alimenté : rien d'électrique ne fonctionnera avant",
+             PRIORITE["batir_energie"]),
+            ("batir_production", etat.a_de_l_energie and etat.machines == 0,
+             "du courant, mais aucune machine pour en profiter",
+             PRIORITE["batir_production"])):
+        if not condition:
+            continue
+        rates = etat.echecs.get((action, "", 0, 0), 0)
+        renonce = rates >= SEUIL_ABANDON
+        options.append(Decision(
+            action=action,
+            raison=raison + (f" — ÉCHOUÉ {rates} fois, on n'insiste plus" if renonce else ""),
+            priorite=0 if renonce else prio, faisable=not renonce))
 
     if not options:
         options.append(Decision(action="rien",
@@ -440,6 +450,10 @@ class Coordinator:
         # liste de travail : chaque cause qu'on ne sait pas encore réparer y figure au
         # lieu d'être redécouverte à la main au chantier suivant.
         self.constats: list = []
+        # Tous les arbitrages, d'où qu'ils viennent. `Decision.arbitrage` ne trace que
+        # ceux de `decide` ; le choix du gisement en est un autre, et l'oublier ferait
+        # conclure « le modèle n'est jamais consulté » alors qu'il l'a été 44 fois.
+        self.arbitrages: list = []
         # `ombre` branche AUSSI l'enquêteur : il observe les échecs et les nomme, sans
         # déclencher de réparation. Rien n'est risqué, et l'on mesure ce qu'il vaut.
         if ombre and enqueteur is None:
@@ -734,6 +748,8 @@ class Coordinator:
         except Exception as e:
             self.journal.append(f"arbitrage du gisement en erreur : {type(e).__name__}")
             i = 0
+        self.arbitrages.append(("gisement", len(options),
+                                i if isinstance(i, int) and not isinstance(i, bool) else 0))
         if not isinstance(i, int) or isinstance(i, bool) or not 0 <= i < len(options):
             i = 0
         if i != 0:
@@ -1314,17 +1330,21 @@ class Coordinator:
 
         # On RETIENT l'échec, par action et par cible. Un compteur remis à zéro au succès :
         # ce qui compte est l'acharnement, pas le total sur la partie.
-        if d.cible is not None:
-            cle = (d.action, d.cible.name, round(d.cible.x), round(d.cible.y))
-            if agi:
-                self._echecs.pop(cle, None)
-            else:
-                self._echecs[cle] = self._echecs.get(cle, 0) + 1
-                if self._echecs[cle] == SEUIL_ABANDON:
-                    self.journal.append(
-                        f"ABANDON de « {d.action} » sur {d.cible.name}"
-                        f"@({d.cible.x},{d.cible.y}) après {SEUIL_ABANDON} échecs : "
-                        f"{detail}")
+        # Les actions SANS cible comptent aussi. Mesuré en partie longue : 1241 tours
+        # d'affilée à retenter `batir_energie`, qui n'a pas de cible et échappait donc
+        # entièrement au garde-fou. Bâtir est justement ce qui coûte le plus cher à
+        # retenter pour rien.
+        cle = ((d.action, d.cible.name, round(d.cible.x), round(d.cible.y))
+               if d.cible is not None else (d.action, "", 0, 0))
+        if agi:
+            self._echecs.pop(cle, None)
+        else:
+            self._echecs[cle] = self._echecs.get(cle, 0) + 1
+            if self._echecs[cle] == SEUIL_ABANDON:
+                ou = (f" sur {d.cible.name}@({d.cible.x},{d.cible.y})"
+                      if d.cible is not None else "")
+                self.journal.append(f"ABANDON de « {d.action} »{ou} après "
+                                    f"{SEUIL_ABANDON} échecs : {detail}")
         if not agi:
             return d, agi, etat
 

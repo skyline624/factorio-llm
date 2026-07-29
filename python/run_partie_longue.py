@@ -100,8 +100,17 @@ def main(argv: list[str]) -> int:
     chemin = f"logs/partie-{horodatage}.jsonl"
     jr = Journal(chemin)
 
-    pos = (api.get_state().get("character") or {}).get("position") or {}
-    zone = (float(pos.get("x", 0.0)), float(pos.get("y", 0.0)))
+    # La zone est le BARYCENTRE des machines existantes, pas la position du personnage :
+    # celle-ci dépend du dernier test lancé, et l'on mesurait une partie sur un terrain
+    # vide pendant que l'usine tournait ailleurs.
+    sf0 = api.scan_factory() or {}
+    machines0 = sf0.get("entities") or []
+    if machines0:
+        zone = (sum(float(e["x"]) for e in machines0) / len(machines0),
+                sum(float(e["y"]) for e in machines0) / len(machines0))
+    else:
+        pos = (api.get_state().get("character") or {}).get("position") or {}
+        zone = (float(pos.get("x", 0.0)), float(pos.get("y", 0.0)))
     coord = Coordinator(api, zone=zone, rayon=30.0, ombre=ombre)
 
     ticks_vises = int(minutes * 60 * 60)
@@ -117,6 +126,7 @@ def main(argv: list[str]) -> int:
     rcon.query_lua(f"game.speed = {vitesse} rcon.print('ok')")
     tour, bloques, derniere_action = 0, 0, ""
     arbitrables, appels, divergences = 0, 0, 0
+    vus_arbitrages: list = []
     try:
         while _tick(api) - t0 < ticks_vises:
             tour += 1
@@ -139,6 +149,13 @@ def main(argv: list[str]) -> int:
                 arbitrables += 1 if a.arbitrable else 0
                 appels += 1 if a.appele else 0
                 divergences += 1 if a.diverge else 0
+            # Les arbitrages ANNEXES (choix du gisement) comptent autant : les omettre
+            # ferait conclure que le modèle n'a jamais eu la parole.
+            for _, n_opt, indice in coord.arbitrages[len(vus_arbitrages):]:
+                arbitrables += 1 if n_opt >= 2 else 0
+                appels += 1
+                divergences += 1 if indice != 0 else 0
+            vus_arbitrages = list(coord.arbitrages)
             for e in coord.ecarts[-2:]:
                 jr.ecart(t, e)
             for c in coord.constats[-2:]:
