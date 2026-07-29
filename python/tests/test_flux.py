@@ -18,7 +18,7 @@ from __future__ import annotations
 import sys
 
 from services.flux import (BRAS_ABSENT, BRAS_DEPOSE_VIDE, BRAS_MAL_ORIENTE,
-                           INTERROMPUE, MAL_ORIENTEE, OK, suivre_flux)
+                           INTERROMPUE, MAL_ORIENTEE, OK, reparer_flux, suivre_flux)
 
 RESULTS: list[tuple[str, bool, str]] = []
 
@@ -162,11 +162,89 @@ def test_depart_sans_belt() -> None:
     assert ok, str(r)
 
 
+class FakeMondeReparable(FakeMonde):
+    """Le monde précédent, mais on peut y poser et y tourner des belts."""
+
+    def __init__(self, belts, bras=(), cible=None, inconstructibles=()):
+        super().__init__(belts, bras, cible)
+        self.inconstructibles = set(inconstructibles)
+        self.actions: list[str] = []
+
+    def can_place_check(self, name, x, y, direction="north"):
+        return {"can_place": (x, y) not in self.belts
+                and (x, y) not in self.inconstructibles}
+
+    def place_entity_at(self, name, x, y, direction="north", opts=None):
+        self.belts[(x, y)] = direction
+        self.actions.append(f"pose {name} ({x},{y}) {direction}")
+        return {"ok": True}
+
+    def rotate_entity_at(self, x, y, direction, name=None):
+        if (x, y) in self.belts:
+            self.belts[(x, y)] = direction
+        self.actions.append(f"tourne ({x},{y}) -> {direction}")
+        return {"ok": True}
+
+    def remove_entity_at(self, x, y, name=None):
+        self.actions.append(f"retire ({x},{y})")
+        return {"ok": True}
+
+    def move_items_at(self, item, name, x, y, count, to_entity=True):
+        return {"ok": True}
+
+    def run_action(self, fn, *args, timeout=None):
+        return fn(*args)
+
+
+def test_reparation_repose_le_segment_manquant() -> None:
+    """Un trou dans la ligne doit être comblé, et la chaîne redevenir continue."""
+    m = FakeMondeReparable(_ligne(0.5, 0.5, 6),
+                           [(6.5, 0.5, (5.5, 0.5), (7.6, 0.5))], (8.5, 0.5, "boiler"))
+    del m.belts[(3.5, 0.5)]
+    ok, detail = reparer_flux(m, (0.5, 0.5), "boiler", (8.5, 0.5))
+    rec("test_reparation_repose_le_segment_manquant", ok, detail)
+    assert ok, f"{detail} | actions={m.actions}"
+
+
+def test_reparation_retourne_le_segment_devie() -> None:
+    """Un segment qui pointe de travers se RETOURNE : rien ne manque, tout est mal tourné.
+
+    C'est la réparation que `rupture` seule ferait rater — elle désigne la tuile visée à
+    tort, pas la belt coupable.
+    """
+    m = FakeMondeReparable(_ligne(0.5, 0.5, 6),
+                           [(6.5, 0.5, (5.5, 0.5), (7.6, 0.5))], (8.5, 0.5, "boiler"))
+    m.belts[(3.5, 0.5)] = "south"
+    ok, detail = reparer_flux(m, (0.5, 0.5), "boiler", (8.5, 0.5))
+    ok = ok and any("tourne" in a for a in m.actions)
+    rec("test_reparation_retourne_le_segment_devie", ok, detail)
+    assert ok, f"{detail} | actions={m.actions}"
+
+
+def test_reparation_impossible_est_avouee() -> None:
+    """Quand le terrain refuse, on rend la main en le disant — sans boucler.
+
+    Une réparation n'est jamais jugée sur le fait d'avoir été tentée : c'est la mesure
+    qui suit qui tranche. Ici aucune ne peut aboutir, et le rapport doit le dire.
+    """
+    m = FakeMondeReparable(_ligne(0.5, 0.5, 6),
+                           [(6.5, 0.5, (5.5, 0.5), (7.6, 0.5))], (8.5, 0.5, "boiler"),
+                           inconstructibles={(3.5, 0.5)})
+    del m.belts[(3.5, 0.5)]
+    ok, detail = reparer_flux(m, (0.5, 0.5), "boiler", (8.5, 0.5))
+    rec("test_reparation_impossible_est_avouee", not ok and "inconstructible" in detail,
+        detail)
+    assert not ok and "inconstructible" in detail, detail
+
+
 def main() -> int:
     for t in (test_chaine_saine_est_continue, test_belt_interrompue,
               test_raccord_retourne_vers_le_vide, test_deux_segments_se_renvoient,
               test_bras_depose_dans_le_vide, test_bras_absent_au_pied_de_la_cible,
-              test_bras_mal_oriente_nest_pas_un_bras_absent, test_depart_sans_belt):
+              test_bras_mal_oriente_nest_pas_un_bras_absent, test_depart_sans_belt,
+              test_reparation_repose_le_segment_manquant,
+              test_reparation_retourne_le_segment_devie,
+              test_reparation_impossible_est_avouee):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

@@ -895,8 +895,38 @@ class Coordinator:
                 ecart = Ecart(d.action, attente.description, observe, d.cible, contexte)
                 self.ecarts.append(ecart)
                 self.journal.append(str(ecart))
-                self.enqueter(ecart)
+                if not self.remettre_en_etat(ecart):
+                    self.enqueter(ecart)
         return d, agi, self.observer()
+
+    # ----- RÉPARER CE QU'ON A DIAGNOSTIQUÉ -----
+
+    def remettre_en_etat(self, ecart: Ecart) -> bool:
+        """Tente une réparation DÉTERMINISTE de la chaîne concernée. Vrai si elle a servi.
+
+        Appelée avant l'enquête, et c'est délibéré : quand le suivi de flux sait à la
+        fois nommer la rupture et la situer, la réparation est un algorithme et n'a
+        aucune raison de coûter un aller-retour à un modèle. L'enquêteur reste pour ce
+        que le déterministe ne couvre pas — c'est là qu'il apporte.
+
+        `reparer_flux` juge chaque tentative sur la mesure qui suit, jamais sur le fait
+        qu'elle ait été appliquée : cette méthode ne rend `True` que si le flux est
+        réellement rétabli.
+        """
+        depart = (ecart.contexte or {}).get("depart_du_flux")
+        c = ecart.cible
+        if not depart or c is None:
+            return False
+        from services.flux import reparer_flux
+        try:
+            ok, detail = reparer_flux(self.api, (float(depart[0]), float(depart[1])),
+                                      c.name, (c.x, c.y))
+        except Exception as e:
+            self.journal.append(f"remise en état en erreur : {type(e).__name__}")
+            return False
+        self.journal.append(f"RÉPARATION {c.name} -> "
+                            f"{'rétablie' if ok else 'échouée'} ({detail})")
+        return ok
 
     # ----- ENQUÊTE -----
 
