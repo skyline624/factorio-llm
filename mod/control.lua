@@ -80,6 +80,11 @@ remote.add_interface("fl_tools", {
   get_tile = function(x, y)
     safe(function() return tools.get_tile(x, y) end)
   end,
+  -- E13 : lire ce qui est pose a une position PRECISE, loin du personnage.
+  -- Sans elle, verifier une pose obligeait a y marcher (scan_area suit le perso).
+  inspect_at = function(x, y, radius)
+    safe(function() return tools.inspect_at(x, y, radius) end)
+  end,
   -- J5 : menace (nids, unites, pollution). La pollution est le declencheur des
   -- vagues : sans elle, des nids proches ne justifient pas encore de fortifier.
   scan_threats = function(x, y, radius)

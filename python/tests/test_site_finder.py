@@ -19,7 +19,8 @@ from __future__ import annotations
 import math
 import sys
 
-from services.site_finder import POLE_PORTEE, place_pole_line, place_supply_poles
+from services.site_finder import (POLE_PORTEE, place_belt_line, place_inserter_vers,
+                                  place_pole_line, place_supply_poles)
 
 RESULTS: list[tuple[str, bool, str]] = []
 
@@ -116,6 +117,141 @@ def test_desserte_reste_a_portee() -> None:
     assert ok
 
 
+class FakeMondeInserter:
+    """Un monde minimal où un inserter a un sens : il prend derrière et dépose devant.
+
+    Le décalage est délibérément l'INVERSE de celui mesuré en jeu pour `north` — le but
+    est justement de vérifier que `place_inserter_vers` ne code aucune convention en dur
+    et se contente de lire `pickup`/`drop`.
+    """
+
+    DEVANT = {"north": (0.0, 1.0), "east": (-1.0, 0.0),
+              "south": (0.0, -1.0), "west": (1.0, 0.0)}
+
+    def __init__(self, cible, belt, refuse=None):
+        self.cible = cible                  # (x, y, nom) de la machine à charger
+        self.belt = belt                    # (x, y) de la tuile de belt
+        self.refuse = refuse or set()
+        self.inserters: dict[tuple[float, float], str] = {}
+        self.retires: list[tuple[float, float]] = []
+
+    def can_place_check(self, name, x, y, direction="north"):
+        occupe = (x, y) == (self.cible[0], self.cible[1]) or (x, y) == self.belt
+        return {"can_place": (x, y) not in self.refuse and not occupe}
+
+    def place_entity_at(self, name, x, y, direction="north", opts=None):
+        self.inserters[(x, y)] = direction
+        return {"ok": True}
+
+    def rotate_entity_at(self, x, y, direction, name=None):
+        self.inserters[(x, y)] = direction
+        return {"ok": True}
+
+    def remove_entity_at(self, x, y, name=None):
+        self.inserters.pop((x, y), None)
+        self.retires.append((x, y))
+        return {"ok": True}
+
+    def inspect_at(self, x, y, radius=0.5):
+        rows = []
+        for (ix, iy), d in self.inserters.items():
+            if math.hypot(ix - x, iy - y) <= radius:
+                dx, dy = self.DEVANT[d]
+                rows.append({"name": "inserter", "type": "inserter", "x": ix, "y": iy,
+                             "pickupX": ix - dx, "pickupY": iy - dy,
+                             "dropX": ix + dx, "dropY": iy + dy})
+        if math.hypot(self.belt[0] - x, self.belt[1] - y) <= radius:
+            rows.append({"name": "transport-belt", "type": "transport-belt",
+                         "x": self.belt[0], "y": self.belt[1]})
+        if math.hypot(self.cible[0] - x, self.cible[1] - y) <= radius:
+            rows.append({"name": self.cible[2], "type": "boiler",
+                         "x": self.cible[0], "y": self.cible[1]})
+        return {"entities": rows}
+
+    def run_action(self, fn, *args, timeout=None):
+        return fn(*args)
+
+
+class FakeMondeBelt:
+    """Un monde où l'on peut poser des belts, les relire et les tourner."""
+
+    def __init__(self):
+        self.belts: dict[tuple[float, float], str] = {}
+        self.rotations: list[tuple[float, float, str]] = []
+
+    def can_place_check(self, name, x, y, direction="north"):
+        # Poser une belt sur une belt est un REMPLACEMENT RAPIDE, que le jeu autorise :
+        # `can_place` répond donc vrai sur une tuile déjà occupée. C'est ce qui rendait
+        # la détection d'occupation muette.
+        return {"can_place": True}
+
+    def place_entity_at(self, name, x, y, direction="north", opts=None):
+        self.belts[(x, y)] = direction
+        return {"ok": True}
+
+    def rotate_entity_at(self, x, y, direction, name=None):
+        self.belts[(x, y)] = direction
+        self.rotations.append((x, y, direction))
+        return {"ok": True}
+
+    def inspect_at(self, x, y, radius=0.5):
+        rows = [{"name": "transport-belt", "type": "transport-belt", "x": bx, "y": by,
+                 "direction": d}
+                for (bx, by), d in self.belts.items()
+                if abs(bx - x) <= radius and abs(by - y) <= radius]
+        return {"entities": rows}
+
+    def run_action(self, fn, *args, timeout=None):
+        return fn(*args)
+
+
+def test_prolongement_retourne_le_raccord() -> None:
+    """Prolonger une ligne doit RETOURNER sa dernière tuile vers le nouveau tronçon.
+
+    Sinon elle garde son ancienne direction et déverse dans une tuile vide : la ligne
+    est complète à l'œil, aucune pose n'a échoué, et rien n'arrive au bout.
+    """
+    monde = FakeMondeBelt()
+    place_belt_line(monde, (0.5, 0.5), (0.5, 5.5))      # descend vers le sud
+    avant = monde.belts.get((0.5, 4.5))
+    place_belt_line(monde, (0.5, 4.5), (3.5, 4.5))      # repart vers l'est
+    apres = monde.belts.get((0.5, 4.5))
+    ok = avant == "south" and apres == "east"
+    rec("test_prolongement_retourne_le_raccord", ok,
+        f"tuile de raccord : {avant} -> {apres}, {len(monde.rotations)} rotation(s)")
+    assert ok, f"avant={avant} apres={apres}"
+
+
+def test_inserter_oriente_vers_la_cible() -> None:
+    """La direction retenue doit être celle dont le DÉPÔT tombe sur la machine."""
+    monde = FakeMondeInserter(cible=(10.5, 10.5, "boiler"), belt=(10.5, 12.5))
+    pose = place_inserter_vers(monde, (10.5, 10.5), (10.5, 12.5), "boiler")
+    ok = pose is not None
+    if ok:
+        ix, iy, d = pose
+        dx, dy = FakeMondeInserter.DEVANT[d]
+        ok = (ix + dx, iy + dy) == (10.5, 10.5) and (ix - dx, iy - dy) == (10.5, 12.5)
+    rec("test_inserter_oriente_vers_la_cible", ok,
+        f"pose={pose} : dépose bien dans le boiler et prend bien sur la belt")
+    assert ok
+
+
+def test_emplacement_sans_issue_est_libere() -> None:
+    """Un emplacement qui ne marche dans aucune direction ne doit pas rester posé.
+
+    Sinon chaque tentative laisse un inserter orphelin sur la carte, et la position
+    suivante est refusée par celui qu'on vient d'abandonner.
+    """
+    # Belt hors d'atteinte : aucune position ne peut à la fois prendre dessus et
+    # déposer dans la cible.
+    monde = FakeMondeInserter(cible=(10.5, 10.5, "boiler"), belt=(40.5, 40.5))
+    pose = place_inserter_vers(monde, (10.5, 10.5), (10.5, 12.5), "boiler", essais=6)
+    ok = pose is None and not monde.inserters and len(monde.retires) > 0
+    rec("test_emplacement_sans_issue_est_libere", ok,
+        f"pose={pose}, {len(monde.retires)} retrait(s), {len(monde.inserters)} orphelin(s)")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_ligne_droite_connexe,
@@ -123,6 +259,9 @@ def main() -> int:
         test_obstacle_infranchissable_signale,
         test_arrivee_proche_ne_pose_rien,
         test_desserte_reste_a_portee,
+        test_prolongement_retourne_le_raccord,
+        test_inserter_oriente_vers_la_cible,
+        test_emplacement_sans_issue_est_libere,
     ]
     for t in tests:
         t()

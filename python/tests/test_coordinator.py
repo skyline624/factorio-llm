@@ -206,6 +206,40 @@ def test_menace_imminente_cree_un_vrai_choix() -> None:
     assert ok
 
 
+def test_ravitaillement_repete_devient_automatisation() -> None:
+    """Remplir deux fois le même boiler, c'est une réparation ; trois, c'est un aveu.
+
+    Un boiler brûle 0.45 charbon/s : moins de deux minutes d'autonomie par plein. Un
+    agent qui se contente de remplir y passe sa vie et ne construit plus rien. Au-delà
+    du seuil, la décision bascule de « ravitailler » à « approvisionner » — bâtir la
+    chaîne qui manque.
+    """
+    from agents.coordinator import SEUIL_AUTOMATISATION
+    rows = [_m("boiler", 10, 20, "no_fuel")]
+    premiere = decide(_etat(rows))
+    etat = _etat(rows)
+    etat.ravitaillements = {("boiler", 10, 20): SEUIL_AUTOMATISATION}
+    apres = decide(etat)
+    ok = (premiere.action == "ravitailler" and apres.action == "approvisionner"
+          and "chaîne" in apres.raison)
+    rec("test_ravitaillement_repete_devient_automatisation", ok,
+        f"1er passage={premiere.action} -> après {SEUIL_AUTOMATISATION} remplissages="
+        f"{apres.action}")
+    assert ok
+
+
+def test_le_compteur_est_par_machine() -> None:
+    """Avoir rempli un boiler ne dit rien d'un autre : le compteur suit la POSITION."""
+    etat = _etat([_m("boiler", 10, 20, "no_fuel"), _m("boiler", 90, 90, "no_fuel")])
+    etat.ravitaillements = {("boiler", 10, 20): 5}     # seul le premier est concerné
+    from agents.coordinator import enumerer_options
+    actions = {(o.cible.x, o.cible.y): o.action for o in enumerer_options(etat)
+               if o.cible is not None}
+    ok = actions.get((10, 20)) == "approvisionner" and actions.get((90, 90)) == "ravitailler"
+    rec("test_le_compteur_est_par_machine", ok, f"{actions}")
+    assert ok
+
+
 def test_option_sans_materiel_est_declassee() -> None:
     """Une action dont le matériel manque ne doit pas être proposée en tête.
 
@@ -423,6 +457,8 @@ def main() -> int:
         test_ennemis_sur_lusine_passent_avant_les_reparations,
         test_menace_latente_najoute_aucune_option,
         test_menace_imminente_cree_un_vrai_choix,
+        test_ravitaillement_repete_devient_automatisation,
+        test_le_compteur_est_par_machine,
         test_option_sans_materiel_est_declassee,
         test_option_avec_materiel_reste_prioritaire,
         test_options_une_par_cause,

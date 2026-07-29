@@ -65,6 +65,21 @@ REPARATION: dict[str, tuple[str, str]] = {
 PRIORITE = {"defendre_urgence": 4, "reparer": 3, "batir_energie": 2, "defendre": 2,
             "batir_production": 1, "rien": 0}
 
+# Au-delà de ce nombre de ravitaillements MANUELS sur la même machine, on cesse de
+# remplir et on automatise. Remplir un réservoir est une réparation ; le remplir
+# indéfiniment est l'aveu qu'il manque une chaîne d'approvisionnement.
+#
+# Mesuré : un boiler brûle 0.45 charbon/s, soit ~110 s d'autonomie pour 50 unités. Un
+# agent qui ne fait que ravitailler y passe sa vie et ne construit plus rien.
+SEUIL_AUTOMATISATION = 2
+
+# Le combustible du bootstrap, et le stock en dessous duquel on cesse de dépanner à la
+# main. Amorcer un foreur burner et ses deux bras coûte une trentaine d'unités : si on
+# descend sous ce seuil, on perd la capacité de bâtir la chaîne qui rendrait le
+# dépannage inutile. La réserve est donc protégée, même au prix d'une machine à l'arrêt.
+COMBUSTIBLE = "coal"
+RESERVE_AMORCE = 40
+
 # Matériel indispensable à une action. Sans lui, elle échouera à l'exécution — la
 # proposer serait mentir sur le contrat, qui promet des options LÉGALES.
 #
@@ -90,6 +105,9 @@ class EtatUsine:
     production_kw: float = 0.0
     inventaire: dict = field(default_factory=dict)
     menace: Optional[Menace] = None       # None = menace non évaluée (pas « aucune »)
+    # Combien de fois chaque machine a déjà été ravitaillée à la main, par position.
+    # C'est la mémoire qui permet de distinguer un incident d'un besoin structurel.
+    ravitaillements: dict = field(default_factory=dict)
 
     @property
     def a_de_l_energie(self) -> bool:
@@ -155,6 +173,22 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
     # (gravité, puis conséquences en dernier) fixe l'ordre par défaut.
     for c in causes:
         action, explication = REPARATION.get(c.cause, ("inspecter", "cause inconnue"))
+        # Un manque de combustible qui revient n'est pas un incident : c'est une chaîne
+        # d'approvisionnement qui manque. On arrête de remplir et on construit.
+        deja = etat.ravitaillements.get((c.name, round(c.x), round(c.y)), 0)
+        stock = etat.inventaire.get(COMBUSTIBLE, 0)
+        if action == "ravitailler" and deja >= SEUIL_AUTOMATISATION:
+            action = "approvisionner"
+            explication = (f"déjà ravitaillée {deja} fois à la main — il lui faut une "
+                           f"chaîne, pas un remplissage de plus")
+        elif action == "ravitailler" and stock < RESERVE_AMORCE:
+            # Mesuré : deux remplissages manuels ont vidé le stock, et la chaîne qui
+            # aurait rendu la machine autonome n'a plus pu être amorcée — l'agent avait
+            # brûlé en dépannage le combustible qui le libérait. Ce qui reste vaut plus
+            # comme amorce que comme dernier plein.
+            action = "approvisionner"
+            explication = (f"il ne reste que {stock} {COMBUSTIBLE} : les garder pour "
+                           f"amorcer une chaîne plutôt que les brûler en un plein")
         options.append(Decision(action=action,
                                 raison=f"{c.name} : {c.cause} — {explication}",
                                 priorite=PRIORITE["reparer"], cible=c))
@@ -242,7 +276,8 @@ class Coordinator:
                  ressource: str = "iron-ore", demande_kw: float = 900.0,
                  combustible: str = "coal", builder=None,
                  arbitre: Optional[Arbitre] = None,
-                 tourelle: str = "gun-turret", munition: str = "firearm-magazine"):
+                 tourelle: str = "gun-turret", munition: str = "firearm-magazine",
+                 ombre: bool = False):
         self.api = api
         self.zone = zone
         self.rayon = rayon
@@ -251,10 +286,20 @@ class Coordinator:
         self.combustible = combustible
         # Point d'insertion d'un arbitrage LLM : None = décision déterministe.
         # Il n'est consulté que lorsqu'il y a réellement plusieurs options.
+        # `ombre=True` branche un arbitre LLM qui PROPOSE sans décider : le
+        # déterministe garde la main et l'on mesure les divergences. C'est la seule
+        # façon d'apprendre quelque chose sur le modèle sans rien risquer.
+        if ombre and arbitre is None:
+            try:
+                from services.arbitre import ArbitreOmbre, LLMArbitre
+                arbitre = ArbitreOmbre(LLMArbitre())
+            except Exception:
+                arbitre = None      # pas de modèle : la boucle tourne quand même
         self.arbitre = arbitre
         self.tourelle = tourelle
         self.munition = munition
         self.derniere_menace: Optional[Menace] = None
+        self._ravitaillements: dict = {}
         self.journal: list[str] = []
         # Mémoire de la boucle : où raccorder la prochaine chaîne, et ce qui a été bâti.
         self.dernier_poteau: Optional[tuple[float, float]] = None
@@ -284,6 +329,7 @@ class Coordinator:
                     etat.production_kw = float(ps.get("productionKW") or 0.0)
                     break
         etat.inventaire = perception.inventory(self.api)
+        etat.ravitaillements = dict(self._ravitaillements)
         # La menace est évaluée à CHAQUE tour : elle change sans qu'on y touche, alors
         # que l'usine ne change que quand on agit.
         etat.menace = evaluer(self.api.scan_threats(self.zone[0], self.zone[1], 300.0),
@@ -307,15 +353,21 @@ class Coordinator:
             return self.batir(d)
         if d.action == "defendre":
             return self.defendre()
+        if d.action == "approvisionner" and d.cible is not None:
+            return self.approvisionner(d.cible, self.combustible)
         if d.cible is None:
             return False, f"{d.action} : délégué (aucune cible ponctuelle)"
 
         c = d.cible
         if d.action == "ravitailler":
-            r = self.api.run_action(self.api.move_items_at, "coal", c.name, c.x, c.y,
-                                    50, True, timeout=30.0)
+            r = self.api.run_action(self.api.move_items_at, self.combustible, c.name,
+                                    c.x, c.y, 50, True, timeout=30.0)
             ok = isinstance(r, dict) and r.get("ok") is True
-            return ok, f"ravitaillement de {c.name}@({c.x},{c.y}) : {r}"
+            if ok:
+                cle = (c.name, round(c.x), round(c.y))
+                self._ravitaillements[cle] = self._ravitaillements.get(cle, 0) + 1
+            return ok, (f"ravitaillement de {c.name}@({c.x},{c.y}) "
+                        f"(n°{self._ravitaillements.get((c.name, round(c.x), round(c.y)), 0)})")
         if d.action == "relier":
             # Poteau au plus près de la machine débranchée, sur les quatre côtés.
             for dx, dy in ((2.5, 0.0), (-2.5, 0.0), (0.0, 2.5), (0.0, -2.5)):
@@ -329,6 +381,187 @@ class Coordinator:
                     return True, f"poteau posé en ({x},{y}) pour {c.name}"
             return False, f"aucune position de poteau libre autour de {c.name}"
         return False, f"{d.action} : pas encore automatisé"
+
+    # ----- APPROVISIONNER (automatiser ce qu'on remplissait à la main) -----
+
+    # Au-delà, une belt d'approvisionnement coûte plus qu'elle ne rapporte : c'est un
+    # problème de transport longue distance (trains), pas de logistique locale. Le dire
+    # vaut mieux que poser 200 belts qui traverseront lacs et falaises.
+    PORTEE_APPRO = 60.0
+
+    # Un stack plein dans le foreur. Le bras de RETOUR, qui rendrait la chaîne
+    # réellement perpétuelle, n'est pas toujours plaçable : la belt part du bord même du
+    # foreur, et un inserter doit se tenir ENTRE sa source et sa cible. Quand la
+    # géométrie le refuse, l'amorce est ce qui reste — 50 charbons tiennent une vingtaine
+    # de minutes à 0.0375 charbon/s. La limite est dite en clair dans le compte rendu
+    # plutôt que masquée par un « chaîne bâtie » qui laisserait croire l'affaire close.
+    AMORCE = 50
+    AMORCE_BRAS = 5
+
+    def approvisionner(self, cible, item: str = "coal") -> tuple[bool, str]:
+        """Bâtit une chaîne mine -> belt -> inserter vers une machine à combustible.
+
+        C'est ce qui sépare une usine qui démarre d'une usine qui tient : mesuré, un
+        boiler brûle 0.45 charbon/s, soit moins de deux minutes d'autonomie pour un
+        plein. Tant que personne ne le réapprovisionne, tout ce qui a été bâti s'arrête.
+
+        La chaîne n'est construite que si le gisement est assez proche ; au-delà, on
+        rend la main en l'expliquant plutôt que de dérouler une belt interminable.
+        """
+        import math
+        from services import site_finder
+        from services.layout_planner import ResourcePatch
+        from services.micro_planner import MicroRequest, plan_micro
+        from services.executor import execute_micro
+
+        sp = self.builder._scan_patch_local(item)
+        ancre = self.builder._anchor_on_ore(sp, 4) if sp.get("sample") else None
+        if ancre is None:
+            return False, f"aucun gisement de {item} exploitable"
+        distance = math.hypot(ancre[0] - cible.x, ancre[1] - cible.y)
+        if distance > self.PORTEE_APPRO:
+            return False, (f"gisement de {item} à {distance:.0f} tuiles : trop loin pour "
+                           f"une belt (limite {self.PORTEE_APPRO:.0f}), il faudrait un train")
+
+        # 0. De quoi amorcer. Si la réserve a fondu, on va la reprendre à la main sur le
+        #    gisement — c'est ce que fait un joueur, et c'est la seule sortie quand le
+        #    stock est à zéro : sans amorce, ni le foreur ni les bras ne démarrent, et la
+        #    chaîne est posée morte. Le minage manuel reste plus rapide qu'un foreur
+        #    (mesuré au bootstrap), donc une trentaine d'unités coûtent quelques secondes.
+        besoin = self.AMORCE + 2 * self.AMORCE_BRAS
+        stock = perception.inventory(self.api).get(item, 0)
+        if stock < besoin:
+            self.api.run_action(self.api.walk_to, ancre[0], ancre[1], timeout=90.0)
+            self.api.run_action(self.api.mine_entity, item, besoin - stock, timeout=90.0)
+            stock = perception.inventory(self.api).get(item, 0)
+            # Le minage a CREUSÉ le gisement à l'endroit même où l'on comptait poser :
+            # une tuile épuisée disparaît, et `can_place_entity` en mode `manual` refuse
+            # un foreur sans minerai dessous — là où le mode par défaut l'accepte. Le
+            # symptôme est un `can_place=False` sur du sable nu, à côté d'un gisement de
+            # 500 tuiles intactes. On reprend donc la mesure du gisement APRÈS l'avoir
+            # entamé, au lieu de se fier à celle d'avant.
+            sp = self.builder._scan_patch_local(item)
+            ancre = self.builder._anchor_on_ore(sp, 4) if sp.get("sample") else ancre
+            if ancre is None:
+                return False, f"gisement de {item} épuisé là où il fallait le foreur"
+
+        # 1. Le matériel. Pour le CHARBON, tout est burner — et ce n'est pas un repli
+        #    faute de mieux, c'est la seule sortie d'une circularité : la première
+        #    version posait un foreur électrique pour aller chercher le charbon dont la
+        #    centrale avait besoin pour produire ce courant. Mesuré en jeu : foreur et
+        #    inserter posés, belt complète, statut `no_power` des deux côtés, zéro
+        #    charbon transporté. Un burner ne dépend que de ce qu'il extrait.
+        burner = (item == "coal")
+        foreur = "burner-mining-drill" if burner else "electric-mining-drill"
+        bras = "burner-inserter" if burner else "inserter"
+        taille = 2 if burner else 3
+
+        self.api.generate_terrain(ancre[0], ancre[1], 25.0)
+        mp = plan_micro(MicroRequest(
+            patch=ResourcePatch(resource=item, tiles=[], bbox=(0, 0, 0, 0)),
+            facing=4, anchor=ancre, drill_tier=foreur,
+            inserter_tier=bras, furnace_tier="electric-furnace",
+            drill_size=taille, furnace_size=3))
+        mp.entities = [e for e in mp.entities if e.role == "drill"]
+        mp.totals = {foreur: 1}
+        rap = execute_micro(self.api, mp, generate=False, approach=False, timeout=30.0)
+        if not rap.ok or not rap.placed:
+            return False, f"foreur non posé sur {item} : {rap.missing or rap.blocked[:1]}"
+        drill = rap.placed[0]
+
+        # 2. L'amorçage, ou le courant. Un burner doit recevoir de quoi extraire son
+        #    premier charbon ; un électrique doit être relié.
+        if burner:
+            self.api.run_action(self.api.move_items_at, "coal", foreur, drill.x, drill.y,
+                                self.AMORCE, True, timeout=20.0)
+        else:
+            ancrage = self.dernier_poteau or (drill.x, drill.y)
+            site_finder.place_pole_line(self.api, ancrage, (drill.x, drill.y))
+            site_finder.place_supply_poles(self.api, [drill], (drill.x, drill.y))
+
+        # 3. La belt part du drop RÉEL du foreur, lu et non supposé : le décalage de
+        #    sortie dépend du prototype et de l'orientation, et une belt posée une tuile
+        #    à côté laisse le minerai tomber au sol sans que rien ne le signale.
+        pose_drill = next((e for e in site_finder._entites_a(self.api, drill.x, drill.y, 1.5)
+                           if e.get("type") == "mining-drill"), None)
+        if pose_drill and pose_drill.get("dropX") is not None:
+            depart = (pose_drill["dropX"], pose_drill["dropY"])
+        else:
+            depart = (drill.x, drill.y + 2.0)
+        # La belt ne vise pas la machine : elle s'arrête EN RETRAIT, du côté d'où elle
+        # arrive. Mesuré : visée sur la machine, elle bute dessus et le dernier segment
+        # se colle à son bord — il ne reste alors aucune tuile libre entre la belt et la
+        # machine, et un inserter doit se tenir ENTRE les deux. 36 segments posés, aucun
+        # bras possible au bout. Le retrait dépend de la taille de la machine, qu'on ne
+        # connaît pas ici : on part large et on rallonge d'une tuile tant que le bras ne
+        # trouve pas sa place — trois essais suffisent du 1×1 au 3×3.
+        # L'approche est ramenée à un AXE, jamais à une diagonale : un inserter dessert
+        # les quatre côtés d'une machine, pas ses coins. Une arrivée oblique laisse la
+        # belt décalée en x ET en y — 50 segments posés, et le seul emplacement libre se
+        # trouvait en diagonale du boiler, d'où aucun dépôt n'est possible.
+        vx, vy = depart[0] - cible.x, depart[1] - cible.y
+        if abs(vx) >= abs(vy):
+            ux, uy = (1.0 if vx > 0 else -1.0), 0.0
+        else:
+            ux, uy = 0.0, (1.0 if vy > 0 else -1.0)
+        belts: list[tuple[float, float]] = []
+        complete = False
+        pose_ins = None
+        essais: list[str] = []
+        for recul in (4.0, 3.0, 2.0):
+            arrivee = (cible.x + ux * recul, cible.y + uy * recul)
+            seg, complete = site_finder.place_belt_line(
+                self.api, belts[-1] if belts else depart, arrivee)
+            belts.extend(seg)
+            essais.append(f"recul {recul:.0f} -> {len(seg)} segment(s), "
+                          f"bout {belts[-1] if belts else 'aucun'}")
+            if not belts:
+                continue
+            # 4. Le bras qui décharge. `place_inserter_vers` vérifie par LECTURE que le
+            #    dépôt tombe dans la machine — une orientation supposée ne suffit pas.
+            jr: list = []
+            pose_ins = site_finder.place_inserter_vers(
+                self.api, (cible.x, cible.y), belts[-1], cible.name, nom=bras, journal=jr)
+            essais.append(" ; ".join(jr[:6]))
+            if pose_ins is not None:
+                break
+        if not belts:
+            return False, f"aucune belt posée entre le foreur et {cible.name}"
+        if pose_ins is None:
+            return False, (f"belt posée ({len(belts)} segments) mais aucun inserter "
+                           f"n'atteint {cible.name} depuis la belt — {' | '.join(essais)}")
+
+        # 5. Le bras de RETOUR. C'est lui qui rend la chaîne perpétuelle : sans lui, le
+        #    foreur épuise son amorce et s'arrête, et l'on aurait seulement déplacé le
+        #    remplissage manuel du boiler vers le foreur.
+        boucle = None
+        if burner:
+            jb: list = []
+            boucle = site_finder.place_inserter_vers(
+                self.api, (drill.x, drill.y), belts[0], foreur, nom=bras, journal=jb)
+            if boucle is None:
+                essais.append("retour au foreur : " + " ; ".join(jb[:6]))
+            for pos in (pose_ins, boucle):
+                if pos is not None:
+                    self.api.run_action(self.api.move_items_at, "coal", bras, pos[0],
+                                        pos[1], self.AMORCE_BRAS, True, timeout=20.0)
+
+        # La chaîne existe : on oublie l'historique de remplissage manuel de cette
+        # machine, sinon la boucle voudrait l'automatiser à nouveau au prochain incident.
+        self._ravitaillements.pop((cible.name, round(cible.x), round(cible.y)), None)
+        # Le compte rendu dit ce que la chaîne vaut RÉELLEMENT. Une belt trouée ne
+        # transporte rien et un foreur sans réalimentation s'arrête quand son amorce est
+        # brûlée : annoncer « chaîne bâtie » dans ces cas-là ferait croire le problème
+        # réglé, et la boucle repartirait sur autre chose en laissant la machine à sec.
+        reserves = []
+        if not complete:
+            reserves.append("belt INTERROMPUE — le flux s'arrêtera au trou")
+        if burner and boucle is None:
+            reserves.append("sans réalimentation du foreur — il s'arrêtera son amorce brûlée")
+        return True, (f"chaîne {item} bâtie : {foreur}@({drill.x},{drill.y}) -> "
+                      f"{len(belts)} belt(s) -> {bras}@{pose_ins[:2]} -> {cible.name}, "
+                      f"{distance:.0f} tuiles"
+                      + (f" | RÉSERVES : {' ; '.join(reserves)}" if reserves else ""))
 
     # ----- DÉFENDRE -----
 

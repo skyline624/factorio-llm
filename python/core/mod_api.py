@@ -139,6 +139,16 @@ class ModApi:
         Sert a vérifier ponctuellement water/out-of-map (frontière headless)."""
         return self._call("fl_tools", "get_tile", x, y)
 
+    def inspect_at(self, x: float, y: float, radius: float = 0.5) -> dict:
+        """Ce qui est POSÉ à (x, y). Non destructif. Retourne {x,y,radius,entities}.
+
+        Complément de `scan_area`, qui est centré sur le PERSONNAGE et ne permet donc
+        pas de contrôler une entité posée à distance. Les lignes ont les mêmes champs
+        que `scan_area` — dont `pickupX/pickupY/dropX/dropY` pour les inserters et
+        `dropX/dropY` pour les foreuses, de quoi vérifier une pose au lieu de la croire.
+        """
+        return self._call("fl_tools", "inspect_at", x, y, radius)
+
     def scan_threats(self, x: float = 0.0, y: float = 0.0, radius: float = 300.0) -> dict:
         """Ce qui menace l'usine autour de (x, y). Non destructif.
 

@@ -42,6 +42,19 @@ local function entity_row(surface, e)
     local mt = e.mining_target
     rec.mining = (mt and mt.valid and mt.name) or "nothing"
     rec.oreUnder = utils_entity.drill_ore_under(surface, e)
+    local okd, dp = pcall(function() return e.drop_position end)
+    if okd and dp then rec.dropX, rec.dropY = r1(dp.x), r1(dp.y) end
+  end
+  -- E13 : ou un inserter PREND et ou il DEPOSE, en coordonnees monde.
+  -- Sans ces deux champs, un inserter qui depose dans le vide est indiscernable d'un
+  -- inserter correct : il est pose, sans erreur, avec le statut d'un bras qui attend.
+  -- Mesure : un inserter oriente `north` prend en y-1 et depose en y+1.3 -- l'inverse
+  -- de la convention attendue. On ne DEDUIT donc plus le sens d'un inserter, on le LIT.
+  if e.type == "inserter" then
+    local oki, pk = pcall(function() return e.pickup_position end)
+    if oki and pk then rec.pickupX, rec.pickupY = r1(pk.x), r1(pk.y) end
+    local okd, dp = pcall(function() return e.drop_position end)
+    if okd and dp then rec.dropX, rec.dropY = r1(dp.x), r1(dp.y) end
   end
   if utils_entity.is_crafting_machine(e) then
     local recipe = utils_entity.recipe_of(e)
@@ -88,10 +101,15 @@ function M.scan_area(radius)
   local surface = char.surface
   local r = math.min((radius and radius > 0) and radius or 32, 128)
 
+  -- Les RESSOURCES sont exclues de cette liste : elles sont deja agregees plus bas,
+  -- par nom et par comptage. Les y laisser les faisait consommer le plafond de 200
+  -- entites -- mesure sur un gisement de charbon : scan_area rendait 200 lignes, toutes
+  -- `resource` ou `electric-pole`, et le boiler pose au milieu etait INVISIBLE. Le
+  -- diagnostic concluait alors « aucune machine » sur une usine bien reelle.
   local entities = {}
   local n = 0
   for _, e in ipairs(surface.find_entities_filtered({position = char.position, radius = r})) do
-    if e.name ~= "character" then
+    if e.name ~= "character" and e.type ~= "resource" then
       if n >= 200 then break end
       n = n + 1
       table.insert(entities, entity_row(surface, e))
@@ -602,6 +620,37 @@ function M.get_tile(x, y)
   if not surface then return json.encode({error = "aucune surface"}) end
   local t = surface.get_tile(math.floor(x), math.floor(y))
   return json.encode({x = math.floor(x), y = math.floor(y), name = t.name})
+end
+
+-- inspect_at(x, y, radius) : ce qui est POSE a une position donnee. Non destructif.
+--
+-- Pendant en LECTURE de remove_entity_at / rotate_entity_at, et complement de
+-- scan_area : celui-ci est centre sur le PERSONNAGE, donc inutilisable pour verifier
+-- une entite qu'on vient de poser a 40 tuiles. C'est ce qui manquait pour CONTROLER
+-- une pose au lieu de la supposer reussie -- la plupart des defauts de ce projet
+-- etaient des poses acceptees sans erreur mais geometriquement fausses.
+--
+-- Retourne {x, y, radius, entities = [entity_row]} : memes champs que scan_area,
+-- donc pickup/drop des inserters et drop des foreuses inclus.
+function M.inspect_at(x, y, radius)
+  local char = player_mod.get_ai_entity()
+  local surface = char and char.surface or game.surfaces.nauvis or game.surfaces[1]
+  if not surface then return json.encode({error = "aucune surface"}) end
+  local r = math.min((radius and radius > 0) and radius or 0.5, 16)
+  -- Recherche par AIRE, et non par {position, radius} : la variante `radius` compare le
+  -- CENTRE des entites au point, si bien qu'une machine 3x2 dont le centre est a une
+  -- tuile n'est jamais trouvee -- alors que le point interroge tombe en plein dedans.
+  -- C'est ce qui faisait conclure « ce bras depose dans le vide » a un inserter dont le
+  -- drop tombait pourtant dans le boiler. `area` teste l'intersection des bounding box,
+  -- ce qui est la question reellement posee : qu'y a-t-il A cet endroit ?
+  local rows = {}
+  local aire = {{x - r, y - r}, {x + r, y + r}}
+  for _, e in ipairs(surface.find_entities_filtered({area = aire})) do
+    if e.valid and e.type ~= "character" and e.type ~= "resource" then
+      table.insert(rows, entity_row(surface, e))
+    end
+  end
+  return json.encode({x = r1(x), y = r1(y), radius = r, entities = rows})
 end
 
 -- scan_threats(x, y, radius) : ce qui menace l'usine autour d'une position (J5).

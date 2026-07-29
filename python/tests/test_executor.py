@@ -427,21 +427,43 @@ def test_executor_plan_vide_et_infaisable() -> None:
 def test_executor_approche_generate_et_walk() -> None:
     api = FakeApi(FULL_KIT)
     execute_micro(api, _micro(), generate=True, approach=True)
-    ok = len(api.named("generate_terrain")) == 1 and len(api.named("walk_to")) == 1
+    # Deux marches : approcher du chantier, puis en SORTIR. La seconde est ce qui
+    # débloque les poses — l'avatar qui se tient sur une tuile la rend inconstructible
+    # en mode `manual`, sur du terrain pourtant vide.
+    ok = len(api.named("generate_terrain")) == 1 and len(api.named("walk_to")) == 2
     rec("test_executor_approche_generate_et_walk", ok,
         f"generate={len(api.named('generate_terrain'))} walk={len(api.named('walk_to'))}")
     assert ok, f"calls={api.calls[:4]}"
 
     # generate_terrain AVANT walk_to (sans chunks générés le pathfinding ne planifie pas).
     seq = [c[0] for c in api.calls if c[0] in ("generate_terrain", "walk_to")]
-    ok_ordre = seq == ["generate_terrain", "walk_to"]
+    ok_ordre = seq[:2] == ["generate_terrain", "walk_to"]
     rec("test_executor_generate_avant_walk", ok_ordre, f"sequence={seq}")
     assert ok_ordre, f"sequence={seq}"
 
+    # Le dégagement sort RÉELLEMENT de l'emprise du plan, sinon il ne sert à rien.
+    sortie = api.named("walk_to")[-1]
+    xs = [e.x for e in _micro().entities]
+    ys = [e.y for e in _micro().entities]
+    dehors = not (min(xs) - 1.5 <= sortie[1] <= max(xs) + 1.5
+                  and min(ys) - 1.5 <= sortie[2] <= max(ys) + 1.5)
+    rec("test_executor_degagement_sort_de_l_emprise", dehors,
+        f"sortie=({sortie[1]},{sortie[2]}) hors de x{[min(xs), max(xs)]} y{[min(ys), max(ys)]}")
+    assert dehors, f"sortie={sortie}"
+
+    # `approach=False` supprime l'APPROCHE, pas le DÉGAGEMENT : l'appelant qui gère
+    # lui-même ses déplacements ne renonce pas pour autant à pouvoir poser. Le seul
+    # `walk_to` restant doit donc s'éloigner du plan, jamais s'en rapprocher.
     api2 = FakeApi(FULL_KIT)
     execute_micro(api2, _micro(), generate=False, approach=False)
-    ok2 = not api2.named("generate_terrain") and not api2.named("walk_to")
-    rec("test_executor_approche_desactivable", ok2, "generate=False approach=False")
+    marches = api2.named("walk_to")
+    xs2 = [e.x for e in _micro().entities]
+    ys2 = [e.y for e in _micro().entities]
+    ok2 = not api2.named("generate_terrain") and all(
+        not (min(xs2) - 1.5 <= m[1] <= max(xs2) + 1.5
+             and min(ys2) - 1.5 <= m[2] <= max(ys2) + 1.5) for m in marches)
+    rec("test_executor_approche_desactivable", ok2,
+        f"generate=0, {len(marches)} marche(s) toutes sortantes")
     assert ok2, f"calls={api2.calls[:4]}"
 
 

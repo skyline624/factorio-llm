@@ -136,6 +136,150 @@ def place_pole_line(api, depart: tuple[float, float], arrivee: tuple[float, floa
     return poses, False
 
 
+def place_belt_line(api, depart: tuple[float, float], arrivee: tuple[float, float],
+                    belt: str = "transport-belt", timeout: float = 20.0,
+                    garde: int = 200) -> tuple[list[tuple[float, float]], bool]:
+    """Pose une belt de `depart` vers `arrivee`, en L, chaque segment ORIENTÉ vers l'aval.
+
+    L'orientation est ce qui distingue une belt d'une file d'objets décoratifs : une
+    seule mal tournée et le flux s'arrête là, sans que rien ne le signale à la pose.
+    On avance d'une tuile à la fois en réglant la direction sur le pas suivant, et le
+    dernier segment pointe vers `arrivee`.
+
+    Trajet en L (horizontal puis vertical) : suffisant pour relier une mine à une
+    machine, et prévisible — un chemin optimal serait plus court mais impossible à
+    déboguer à l'œil dans le jeu.
+    """
+    x0, y0 = math.floor(depart[0]) + 0.5, math.floor(depart[1]) + 0.5
+    x1, y1 = math.floor(arrivee[0]) + 0.5, math.floor(arrivee[1]) + 0.5
+    tuiles: list[tuple[float, float]] = []
+    x, y = x0, y0
+    while abs(x - x1) > 1e-6 and len(tuiles) < garde:
+        tuiles.append((x, y))
+        x += 1.0 if x1 > x else -1.0
+    while abs(y - y1) > 1e-6 and len(tuiles) < garde:
+        tuiles.append((x, y))
+        y += 1.0 if y1 > y else -1.0
+
+    poses: list[tuple[float, float]] = []
+    for i, (bx, by) in enumerate(tuiles):
+        suivant = tuiles[i + 1] if i + 1 < len(tuiles) else (x1, y1)
+        dx, dy = suivant[0] - bx, suivant[1] - by
+        if abs(dx) >= abs(dy):
+            d = "east" if dx > 0 else "west"
+        else:
+            d = "south" if dy > 0 else "north"
+        # Une belt DÉJÀ là, sur le tracé : on ne la contourne pas, on la RETOURNE. En
+        # prolongeant une ligne, la dernière tuile de l'ancien tronçon garde la direction
+        # qu'elle avait et envoie le charbon vers une tuile vide : 31 segments parcourus
+        # puis plus rien, à une tuile du but, sans qu'aucune pose n'ait échoué.
+        #
+        # Le test se fait par LECTURE et non via `can_place` : poser une belt sur une
+        # belt est un remplacement rapide, que le jeu AUTORISE. `can_place` répond donc
+        # `true` et n'a jamais signalé l'occupation — la correction paraissait en place
+        # et ne s'exécutait pas.
+        deja = next((e for e in _entites_a(api, bx, by, 0.4)
+                     if e.get("type") == "transport-belt"), None)
+        if deja is not None:
+            if deja.get("direction") != d:
+                api.run_action(api.rotate_entity_at, bx, by, d, belt, timeout=timeout)
+            poses.append((bx, by))
+            continue
+        if not can_place(api, belt, bx, by, d):
+            # Un seul arbre sur le tracé suffit à couper le flux : la belt se pose de
+            # part et d'autre, aucune erreur n'est levée, et le charbon s'accumule sur
+            # les six premières tuiles sans jamais arriver. On abat donc ce qui gêne,
+            # tuile par tuile — c'est ce que fait un joueur, et le seul obstacle qu'on
+            # s'autorise à ôter est celui que la nature a mis là.
+            if not degager_tuile(api, bx, by, timeout) or not can_place(api, belt, bx, by, d):
+                continue                 # infranchissable : la belt aura un trou, on le dira
+        r = api.run_action(api.place_entity_at, belt, bx, by, d, None, timeout=timeout)
+        if isinstance(r, dict) and r.get("ok"):
+            poses.append((bx, by))
+    return poses, len(poses) == len(tuiles)
+
+
+def _entites_a(api, x: float, y: float, rayon: float = 0.3) -> list[dict]:
+    r = api.inspect_at(x, y, rayon)
+    return list(r.get("entities", [])) if isinstance(r, dict) else []
+
+
+# Ce qu'on s'autorise à enlever pour faire passer une ligne : la nature, et rien d'autre.
+# Un rasage large détruit ce qu'on vient de bâtir — le projet l'a payé une fois. Ici on
+# lit d'abord CE QUI est sur la tuile, et on ne retire que si c'est un arbre ou un rocher.
+OBSTACLES_NATURELS = ("tree", "simple-entity")
+
+
+def degager_tuile(api, x: float, y: float, timeout: float = 20.0) -> bool:
+    """Enlève arbres et rochers d'une tuile. Ne touche à aucune construction."""
+    retire = False
+    for e in _entites_a(api, x, y, 0.4):
+        if e.get("type") in OBSTACLES_NATURELS:
+            r = api.run_action(api.remove_entity_at, x, y, e.get("name"), timeout=timeout)
+            retire = retire or (isinstance(r, dict) and r.get("ok") is True)
+    return retire
+
+
+def place_inserter_vers(api, cible: tuple[float, float], source: tuple[float, float],
+                        cible_nom: str, nom: str = "inserter",
+                        source_types: tuple[str, ...] = ("transport-belt",),
+                        essais: int = 24, timeout: float = 20.0,
+                        journal: Optional[list] = None
+                        ) -> Optional[tuple[float, float, str]]:
+    """Pose un inserter qui prend RÉELLEMENT sur la source et dépose RÉELLEMENT dans la cible.
+
+    Un inserter mal orienté se pose sans erreur, affiche un statut de bras qui attend,
+    et ne transporte rien : mesuré en jeu, l'inserter était à 2.5 tuiles de son boiler
+    et déposait dans le vide du côté opposé. Rien dans la réponse de pose ne le disait.
+
+    On ne DÉDUIT donc plus le sens d'un inserter d'une convention de direction — la
+    mesure contredit d'ailleurs celle qu'on attendait : orienté `north`, il prend en
+    y−1 et dépose en y+1.3. On pose, on LIT `pickup`/`drop` réels, et on tourne jusqu'à
+    ce que les deux tombent où il faut. Un emplacement qui n'y arrive dans aucune des
+    quatre directions est libéré avant d'essayer le suivant.
+
+    Retourne (x, y, direction) ou None si aucun emplacement ne convient.
+    """
+    cx, cy = cible
+    cands: list[tuple[float, float, float]] = []
+    for dx in range(-3, 4):
+        for dy in range(-3, 4):
+            if dx == 0 and dy == 0:
+                continue
+            x = math.floor(cx + dx) + 0.5
+            y = math.floor(cy + dy) + 0.5
+            cands.append((math.hypot(x - source[0], y - source[1]), x, y))
+    cands.sort()
+
+    for _, ix, iy in cands[:essais]:
+        if not can_place(api, nom, ix, iy):
+            if journal is not None:
+                journal.append(f"({ix},{iy}) occupe")
+            continue
+        r = api.run_action(api.place_entity_at, nom, ix, iy, "north", None, timeout=timeout)
+        if not (isinstance(r, dict) and r.get("ok")):
+            if journal is not None:
+                journal.append(f"({ix},{iy}) pose refusee")
+            continue
+        for d in DIR_NOM.values():
+            if d != "north":
+                api.run_action(api.rotate_entity_at, ix, iy, d, nom, timeout=timeout)
+            ins = next((e for e in _entites_a(api, ix, iy, 0.4)
+                        if e.get("type") == "inserter"), None)
+            if ins is None or ins.get("dropX") is None or ins.get("pickupX") is None:
+                break                      # le mod ne rend pas pickup/drop : on renonce
+            prend = any(e.get("type") in source_types or e.get("name") in source_types
+                        for e in _entites_a(api, ins["pickupX"], ins["pickupY"]))
+            depose = any(e.get("name") == cible_nom
+                         for e in _entites_a(api, ins["dropX"], ins["dropY"]))
+            if journal is not None:
+                journal.append(f"({ix},{iy}) {d} prend={prend} depose={depose}")
+            if prend and depose:
+                return (ix, iy, d)
+        api.run_action(api.remove_entity_at, ix, iy, nom, timeout=timeout)
+    return None
+
+
 def place_supply_poles(api, machines, ancrage: tuple[float, float],
                        pole: str = "small-electric-pole",
                        portee: float = POLE_PORTEE,

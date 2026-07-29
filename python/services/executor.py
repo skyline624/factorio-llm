@@ -245,6 +245,42 @@ def _can_place(api, name: str, x: float, y: float, d: str) -> tuple[bool, str]:
     return False, "can_place_check illisible"
 
 
+# De combien s'écarter de l'emprise d'un plan. Assez pour libérer les tuiles, assez peu
+# pour rester dans la portée de construction d'un joueur connecté (~10 tuiles).
+MARGE_DEGAGEMENT = 5.0
+
+
+def _degager_le_personnage(api, ordered: list[tuple[int, object]], report,
+                           timeout: float) -> None:
+    """Écarte l'avatar de l'emprise du plan — il bloque ses propres poses.
+
+    Mesuré : `can_place_entity` en mode `manual` rend `false` sur une tuile vide, du
+    seul fait que le personnage se tient dessus ; le même appel en mode par défaut rend
+    `true`. Comme on approche AU CENTRE du plan avant de bâtir, l'avatar se met
+    systématiquement en travers, et les décalages de repli ne servent à rien puisqu'il
+    reste au milieu. Le symptôme est un `can_place=False` sur du sable nu, sans aucune
+    entité alentour — introuvable tant qu'on ne pense pas à se regarder soi-même.
+
+    On ne s'éloigne que de `MARGE_DEGAGEMENT` : au-delà, un joueur connecté sortirait de
+    sa portée de construction et toutes les poses échoueraient pour la raison inverse.
+    """
+    pos = perception.position(api)
+    if pos is None or not ordered:
+        return
+    xs = [e.x for _, e in ordered]
+    ys = [e.y for _, e in ordered]
+    x1, x2, y1, y2 = min(xs) - 1.5, max(xs) + 1.5, min(ys) - 1.5, max(ys) + 1.5
+    if not (x1 <= pos[0] <= x2 and y1 <= pos[1] <= y2):
+        return
+    # On sort par le bord le plus proche : le trajet est court et reste à portée.
+    sorties = ((x1 - MARGE_DEGAGEMENT, pos[1]), (x2 + MARGE_DEGAGEMENT, pos[1]),
+               (pos[0], y1 - MARGE_DEGAGEMENT), (pos[0], y2 + MARGE_DEGAGEMENT))
+    cible = min(sorties, key=lambda p: (p[0] - pos[0]) ** 2 + (p[1] - pos[1]) ** 2)
+    res = api.run_action(api.walk_to, cible[0], cible[1], timeout=max(timeout, 60.0))
+    report.steps.append(f"degagement du personnage {pos} -> "
+                        f"({cible[0]:.1f},{cible[1]:.1f}) ok={_ok(res)}")
+
+
 def _rigid_offset(api, ordered: list[tuple[int, object]],
                   retry_offsets) -> tuple[Optional[tuple[float, float]], tuple]:
     """Cherche un décalage SOLIDAIRE valable pour toutes les entités du plan.
@@ -357,6 +393,8 @@ def execute_micro(api, plan, *, fuel: str = "coal", fuel_count: int = 5,
 
     # --- 3. Décalage solidaire du plan entier, puis pose dans l'ordre du flux ---
     ordered = _topological_order(plan, useful)
+    if not dry_run:
+        _degager_le_personnage(api, ordered, report, timeout)
     offset, fail = _rigid_offset(api, ordered, retry_offsets)
     if offset is None:
         idx, name, ex, ey, why = fail or (-1, "?", 0.0, 0.0, "aucun candidat")
