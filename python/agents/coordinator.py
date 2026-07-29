@@ -65,6 +65,21 @@ REPARATION: dict[str, tuple[str, str]] = {
 PRIORITE = {"defendre_urgence": 4, "reparer": 3, "batir_energie": 2, "defendre": 2,
             "batir_production": 1, "rien": 0}
 
+# Matériel indispensable à une action. Sans lui, elle échouera à l'exécution — la
+# proposer serait mentir sur le contrat, qui promet des options LÉGALES.
+#
+# Révélé en confrontant l'arbitre à un vrai modèle : privé de toute tourelle, il
+# choisissait quand même « defendre » trois fois sur trois, avec une justification
+# solide sur la menace. Il n'avait aucun moyen de savoir que l'action était impossible —
+# rien dans les options ne portait leur coût. Le défaut était dans l'interface, pas
+# dans le modèle, et un déterministe qui propose l'infaisable trompe aussi bien un
+# humain qu'une machine.
+BESOINS: dict[str, tuple[tuple[str, int], ...]] = {
+    "defendre": (("gun-turret", 1),),
+    "ravitailler": (("coal", 1),),
+    "relier": (("small-electric-pole", 1),),
+}
+
 
 @dataclass
 class EtatUsine:
@@ -98,6 +113,7 @@ class Decision:
     raison: str
     priorite: int = 0
     cible: Optional[Symptome] = None
+    faisable: bool = True     # False = le matériel manque (cf. BESOINS)
 
     def __str__(self) -> str:
         ou = f" @({self.cible.x},{self.cible.y})" if self.cible else ""
@@ -167,6 +183,19 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
         options.append(Decision(action="rien",
                                 raison=f"{etat.machines} machine(s) en état de marche",
                                 priorite=PRIORITE["rien"]))
+    # Faisabilité : une action dont le matériel manque est DÉCLASSÉE, pas supprimée.
+    # La supprimer masquerait le besoin ; la garder en tête ferait échouer la boucle à
+    # chaque tour. On la relègue et on dit pourquoi — c'est ce qui permet, plus tard, de
+    # décider d'aller fabriquer ce qui manque.
+    inv = etat.inventaire or {}
+    for o in options:
+        manquants = [f"{n} ({inv.get(n, 0)}/{c})"
+                     for n, c in BESOINS.get(o.action, ()) if inv.get(n, 0) < c]
+        if manquants:
+            o.priorite = 0
+            o.faisable = False
+            o.raison += f" — INFAISABLE, il manque : {', '.join(manquants)}"
+
     # Tri STABLE par priorité décroissante : l'ordre relatif des réparations (déjà
     # trié par le diagnostic) est préservé, et la défense se glisse au bon rang.
     options.sort(key=lambda d: -d.priorite)

@@ -36,10 +36,19 @@ def _m(name: str, x: float, y: float, status: str, type_: str = "machine") -> di
     return {"name": name, "x": x, "y": y, "status": status, "type": type_}
 
 
-def _etat(rows=None, power=None, reseau=7, kw=900.0, machines=None) -> EtatUsine:
+# Inventaire par défaut des fixtures : un agent qui répare dispose du matériel
+# courant. Sans lui, `BESOINS` déclasse à juste titre toute réparation — ce qui est le
+# comportement voulu, mais pas le sujet de la plupart des tests.
+INVENTAIRE = {"coal": 100, "gun-turret": 8, "firearm-magazine": 200,
+              "small-electric-pole": 20}
+
+
+def _etat(rows=None, power=None, reseau=7, kw=900.0, machines=None,
+          inventaire=None) -> EtatUsine:
     diag = diagnose(rows or [], power)
     return EtatUsine(machines=machines if machines is not None else diag.machines,
-                     diagnostic=diag, reseau=reseau, production_kw=kw)
+                     diagnostic=diag, reseau=reseau, production_kw=kw,
+                     inventaire=dict(INVENTAIRE if inventaire is None else inventaire))
 
 
 def test_reparer_passe_avant_construire() -> None:
@@ -193,6 +202,47 @@ def test_menace_imminente_cree_un_vrai_choix() -> None:
     ok = ("defendre" in actions and "batir_production" in actions
           and len(options) >= 2)
     rec("test_menace_imminente_cree_un_vrai_choix", ok,
+        f"{[(o.action, o.priorite) for o in options]}")
+    assert ok
+
+
+def test_option_sans_materiel_est_declassee() -> None:
+    """Une action dont le matériel manque ne doit pas être proposée en tête.
+
+    Révélé en confrontant l'arbitre à un vrai modèle : privé de toute tourelle, il
+    choisissait « defendre » trois fois sur trois, avec une justification solide sur la
+    menace. Il n'avait aucun moyen de savoir que l'action échouerait — rien dans les
+    options ne portait leur coût. Un déterministe qui propose l'infaisable trompe aussi
+    bien un humain qu'une machine.
+
+    Elle est DÉCLASSÉE et non supprimée : l'effacer masquerait le besoin, alors qu'il
+    faudra un jour décider d'aller fabriquer ce qui manque.
+    """
+    from agents.coordinator import enumerer_options
+    from services.threat_model import IMMINENTE
+    etat = EtatUsine(machines=0, diagnostic=diagnose([]), reseau=7,
+                     production_kw=900.0, inventaire={"coal": 50})   # aucune tourelle
+    etat.menace = _menace(IMMINENTE)
+    options = enumerer_options(etat)
+    defense = next((o for o in options if o.action == "defendre"), None)
+    ok = (defense is not None and not defense.faisable and defense.priorite == 0
+          and "INFAISABLE" in defense.raison and "gun-turret" in defense.raison
+          # ... et la production, elle, reste faisable : elle passe donc devant.
+          and options[0].action == "batir_production")
+    rec("test_option_sans_materiel_est_declassee", ok,
+        f"{[(o.action, o.priorite, o.faisable) for o in options]}")
+    assert ok
+
+
+def test_option_avec_materiel_reste_prioritaire() -> None:
+    """Le pendant : avec le matériel, rien ne change — la règle ne pénalise pas à tort."""
+    from agents.coordinator import enumerer_options
+    from services.threat_model import IMMINENTE
+    etat = _etat(machines=0)
+    etat.menace = _menace(IMMINENTE)
+    options = enumerer_options(etat)
+    ok = options[0].action == "defendre" and options[0].faisable
+    rec("test_option_avec_materiel_reste_prioritaire", ok,
         f"{[(o.action, o.priorite) for o in options]}")
     assert ok
 
@@ -373,6 +423,8 @@ def main() -> int:
         test_ennemis_sur_lusine_passent_avant_les_reparations,
         test_menace_latente_najoute_aucune_option,
         test_menace_imminente_cree_un_vrai_choix,
+        test_option_sans_materiel_est_declassee,
+        test_option_avec_materiel_reste_prioritaire,
         test_options_une_par_cause,
         test_decide_sans_arbitre_prend_la_premiere,
         test_arbitre_choisit_une_autre_option,
