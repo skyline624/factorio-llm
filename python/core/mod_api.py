@@ -139,6 +139,18 @@ class ModApi:
         Sert a vérifier ponctuellement water/out-of-map (frontière headless)."""
         return self._call("fl_tools", "get_tile", x, y)
 
+    def scan_threats(self, x: float = 0.0, y: float = 0.0, radius: float = 300.0) -> dict:
+        """Ce qui menace l'usine autour de (x, y). Non destructif.
+
+        Retourne {pollution, totalPollution, peaceful, nests:[{name,x,y,dist}],
+        nestCount, unitCount, nearest, evolution?}. Trois grandeurs distinctes :
+        les NIDS sont la menace structurelle (ils ne bougent pas, leur distance donne
+        le temps disponible), les UNITES la menace immediate, et la POLLUTION le
+        declencheur — en Factorio les vagues partent quand le nuage atteint un nid, donc
+        une usine sans pollution ne se fait pas attaquer quel que soit le voisinage.
+        """
+        return self._call("fl_tools", "scan_threats", x, y, radius)
+
     def get_power_state(self, x: float, y: float, radius: float = 4.0) -> dict:
         """Etat electrique autour de (x, y) — l'entite electrique la plus proche.
 

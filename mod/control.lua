@@ -80,6 +80,11 @@ remote.add_interface("fl_tools", {
   get_tile = function(x, y)
     safe(function() return tools.get_tile(x, y) end)
   end,
+  -- J5 : menace (nids, unites, pollution). La pollution est le declencheur des
+  -- vagues : sans elle, des nids proches ne justifient pas encore de fortifier.
+  scan_threats = function(x, y, radius)
+    safe(function() return tools.scan_threats(x, y, radius) end)
+  end,
   -- E3 : etat electrique (reseau, charge, statut). Sans lui on sait poser une
   -- centrale mais pas verifier qu'elle alimente.
   get_power_state = function(x, y, radius)

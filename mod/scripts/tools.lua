@@ -604,6 +604,93 @@ function M.get_tile(x, y)
   return json.encode({x = math.floor(x), y = math.floor(y), name = t.name})
 end
 
+-- scan_threats(x, y, radius) : ce qui menace l'usine autour d'une position (J5).
+--
+-- Non destructif. Trois grandeurs, parce qu'elles ne disent pas la meme chose :
+--   nids       : la menace STRUCTURELLE. Un nid ne bouge pas ; c'est de lui que
+--                partiront les vagues, et sa distance donne le temps dont on dispose.
+--   unites     : la menace IMMEDIATE. Des biters deja en approche ne se traitent pas
+--                comme un nid a 300 tuiles.
+--   pollution  : le DECLENCHEUR. En Factorio les vagues partent quand le nuage atteint
+--                un nid ; une usine sans pollution ne se fait pas attaquer, quel que
+--                soit le nombre de nids alentour. C'est ce qui permet de ne PAS
+--                fortifier trop tot -- chaque minute passee a se defendre n'est pas
+--                passee a produire.
+--
+-- Retourne {x, y, radius, pollution, totalPollution, peaceful, nests:[{name,x,y,dist}],
+-- nestCount, unitCount, nearest:{name,x,y,dist}, evolution?}.
+function M.scan_threats(x, y, radius)
+  local char = player_mod.get_ai_entity()
+  local surface = char and char.surface or game.surfaces.nauvis or game.surfaces[1]
+  if not surface then return json.encode({error = "aucune surface"}) end
+  local pos = {x = x or (char and char.position.x) or 0,
+               y = y or (char and char.position.y) or 0}
+  local r = math.min((radius and radius > 0) and radius or 300, 600)
+
+  local out = {x = r1(pos.x), y = r1(pos.y), radius = r}
+  pcall(function() out.pollution = r1(surface.get_pollution(pos)) end)
+  pcall(function() out.totalPollution = r1(surface.get_total_pollution()) end)
+  pcall(function() out.peaceful = surface.peaceful_mode end)
+  -- L'evolution a change de place en 2.0 : on tente les deux formes plutot que de
+  -- supposer, et on omet le champ si aucune ne repond.
+  if not pcall(function() out.evolution = r1(game.forces.enemy.get_evolution_factor(surface)) end) then
+    pcall(function() out.evolution = r1(game.forces.enemy.evolution_factor) end)
+  end
+
+  local function dist(e)
+    local dx, dy = e.position.x - pos.x, e.position.y - pos.y
+    return math.sqrt(dx * dx + dy * dy)
+  end
+
+  local nests = {}
+  local ok_n, spawners = pcall(function()
+    return surface.find_entities_filtered{type = {"unit-spawner", "turret"},
+                                          force = "enemy", position = pos, radius = r}
+  end)
+  if ok_n and spawners then
+    local tri = {}
+    for _, e in ipairs(spawners) do
+      if e.valid then table.insert(tri, {e = e, d = dist(e)}) end
+    end
+    table.sort(tri, function(a, b) return a.d < b.d end)
+    out.nestCount = #tri
+    -- Cap a 12 : au-dela, la liste ne sert plus a decider, seulement a alourdir.
+    for i = 1, math.min(#tri, 12) do
+      table.insert(nests, {name = tri[i].e.name, x = r1(tri[i].e.position.x),
+                           y = r1(tri[i].e.position.y), dist = r1(tri[i].d)})
+    end
+  else
+    out.nestCount = 0
+  end
+  out.nests = nests
+
+  local ok_u, units = pcall(function()
+    return surface.find_entities_filtered{type = "unit", force = "enemy",
+                                          position = pos, radius = r}
+  end)
+  out.unitCount = (ok_u and units) and #units or 0
+  -- Unites PRES de l'usine, comptees a part. « 39 unites dans 300 tuiles » et « des
+  -- biters sur l'usine » demandent des reactions opposees, et le compte global ne les
+  -- distingue pas. Mesure : 39 unites dans 300, 0 dans 60 -- la difference est tout
+  -- l'enjeu. `find_nearest_enemy` ne suffit pas non plus : il rend l'ennemi le plus
+  -- proche quel qu'il soit, nid ou unite.
+  local ok_p, proches = pcall(function()
+    return surface.find_entities_filtered{type = "unit", force = "enemy",
+                                          position = pos, radius = 60}
+  end)
+  out.unitsNear = (ok_p and proches) and #proches or 0
+
+  local ok_ne, ne = pcall(function()
+    return surface.find_nearest_enemy{position = pos, max_distance = r,
+                                      force = game.forces.player}
+  end)
+  if ok_ne and ne and ne.valid then
+    out.nearest = {name = ne.name, x = r1(ne.position.x), y = r1(ne.position.y),
+                   dist = r1(dist(ne))}
+  end
+  return json.encode(out)
+end
+
 -- get_power_state(x, y, radius) : etat ELECTRIQUE autour d'une position (E3).
 --
 -- Repond aux trois questions qu'aucun outil ne couvrait, et sans lesquelles on sait

@@ -34,6 +34,11 @@ local STARTING_ITEMS = {
   {name = "underground-belt", count = 10},
   {name = "splitter", count = 4},
   {name = "lab", count = 2},
+  -- J5 : de quoi se defendre. Le kit n'en contenait aucune, et une usine sans defense
+  -- se fait detruire des que sa pollution atteint un nid (peaceful_mode=false).
+  {name = "gun-turret", count = 8},
+  {name = "firearm-magazine", count = 200},
+  {name = "stone-wall", count = 100},
   {name = "pipe", count = 100},
   {name = "iron-chest", count = 4},
   -- S2a : fluides (socle + chaîne plastic-bar).

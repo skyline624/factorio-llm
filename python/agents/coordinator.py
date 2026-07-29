@@ -37,6 +37,7 @@ from typing import Optional, Protocol
 
 from services import perception
 from services.factory_doctor import Diagnostic, Symptome, diagnose_zone
+from services.threat_model import EN_COURS, Menace, evaluer
 
 # Cause diagnostiquée -> action qui la répare, et primitive correspondante.
 # Une cause sans réparation connue devient "inspecter" : on préfère le dire plutôt
@@ -53,7 +54,16 @@ REPARATION: dict[str, tuple[str, str]] = {
 }
 
 # Ordre du curriculum : plus le nombre est grand, plus c'est urgent.
-PRIORITE = {"reparer": 3, "batir_energie": 2, "batir_production": 1, "rien": 0}
+#
+# `defendre` apparaît à DEUX niveaux, et c'est délibéré :
+#   - des ennemis déjà sur l'usine passent avant tout, y compris les réparations : rien
+#     ne sert de remettre un four en marche pendant qu'on le détruit ;
+#   - une menace seulement imminente vaut `batir_energie`, donc entre en CONCURRENCE
+#     avec la production. C'est le premier arbitrage du projet où deux options
+#     défendables s'équivalent — et donc le premier endroit où un arbitre LLM aurait
+#     quelque chose à apporter.
+PRIORITE = {"defendre_urgence": 4, "reparer": 3, "batir_energie": 2, "defendre": 2,
+            "batir_production": 1, "rien": 0}
 
 
 @dataclass
@@ -64,6 +74,7 @@ class EtatUsine:
     reseau: Optional[int] = None          # networkId observé, None = aucun réseau
     production_kw: float = 0.0
     inventaire: dict = field(default_factory=dict)
+    menace: Optional[Menace] = None       # None = menace non évaluée (pas « aucune »)
 
     @property
     def a_de_l_energie(self) -> bool:
@@ -132,6 +143,16 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
                                 raison=f"{c.name} : {c.cause} — {explication}",
                                 priorite=PRIORITE["reparer"], cible=c))
 
+    # Défense : deux niveaux d'urgence, cf. PRIORITE. Le ThreatModel a déjà tranché
+    # le « faut-il » (la pollution déclenche les vagues, pas la proximité des nids) ;
+    # ici on n'ajoute que l'option correspondante.
+    if etat.menace is not None and etat.menace.agir:
+        urgent = etat.menace.niveau >= EN_COURS
+        options.append(Decision(
+            action="defendre",
+            raison=str(etat.menace),
+            priorite=PRIORITE["defendre_urgence" if urgent else "defendre"]))
+
     if not etat.a_de_l_energie:
         options.append(Decision(action="batir_energie",
                                 raison=("aucun réseau alimenté : rien d'électrique ne "
@@ -146,6 +167,9 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
         options.append(Decision(action="rien",
                                 raison=f"{etat.machines} machine(s) en état de marche",
                                 priorite=PRIORITE["rien"]))
+    # Tri STABLE par priorité décroissante : l'ordre relatif des réparations (déjà
+    # trié par le diagnostic) est préservé, et la défense se glisse au bon rang.
+    options.sort(key=lambda d: -d.priorite)
     return options
 
 
@@ -188,7 +212,8 @@ class Coordinator:
     def __init__(self, api, zone: tuple[float, float] = (0.0, 0.0), rayon: float = 30.0,
                  ressource: str = "iron-ore", demande_kw: float = 900.0,
                  combustible: str = "coal", builder=None,
-                 arbitre: Optional[Arbitre] = None):
+                 arbitre: Optional[Arbitre] = None,
+                 tourelle: str = "gun-turret", munition: str = "firearm-magazine"):
         self.api = api
         self.zone = zone
         self.rayon = rayon
@@ -198,6 +223,9 @@ class Coordinator:
         # Point d'insertion d'un arbitrage LLM : None = décision déterministe.
         # Il n'est consulté que lorsqu'il y a réellement plusieurs options.
         self.arbitre = arbitre
+        self.tourelle = tourelle
+        self.munition = munition
+        self.derniere_menace: Optional[Menace] = None
         self.journal: list[str] = []
         # Mémoire de la boucle : où raccorder la prochaine chaîne, et ce qui a été bâti.
         self.dernier_poteau: Optional[tuple[float, float]] = None
@@ -227,6 +255,11 @@ class Coordinator:
                     etat.production_kw = float(ps.get("productionKW") or 0.0)
                     break
         etat.inventaire = perception.inventory(self.api)
+        # La menace est évaluée à CHAQUE tour : elle change sans qu'on y touche, alors
+        # que l'usine ne change que quand on agit.
+        etat.menace = evaluer(self.api.scan_threats(self.zone[0], self.zone[1], 300.0),
+                              usine=self.zone)
+        self.derniere_menace = etat.menace
         return etat
 
     # ----- AGIT -----
@@ -243,6 +276,8 @@ class Coordinator:
             return False, "rien à faire"
         if d.action in ("batir_energie", "batir_production"):
             return self.batir(d)
+        if d.action == "defendre":
+            return self.defendre()
         if d.cible is None:
             return False, f"{d.action} : délégué (aucune cible ponctuelle)"
 
@@ -265,6 +300,58 @@ class Coordinator:
                     return True, f"poteau posé en ({x},{y}) pour {c.name}"
             return False, f"aucune position de poteau libre autour de {c.name}"
         return False, f"{d.action} : pas encore automatisé"
+
+    # ----- DÉFENDRE -----
+
+    def defendre(self, nombre: int = 3, munitions: int = 20) -> tuple[bool, str]:
+        """Pose des tourelles face au front et les munit.
+
+        Une tourelle sans munitions est un décor : on l'approvisionne dans la foulée,
+        et une pose qu'on n'a pas pu munir est signalée comme telle plutôt que comptée
+        comme une défense.
+
+        On ne ceinture pas l'usine — le ThreatModel donne la direction d'où viendront
+        les vagues, et un périmètre complet coûterait plusieurs fois plus pour la même
+        protection.
+        """
+        from services.threat_model import positions_defense
+        from services.site_finder import can_place
+
+        menace = self.derniere_menace
+        if menace is None or not menace.front:
+            return False, "aucun front identifié : rien à défendre de ce côté"
+
+        inv = perception.inventory(self.api)
+        if inv.get(self.tourelle, 0) < 1:
+            return False, f"aucune {self.tourelle} en inventaire"
+
+        posees, munies = 0, 0
+        for (x, y) in positions_defense(self.zone, menace, nombre=nombre):
+            if inv.get(self.tourelle, 0) - posees < 1:
+                break
+            place = None
+            for dx, dy in ((0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
+                           (2.0, 0.0), (-2.0, 0.0)):
+                px, py = float(int(x + dx)) + 0.5, float(int(y + dy)) + 0.5
+                if not can_place(self.api, self.tourelle, px, py):
+                    continue
+                r = self.api.run_action(self.api.place_entity_at, self.tourelle,
+                                        px, py, "north", None, timeout=20.0)
+                if isinstance(r, dict) and r.get("ok"):
+                    place = (px, py)
+                    break
+            if place is None:
+                continue
+            posees += 1
+            rm = self.api.run_action(self.api.move_items_at, self.munition,
+                                     self.tourelle, place[0], place[1], munitions,
+                                     True, timeout=30.0)
+            if isinstance(rm, dict) and rm.get("ok"):
+                munies += 1
+        if posees == 0:
+            return False, f"aucune position de tourelle libre au {menace.front_nom}"
+        return True, (f"{posees} tourelle(s) posée(s) au {menace.front_nom}, "
+                      f"{munies} munie(s) — {menace.raison}")
 
     # ----- BÂTIR (délégué aux planners + executor) -----
 

@@ -142,6 +142,61 @@ def test_inserter_ne_declenche_pas_de_reparation() -> None:
     assert ok
 
 
+def _menace(niveau, front=(0.0, -1.0), nom="nord"):
+    from services.threat_model import Menace
+    return Menace(niveau=niveau, raison="test", front=front, front_nom=nom)
+
+
+def test_ennemis_sur_lusine_passent_avant_les_reparations() -> None:
+    """Rien ne sert de remettre un four en marche pendant qu'on le détruit."""
+    from services.threat_model import EN_COURS
+    etat = _etat([_m("electric-furnace", 0, 0, "no_fuel")])
+    etat.menace = _menace(EN_COURS)
+    d = decide(etat)
+    ok = d.action == "defendre" and d.priorite == 4
+    rec("test_ennemis_sur_lusine_passent_avant_les_reparations", ok, str(d))
+    assert ok
+
+
+def test_menace_latente_najoute_aucune_option() -> None:
+    """Des nids sans pollution : on ne propose même pas de fortifier.
+
+    Le temps passé à se défendre n'est pas passé à produire ; proposer l'option
+    reviendrait à laisser un arbitre la choisir sans raison.
+    """
+    from agents.coordinator import enumerer_options
+    from services.threat_model import LATENTE
+    etat = _etat([_m("electric-furnace", 0, 0, "working")])
+    etat.menace = _menace(LATENTE)
+    options = enumerer_options(etat)
+    ok = all(o.action != "defendre" for o in options)
+    rec("test_menace_latente_najoute_aucune_option", ok,
+        f"{[o.action for o in options]}")
+    assert ok
+
+
+def test_menace_imminente_cree_un_vrai_choix() -> None:
+    """LE cas qui motive un arbitre : deux options défendables, à égalité.
+
+    Usine saine, aucune machine encore construite, et des vagues sur le point de
+    partir : fortifier ou produire ? La priorité ne tranche pas (2 contre 2 — c'était
+    l'intention), et aucune règle simple ne le ferait honnêtement. Jusqu'ici le
+    curriculum était linéaire et le déterministe suffisait ; ici il choisit par défaut,
+    faute de mieux.
+    """
+    from agents.coordinator import enumerer_options
+    from services.threat_model import IMMINENTE
+    etat = EtatUsine(machines=0, diagnostic=diagnose([]), reseau=7, production_kw=900.0)
+    etat.menace = _menace(IMMINENTE)
+    options = enumerer_options(etat)
+    actions = [o.action for o in options]
+    ok = ("defendre" in actions and "batir_production" in actions
+          and len(options) >= 2)
+    rec("test_menace_imminente_cree_un_vrai_choix", ok,
+        f"{[(o.action, o.priorite) for o in options]}")
+    assert ok
+
+
 def test_options_une_par_cause() -> None:
     """`enumerer_options` expose TOUTES les réparations légales, pas seulement la 1re.
 
@@ -315,6 +370,9 @@ def main() -> int:
         test_cause_inconnue_donne_inspecter,
         test_la_cause_la_plus_grave_est_traitee,
         test_inserter_ne_declenche_pas_de_reparation,
+        test_ennemis_sur_lusine_passent_avant_les_reparations,
+        test_menace_latente_najoute_aucune_option,
+        test_menace_imminente_cree_un_vrai_choix,
         test_options_une_par_cause,
         test_decide_sans_arbitre_prend_la_premiere,
         test_arbitre_choisit_une_autre_option,
