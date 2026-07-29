@@ -73,6 +73,15 @@ PRIORITE = {"defendre_urgence": 4, "reparer": 3, "batir_energie": 2, "defendre":
 # agent qui ne fait que ravitailler y passe sa vie et ne construit plus rien.
 SEUIL_AUTOMATISATION = 2
 
+# Au-delà de ce nombre d'échecs consécutifs sur la même action et la même cible, on cesse
+# d'insister. Mesuré en partie longue : 559 tours sur 562 passés à retenter `alimenter`
+# sur une machine dont l'ingrédient n'était pas extractible. La boucle ne plantait pas —
+# elle « fonctionnait », et c'est pire : elle occupait tout son temps à ne rien faire.
+#
+# L'option n'est pas SUPPRIMÉE mais déclassée, comme celles dont le matériel manque :
+# l'agent tente autre chose, et y reviendra si le contexte change.
+SEUIL_ABANDON = 3
+
 # Le combustible du bootstrap, et le stock en dessous duquel on cesse de dépanner à la
 # main. Amorcer un foreur burner et ses deux bras coûte une trentaine d'unités : si on
 # descend sous ce seuil, on perd la capacité de bâtir la chaîne qui rendrait le
@@ -108,6 +117,9 @@ class EtatUsine:
     # Combien de fois chaque machine a déjà été ravitaillée à la main, par position.
     # C'est la mémoire qui permet de distinguer un incident d'un besoin structurel.
     ravitaillements: dict = field(default_factory=dict)
+    # Échecs consécutifs par (action, cible). Sans cette mémoire, une action impossible
+    # est retentée indéfiniment : la boucle tourne sans avancer, ce qui ne se voit pas.
+    echecs: dict = field(default_factory=dict)
 
     @property
     def a_de_l_energie(self) -> bool:
@@ -246,9 +258,18 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
             action = "approvisionner"
             explication = (f"il ne reste que {stock} {COMBUSTIBLE} : les garder pour "
                            f"amorcer une chaîne plutôt que les brûler en un plein")
-        options.append(Decision(action=action,
-                                raison=f"{c.name} : {c.cause} — {explication}",
-                                priorite=PRIORITE["reparer"], cible=c))
+        # Une action qui a échoué SEUIL_ABANDON fois de suite sur cette cible est
+        # reléguée exactement comme celle dont le matériel manque : priorité nulle et
+        # `faisable=False`. Le même mécanisme pour la même raison — proposer en tête ce
+        # qui vient d'échouer trois fois trompe l'arbitre autant qu'un humain.
+        rates = etat.echecs.get((action, c.name, round(c.x), round(c.y)), 0)
+        renonce = rates >= SEUIL_ABANDON
+        options.append(Decision(
+            action=action,
+            raison=(f"{c.name} : {c.cause} — {explication}"
+                    + (f" — ÉCHOUÉ {rates} fois, on n'insiste plus" if renonce else "")),
+            priorite=0 if renonce else PRIORITE["reparer"], cible=c,
+            faisable=not renonce))
 
     # Défense : deux niveaux d'urgence, cf. PRIORITE. Le ThreatModel a déjà tranché
     # le « faut-il » (la pollution déclenche les vagues, pas la proximité des nids) ;
@@ -308,6 +329,17 @@ def decide(etat: EtatUsine, arbitre: Optional[Arbitre] = None) -> Decision:
         Un agent qui s'arrête parce que le modèle est indisponible ne vaut rien.
     """
     options = enumerer_options(etat)
+    # Toutes les options ont échoué ou sont infaisables : NE RIEN FAIRE est la bonne
+    # réponse, et il faut la dire. Mesuré en partie longue : sans ce cas, la boucle
+    # reprenait 598 fois de suite la seule action disponible, déjà abandonnée trois fois.
+    # Elle « fonctionnait » — aucune erreur, aucun symptôme — et ne faisait rien.
+    if options and not any(o.faisable for o in options):
+        return Decision(
+            action="rien",
+            raison=("tout ce qui est réparable ici a déjà échoué : "
+                    + " ; ".join(f"{o.action} sur {o.cible.name}" for o in options[:3]
+                                 if o.cible is not None)),
+            priorite=PRIORITE["rien"])
     if arbitre is None or len(options) <= 1:
         return options[0]
     try:
@@ -361,6 +393,8 @@ class Coordinator:
         # Sans ce point de départ, on ne peut pas SUIVRE le flux, et donc pas vérifier
         # qu'une chaîne bâtie transporte réellement quelque chose.
         self._chaines: dict = {}
+        # Échecs consécutifs par (action, cible) : la mémoire qui empêche l'acharnement.
+        self._echecs: dict = {}
         self.journal: list[str] = []
         # Les actions menées à leur terme sans produire leur effet. C'est le signal sur
         # lequel une enquête pourra être déclenchée ; sans lui, l'agent est aveugle à
@@ -408,6 +442,7 @@ class Coordinator:
                     break
         etat.inventaire = perception.inventory(self.api)
         etat.ravitaillements = dict(self._ravitaillements)
+        etat.echecs = dict(self._echecs)
         # La menace est évaluée à CHAQUE tour : elle change sans qu'on y touche, alors
         # que l'usine ne change que quand on agit.
         etat.menace = evaluer(self.api.scan_threats(self.zone[0], self.zone[1], 300.0),
@@ -582,6 +617,14 @@ class Coordinator:
             besoin = self._ingredient_manquant(c)
             if besoin is None:
                 return False, f"ingrédient attendu par {c.name} inconnu"
+            # Un ingrédient qui a une RECETTE se fabrique, il ne s'extrait pas. Mesuré en
+            # partie longue : l'assembleuse attendait `iron-plate`, l'agent a cherché un
+            # gisement d'`iron-plate` — qui n'existe pas — et a recommencé 559 fois.
+            # Approvisionner et produire sont deux problèmes ; les confondre condamne la
+            # boucle à chercher un minerai de plaque de fer.
+            if (self.api.get_recipe(besoin) or {}).get("ingredients"):
+                return False, (f"{c.name} attend « {besoin} », qui se FABRIQUE : c'est "
+                               f"une chaîne de production à bâtir, pas un gisement à relier")
             return self.approvisionner(c, besoin)
 
         return False, f"{d.action} : pas encore automatisé"
@@ -1072,6 +1115,20 @@ class Coordinator:
         d = decide(etat, self.arbitre)
         agi, detail = self.agir(d)
         self.journal.append(f"{d} -> {'agi' if agi else 'sans effet'} ({detail})")
+
+        # On RETIENT l'échec, par action et par cible. Un compteur remis à zéro au succès :
+        # ce qui compte est l'acharnement, pas le total sur la partie.
+        if d.cible is not None:
+            cle = (d.action, d.cible.name, round(d.cible.x), round(d.cible.y))
+            if agi:
+                self._echecs.pop(cle, None)
+            else:
+                self._echecs[cle] = self._echecs.get(cle, 0) + 1
+                if self._echecs[cle] == SEUIL_ABANDON:
+                    self.journal.append(
+                        f"ABANDON de « {d.action} » sur {d.cible.name}"
+                        f"@({d.cible.x},{d.cible.y}) après {SEUIL_ABANDON} échecs : "
+                        f"{detail}")
         if not agi:
             return d, agi, etat
 

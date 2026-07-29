@@ -393,6 +393,7 @@ class _CoordFactice:
         self.arbitre = None          # `tick` le lit ; ces tests portent sur la boucle
         self.api = None
         self.ecarts: list = []
+        self._echecs: dict = {}   # la mémoire d'acharnement, éprouvée à part
         self.run = Coordinator.run.__get__(self)
         self.tick = Coordinator.tick.__get__(self)
 
@@ -583,6 +584,7 @@ def test_ecart_journalise_quand_lattente_est_decue() -> None:
     c = _coord_mesure(api)
     c.journal, c.ecarts, c.arbitre = [], [], None
     c.constats, c.enqueteur = [], None      # l'enquête est éprouvée à part
+    c._echecs = {}
     c.remettre_en_etat = lambda e: False    # la réparation aussi
     c.observer = lambda: EtatUsine()
     c.agir = lambda d: (True, "factice")
@@ -602,6 +604,39 @@ def test_ecart_journalise_quand_lattente_est_decue() -> None:
     rec("test_ecart_journalise_quand_lattente_est_decue", ok,
         f"{len(c.ecarts)} écart(s) : {c.ecarts[0] if c.ecarts else '-'}")
     assert ok
+
+
+def test_acharnement_declasse_apres_trois_echecs() -> None:
+    """Une action qui échoue sans cesse doit cesser d'être prioritaire.
+
+    Mesuré en partie longue : 559 tours sur 562 passés à retenter la même action
+    impossible. La boucle ne plantait pas — elle « fonctionnait », ce qui est pire :
+    aucun symptôme, et tout son temps passé à ne rien faire.
+
+    L'option n'est pas supprimée mais DÉCLASSÉE : le contexte peut changer, et une
+    option retirée pour toujours ne reviendrait jamais.
+    """
+    from agents.coordinator import SEUIL_ABANDON, enumerer_options
+    # `no_fuel` (gravité 2) passe avant `full_output` (gravité 1) : c'est cet ordre-là
+    # que le déclassement doit renverser, sans quoi on ne mesurerait rien.
+    lignes = [_m("stone-furnace", 0, 0, "no_fuel"),
+              _m("electric-furnace", 0, 8, "full_output")]
+    avant = enumerer_options(_etat(lignes))
+    d_avant = decide(_etat(lignes))
+
+    etat = _etat(lignes)
+    etat.echecs = {("ravitailler", "stone-furnace", 0, 0): SEUIL_ABANDON}
+    apres = enumerer_options(etat)
+    d_apres = decide(etat)
+    relegue = next(o for o in apres if o.action == "ravitailler")
+
+    ok = (avant[0].action == "ravitailler" and d_avant.action == "ravitailler"
+          and apres[-1].action == "ravitailler" and d_apres.action == "evacuer"
+          and not relegue.faisable and len(apres) == len(avant))
+    rec("test_acharnement_declasse_apres_trois_echecs", ok,
+        f"{d_avant.action} -> {d_apres.action} après {SEUIL_ABANDON} échecs ; "
+        f"l'option reste proposée en dernier ({len(apres)} options)")
+    assert ok, [f"{o.action}/{o.priorite}/{o.faisable}" for o in apres]
 
 
 def main() -> int:
@@ -633,6 +668,7 @@ def main() -> int:
         test_attente_machine_absente_est_un_echec,
         test_attente_approvisionner_suit_le_flux,
         test_ecart_journalise_quand_lattente_est_decue,
+        test_acharnement_declasse_apres_trois_echecs,
     ]
     for t in tests:
         t()
