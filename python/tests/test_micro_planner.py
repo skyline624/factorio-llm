@@ -282,6 +282,72 @@ def test_micro_drop_tile_hors_emprise() -> None:
     assert ok
 
 
+def _sample(tuiles) -> dict:
+    """Un scan_patch réduit à ce qui compte ici : ses tuiles de minerai réelles."""
+    return {"sample": [{"x": x, "y": y} for x, y in tuiles]}
+
+
+def test_ancres_ordonnees_du_bord_aval() -> None:
+    """La première ancre reste celle d'avant : la chaîne initiale ne bouge pas.
+
+    `_anchor_on_ore` ne rendait qu'une ancre, la plus avancée côté `facing`. C'est le bon
+    choix pour la PREMIÈRE chaîne, et c'est ce que quatre scripts de vérification
+    attendent. La liste doit donc commencer exactement là.
+    """
+    from agents.factory_builder import FactoryBuilder
+    sp = _sample([(0, 0), (0, 4), (0, 8)])          # facing=4 (sud) : y croissant
+    liste = FactoryBuilder.ancres_sur_minerai(sp, 4)
+    seule = FactoryBuilder._anchor_on_ore(sp, 4)
+    ok = liste and liste[0] == seule and liste[0] == (0.0, 7.0)
+    rec("test_ancres_ordonnees_du_bord_aval", bool(ok),
+        f"{liste[:3]} | _anchor_on_ore={seule}")
+    assert ok
+
+
+def test_ancres_multiples_pour_etendre() -> None:
+    """Il en faut PLUSIEURS : la meilleure est occupée dès la première chaîne posée.
+
+    Mesuré en jeu : une extension reproposait invariablement (-26.5,-62.5) — l'emplacement
+    de la chaîne existante — et échouait sur `can_place=False` trois fois de suite avant
+    d'être abandonnée définitivement. L'inventaire était plein ; seule la place manquait.
+    """
+    from agents.factory_builder import FactoryBuilder
+    sp = _sample([(0, 0), (0, 5), (0, 10), (6, 10), (12, 10)])
+    liste = FactoryBuilder.ancres_sur_minerai(sp, 4, ecart=4)
+    ok = len(liste) >= 3 and len(set(liste)) == len(liste)
+    rec("test_ancres_multiples_pour_etendre", ok, f"{len(liste)} ancre(s) : {liste[:4]}")
+    assert ok
+
+
+def test_ancres_espacees_pour_ne_pas_reessayer_le_meme_endroit() -> None:
+    """Douze tuiles voisines ne font pas douze emplacements.
+
+    Une micro-chaîne occupe drill (3) + inserter (1) + four (3). Sans écart minimal, les
+    candidats décrivent le même endroit et chaque tentative coûte un plan et un pré-vol
+    pour rien.
+    """
+    from agents.factory_builder import FactoryBuilder
+    serres = _sample([(0, 10), (1, 10), (2, 10), (3, 10), (0, 9), (1, 9)])
+    liste = FactoryBuilder.ancres_sur_minerai(serres, 4, ecart=4)
+    ok = len(liste) == 1
+    rec("test_ancres_espacees_pour_ne_pas_reessayer_le_meme_endroit", ok,
+        f"6 tuiles serrées -> {len(liste)} ancre(s) : {liste}")
+    assert ok
+
+
+def test_aucune_tuile_aucune_ancre() -> None:
+    """Sans minerai, aucune ancre — et surtout pas une position inventée.
+
+    Un mining-drill hors minerai est refusé à la pose (26/26 mesurés en live) : rendre
+    une ancre par défaut ferait échouer la chaîne entière à l'exécution.
+    """
+    from agents.factory_builder import FactoryBuilder
+    ok = (FactoryBuilder.ancres_sur_minerai({}, 4) == []
+          and FactoryBuilder._anchor_on_ore({}, 4) is None)
+    rec("test_aucune_tuile_aucune_ancre", ok, "liste vide et ancre None")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_micro_3_entities,
@@ -298,6 +364,10 @@ def main() -> int:
         test_micro_feasibility_ok,
         test_micro_invalid_facing,
         test_micro_drop_tile_hors_emprise,
+        test_ancres_ordonnees_du_bord_aval,
+        test_ancres_multiples_pour_etendre,
+        test_ancres_espacees_pour_ne_pas_reessayer_le_meme_endroit,
+        test_aucune_tuile_aucune_ancre,
     ]
     for t in tests:
         t()

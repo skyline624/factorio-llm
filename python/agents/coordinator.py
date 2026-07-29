@@ -1541,27 +1541,57 @@ class Coordinator:
                           f"{len(ligne)} poteaux ({'complète' if complete else 'INTERROMPUE'})")
 
         # batir_production : micro-chaîne électrique ancrée sur du minerai réel.
+        #
+        # PLUSIEURS ancres sont essayées, et c'est ce qui rend une extension possible : la
+        # meilleure tuile est occupée dès que la première chaîne y est posée. Mesuré, une
+        # extension reproposait invariablement le même emplacement et échouait sur
+        # `can_place=False` — trois fois, puis l'abandon définitif gelait la croissance.
+        #
+        # Boucler est sûr : le pré-vol de l'executor refuse le plan ENTIER avant de poser
+        # quoi que ce soit, une ancre rejetée ne laisse donc aucun débris derrière elle.
         sp = self.builder._scan_patch_local(self.ressource)
-        ancre = self.builder._anchor_on_ore(sp, 4) if sp.get("sample") else None
-        if ancre is None:
+        candidats = (self.builder.ancres_sur_minerai(
+            sp, 4, ecart=self.builder.ECART_ANCRES) if sp.get("sample") else [])
+        # Les tuiles NON BÂTIES du gisement viennent ensuite : le `sample` de scan_patch
+        # ne donne que douze tuiles groupées, identiques à tout rayon, alors que le bbox
+        # décrit parfois un gisement de trente tuiles de côté. Sans cela, l'agent
+        # concluait « aucune place libre » au bord d'un gisement presque intact.
+        if sp.get("bbox"):
+            for a in site_finder.ancres_libres_sur_minerai(
+                    self.api, sp["bbox"], self.zone,
+                    ecart=self.builder.ECART_ANCRES):
+                if a not in candidats:
+                    candidats.append(a)
+        if not candidats:
             return False, f"aucun gisement de {self.ressource} exploitable"
-        preparer(ancre[0], ancre[1])
-        mp = plan_micro(MicroRequest(
-            patch=ResourcePatch(resource=self.ressource, tiles=[], bbox=(0, 0, 0, 0)),
-            facing=4, anchor=ancre, drill_tier="electric-mining-drill",
-            inserter_tier="inserter", furnace_tier="electric-furnace",
-            drill_size=3, furnace_size=3))
-        # `approach=True` : en production le mod refuse toute pose au-delà de
-        # `build_distance` (« walk closer first », mesuré à 10 tuiles). Le foreur est sur
-        # le gisement, donc à des dizaines de tuiles de la machine qu'on alimente — il
-        # FAUT y aller. En test_mode l'approche est un téléport, elle ne coûte rien.
-        rap = execute_micro(self.api, mp, generate=False, approach=True, timeout=90.0)
-        if not rap.ok:
-            return False, f"chaîne non posée : {rap.missing or rap.blocked[:1]}"
-        ancrage = self.dernier_poteau or ancre
-        poteaux = site_finder.place_supply_poles(self.api, rap.placed, ancrage)
-        return True, (f"chaîne posée ({len(rap.placed)} machines) sur {self.ressource}, "
-                      f"{len(poteaux)} poteau(x) de desserte")
+        essais: list[str] = []
+        for ancre in candidats[:6]:
+            preparer(ancre[0], ancre[1])
+            mp = plan_micro(MicroRequest(
+                patch=ResourcePatch(resource=self.ressource, tiles=[], bbox=(0, 0, 0, 0)),
+                facing=4, anchor=ancre, drill_tier="electric-mining-drill",
+                inserter_tier="inserter", furnace_tier="electric-furnace",
+                drill_size=3, furnace_size=3))
+            # `approach=True` : en production le mod refuse toute pose au-delà de
+            # `build_distance` (« walk closer first », mesuré à 10 tuiles). Le foreur est
+            # sur le gisement, donc à des dizaines de tuiles de la machine qu'on alimente
+            # — il FAUT y aller. En test_mode l'approche est un téléport, elle ne coûte
+            # rien.
+            rap = execute_micro(self.api, mp, generate=False, approach=True, timeout=90.0)
+            if rap.ok:
+                ancrage = self.dernier_poteau or ancre
+                poteaux = site_finder.place_supply_poles(self.api, rap.placed, ancrage)
+                return True, (f"chaîne posée ({len(rap.placed)} machines) sur "
+                              f"{self.ressource} en {ancre}, {len(poteaux)} poteau(x) "
+                              f"de desserte" + (f" — {len(essais)} ancre(s) occupée(s) "
+                                                f"écartée(s)" if essais else ""))
+            # Un manque d'INVENTAIRE ne se résoudra pas en changeant d'endroit : insister
+            # ferait payer six plans pour le même refus.
+            if rap.missing:
+                return False, f"chaîne non posée, il manque : {rap.missing}"
+            essais.append(f"{ancre} : {rap.blocked[:1]}")
+        return False, (f"aucune place libre sur {self.ressource} — "
+                       f"{len(essais)} ancre(s) essayée(s) : {' ; '.join(essais[:2])}")
 
     # ----- BOUCLE -----
 

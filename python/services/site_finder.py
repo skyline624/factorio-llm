@@ -232,6 +232,63 @@ def degager_tuile(api, x: float, y: float, timeout: float = 20.0) -> bool:
     return retire
 
 
+def ancres_libres_sur_minerai(api, bbox: dict, autour: tuple[float, float],
+                              ecart: int = 4, plafond: int = 8,
+                              degagement: float = 2.0) -> list[tuple[float, float]]:
+    """Tuiles de minerai NON bâties d'un gisement, les plus proches de `autour` d'abord.
+
+    Pourquoi ce détour, alors que `scan_patch` renvoie déjà un `sample` : mesuré en jeu,
+    ce sample vaut 12 tuiles et reste IDENTIQUE quel que soit le rayon demandé — 8, 16,
+    32, 64 ou 128 donnent les mêmes douze tuiles, groupées dans un coin, donc deux ancres
+    espacées seulement. Le `bbox`, lui, décrivait un gisement de 31 × 35 tuiles. La place
+    existait ; l'échantillon ne la montrait pas, et l'agent concluait « aucune place
+    libre » au bord d'un gisement presque intact.
+
+    On interroge donc les tuiles de ressource du bbox et l'on écarte celles qui ont déjà
+    une construction à `degagement` tuiles : un mining-drill occupe 3 × 3, l'ancrer contre
+    l'existant ferait échouer le four en bout de chaîne — ce qui est arrivé, et ce que le
+    seul test du drill ne voyait pas.
+
+    Le tri par distance à `autour` (l'usine) est délibéré : une chaîne posée à cent tuiles
+    est hors de portée du réseau électrique et de la boucle qui la surveille.
+    """
+    try:
+        x1, y1 = float(bbox["x1"]), float(bbox["y1"])
+        x2, y2 = float(bbox["x2"]), float(bbox["y2"])
+    except (KeyError, TypeError, ValueError):
+        return []
+    try:
+        brut = api.rcon.query_lua(
+            f"local s = game.surfaces[1] local out = {{}} "
+            f"for _, e in pairs(s.find_entities_filtered{{type='resource', "
+            f"area={{{{{x1},{y1}}},{{{x2},{y2}}}}}}}) do "
+            f"  local p = e.position "
+            f"  if #s.find_entities_filtered{{force='player', "
+            f"area={{{{p.x - {degagement}, p.y - {degagement}}},"
+            f"{{p.x + {degagement}, p.y + {degagement}}}}}}} == 0 then "
+            f"    out[#out+1] = math.floor(p.x) .. ',' .. math.floor(p.y) end end "
+            # Le nombre de tuiles libres d'un gisement neuf se compte en centaines : on
+            # tronque côté Lua pour ne pas faire voyager une réponse RCON inutile.
+            f"rcon.print(table.concat(out, ';', 1, math.min(#out, 400)))")
+    except Exception:
+        return []
+    libres: list[tuple[float, float]] = []
+    for morceau in str(brut).strip().split(";"):
+        cx, _, cy = morceau.partition(",")
+        try:
+            libres.append((float(int(cx)), float(int(cy))))
+        except ValueError:
+            continue
+    libres.sort(key=lambda p: math.hypot(p[0] - autour[0], p[1] - autour[1]))
+    retenus: list[tuple[float, float]] = []
+    for p in libres:
+        if len(retenus) >= plafond:
+            break
+        if all(max(abs(p[0] - q[0]), abs(p[1] - q[1])) >= ecart for q in retenus):
+            retenus.append(p)
+    return retenus
+
+
 def place_inserter_vers(api, cible: tuple[float, float], source: tuple[float, float],
                         cible_nom: str, nom: str = "inserter",
                         source_types: tuple[str, ...] = ("transport-belt",),

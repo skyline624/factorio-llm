@@ -109,7 +109,11 @@ def _mesures(api, coord, rcon=None) -> dict:
         "iron_plate": inv.get("iron-plate", 0),
         # Le débit que l'agent a lui-même mesuré, et l'objectif qu'il vise. C'est la
         # SÉRIE qui dit si une extension a servi ; le point ne dit rien.
-        "debit": round(coord._debit, 3) if getattr(coord, "_debit", None) else None,
+        # `is not None` et non la véracité : un débit de 0.0 est une MESURE — l'usine est
+        # à l'arrêt — et le tester comme un booléen le transformait en « non mesuré ».
+        # Sixième fois dans ce chantier qu'un zéro se fait passer pour une absence.
+        "debit": (round(coord._debit, 3)
+                  if getattr(coord, "_debit", None) is not None else None),
         "objectif": getattr(coord, "objectif_par_s", None),
         # Ce que l'usine a produit — la seule des deux qui mesure l'usine.
         "produites": _produites(rcon) if rcon is not None else -1,
@@ -199,6 +203,7 @@ def main(argv: list[str]) -> int:
 
     rcon.query_lua(f"game.speed = {vitesse} rcon.print('ok')")
     tour, bloques, derniere_action = 0, 0, ""
+    mesures_vues: list[dict] = []
     arbitrables, appels, divergences = 0, 0, 0
     vus_arbitrages: list = []
     try:
@@ -234,7 +239,11 @@ def main(argv: list[str]) -> int:
                 jr.ecart(t, e)
             for c in coord.constats[-2:]:
                 jr.constat(t, c)
-            jr.mesure(t, tour=tour, **_mesures(api, coord, rcon))
+            mes = _mesures(api, coord, rcon)
+            jr.mesure(t, tour=tour, **mes)
+            # Gardées en mémoire pour le bilan : la SÉRIE dit ce qu'un point final ne dit
+            # pas, notamment quand le dernier tour n'a pas de débit mesurable.
+            mesures_vues.append(dict(mes, tour=tour))
 
             # « Ne progresse plus » : la même action échoue en boucle. On le compte au
             # lieu de s'arrêter — c'est une donnée de la partie, pas une panne du runner.
@@ -271,9 +280,20 @@ def main(argv: list[str]) -> int:
     print(f"       production : {m['produites']} iron-plate depuis le début "
           f"(dont {m['iron_plate']} en inventaire)")
     if objectif is not None:
-        atteint = m["debit"] is not None and m["debit"] >= objectif * 0.9
-        print(f"       objectif : {m['debit']} {'≥' if atteint else '<'} {objectif} "
-              f"iron-plate/s — {'TENU' if atteint else 'non tenu'}")
+        # Le débit du DERNIER tour peut être « non mesuré » : la fenêtre de 600 ticks n'est
+        # pas toujours atteinte quand l'agent enchaîne les actions. Prendre cette valeur
+        # afficherait « objectif : None » après trente minutes de production. On rend donc
+        # le dernier débit CONNU, et l'on dit à quel tour il a été relevé.
+        connus = [(d.get("tour"), d.get("debit")) for d in mesures_vues
+                  if d.get("debit") is not None]
+        tour_debit, dernier = connus[-1] if connus else (None, None)
+        atteint = dernier is not None and dernier >= objectif * 0.9
+        print(f"       objectif : {dernier} {'≥' if atteint else '<'} {objectif} "
+              f"iron-plate/s — {'TENU' if atteint else 'non tenu'}"
+              + (f" (dernière mesure au tour {tour_debit})" if tour_debit else ""))
+        if connus:
+            pointe = max(d for _, d in connus)
+            print(f"       débit maximal atteint : {pointe} iron-plate/s")
     print(f"       écarts : {m['ecarts']} constaté(s), {m['constats']} enquête(s) "
           f"dont {m['inconnus']} sans conclusion")
     # LE chiffre qui décide si une comparaison avec/sans modèle a un sens.

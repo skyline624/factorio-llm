@@ -247,30 +247,56 @@ class FactoryBuilder(BaseAgent):
                 return last
         return last
 
+    # Écart minimal entre deux ancres proposées. Une micro-chaîne occupe drill (3) +
+    # inserter (1) + four (3) : deux ancres voisines d'une tuile décriraient le même
+    # emplacement et l'on paierait douze tentatives pour un seul essai utile.
+    ECART_ANCRES = 4
+
     @staticmethod
-    def _anchor_on_ore(sp: dict, facing: int) -> Optional[tuple]:
-        """Ancre le drill sur une VRAIE tuile de minerai, au bord aval du gisement.
+    def ancres_sur_minerai(sp: dict, facing: int, ecart: int = 0) -> list[tuple]:
+        """Toutes les ancres exploitables du gisement, de la plus avancée à la moins.
 
-        `sample` (12 tuiles réelles, tools.lua) est la seule donnée de scan_patch qui
-        garantisse du minerai — le centre du bbox, lui, ne garantit rien (agrégat).
-        On prend la tuile la plus avancée dans le sens de `facing` : la chaîne
-        (drop → inserter → furnace) se déploie de ce côté et sort donc du gisement,
-        où il reste de la place. Recul d'une tuile vers l'intérieur pour que l'emprise
-        du drill morde le minerai même au bord.
+        `_anchor_on_ore` n'en rendait qu'une — la plus avancée — ce qui suffit pour bâtir
+        la PREMIÈRE chaîne et condamne toutes les suivantes : mesuré, une extension
+        proposait invariablement (-26.5,-62.5), c'est-à-dire l'emplacement de la chaîne
+        déjà posée, et échouait sur `can_place=False` trois fois de suite avant d'être
+        abandonnée définitivement. L'inventaire était plein ; seule la place manquait, et
+        seulement là.
 
-        Position ENTIÈRE : mesuré live, `create_entity` snappe le drill et le four sur
-        la grille entière (demandé (-17.5,-60.5) -> réel (-17,-60)).
+        Les candidats sont espacés d'au moins `ecart` tuiles : sans cela, douze tuiles de
+        `sample` donnent douze ancres qui décrivent le même endroit, et chaque tentative
+        coûte un plan et un pré-vol.
         """
         from services.layout_planner import FACING_UNIT
 
         sample = [(int(t["x"]), int(t["y"])) for t in sp.get("sample", [])
                   if isinstance(t, dict) and "x" in t and "y" in t]
         if not sample:
-            return None
+            return []
         ux, uy = FACING_UNIT.get(facing, (0, 1))
-        # Tuile la plus avancée côté facing, puis recul d'une tuile vers l'intérieur.
-        tx, ty = max(sample, key=lambda t: t[0] * ux + t[1] * uy)
-        return (float(tx - ux), float(ty - uy))
+        # Du plus avancé au moins avancé dans le sens de `facing` : la chaîne se déploie
+        # de ce côté et sort donc du gisement, où il reste de la place.
+        ordonne = sorted(sample, key=lambda t: -(t[0] * ux + t[1] * uy))
+        retenus: list[tuple] = []
+        for tx, ty in ordonne:
+            # Recul d'une tuile vers l'intérieur pour que l'emprise du drill morde le
+            # minerai même au bord. Position ENTIÈRE : mesuré live, `create_entity` snappe
+            # le drill et le four sur la grille entière ((-17.5,-60.5) -> (-17,-60)).
+            a = (float(tx - ux), float(ty - uy))
+            if all(max(abs(a[0] - b[0]), abs(a[1] - b[1])) >= ecart for b in retenus):
+                retenus.append(a)
+        return retenus
+
+    @staticmethod
+    def _anchor_on_ore(sp: dict, facing: int) -> Optional[tuple]:
+        """La meilleure ancre, c'est-à-dire la première de `ancres_sur_minerai`.
+
+        Conservée telle quelle : c'est le contrat qu'utilisent `build_micro_layout` et
+        quatre scripts de vérification, et la première chaîne doit continuer d'être posée
+        exactement au même endroit qu'avant.
+        """
+        candidats = FactoryBuilder.ancres_sur_minerai(sp, facing)
+        return candidats[0] if candidats else None
 
     def build_micro_layout(self, resource: str, geometry: object = None,
                            facing: int = 4, anchor: Optional[tuple] = None) -> object:
