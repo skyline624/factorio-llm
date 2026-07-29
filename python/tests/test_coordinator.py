@@ -582,6 +582,7 @@ def test_ecart_journalise_quand_lattente_est_decue() -> None:
     api = _ApiMesure([{"name": "boiler", "x": 0.0, "y": 0.0, "status": "no_fuel"}])
     c = _coord_mesure(api)
     c.journal, c.ecarts, c.arbitre = [], [], None
+    c.constats, c.enqueteur = [], None      # l'enquête est éprouvée à part
     c.observer = lambda: EtatUsine()
     c.agir = lambda d: (True, "factice")
     c.tick = Coordinator.tick.__get__(c)

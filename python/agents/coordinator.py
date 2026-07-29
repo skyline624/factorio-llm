@@ -171,6 +171,10 @@ class Ecart:
     attendu: str
     observe: str
     cible: Optional[Symptome] = None
+    # Ce que la boucle SAIT déjà et qu'une enquête devrait ignorer : d'où part la chaîne
+    # concernée, par exemple. Le redécouvrir coûterait des mesures à celui qui enquête,
+    # et il n'aurait aucun moyen de le deviner.
+    contexte: dict = field(default_factory=dict)
 
     def __str__(self) -> str:
         ou = f" @({self.cible.x},{self.cible.y})" if self.cible else ""
@@ -330,7 +334,7 @@ class Coordinator:
                  combustible: str = "coal", builder=None,
                  arbitre: Optional[Arbitre] = None,
                  tourelle: str = "gun-turret", munition: str = "firearm-magazine",
-                 ombre: bool = False):
+                 ombre: bool = False, enqueteur=None):
         self.api = api
         self.zone = zone
         self.rayon = rayon
@@ -362,6 +366,19 @@ class Coordinator:
         # lequel une enquête pourra être déclenchée ; sans lui, l'agent est aveugle à
         # ses propres échecs.
         self.ecarts: list[Ecart] = []
+        # Ce que les enquêtes ont établi, y compris les « inconnu ». Ce journal EST la
+        # liste de travail : chaque cause qu'on ne sait pas encore réparer y figure au
+        # lieu d'être redécouverte à la main au chantier suivant.
+        self.constats: list = []
+        # `ombre` branche AUSSI l'enquêteur : il observe les échecs et les nomme, sans
+        # déclencher de réparation. Rien n'est risqué, et l'on mesure ce qu'il vaut.
+        if ombre and enqueteur is None:
+            try:
+                from agents.enqueteur import Enqueteur
+                enqueteur = Enqueteur()
+            except Exception:
+                enqueteur = None    # pas de modèle : la boucle constate sans expliquer
+        self.enqueteur = enqueteur
         # Mémoire de la boucle : où raccorder la prochaine chaîne, et ce qui a été bâti.
         self.dernier_poteau: Optional[tuple[float, float]] = None
         self.derniere_centrale = None
@@ -869,7 +886,40 @@ class Coordinator:
         if attente is not None:
             tenue, observe = attente.evaluer(self.api)
             if not tenue:
-                ecart = Ecart(d.action, attente.description, observe, d.cible)
+                contexte = {}
+                if d.cible is not None:
+                    depart = self._chaines.get(
+                        (d.cible.name, round(d.cible.x), round(d.cible.y)))
+                    if depart is not None:
+                        contexte["depart_du_flux"] = list(depart)
+                ecart = Ecart(d.action, attente.description, observe, d.cible, contexte)
                 self.ecarts.append(ecart)
                 self.journal.append(str(ecart))
+                self.enqueter(ecart)
         return d, agi, self.observer()
+
+    # ----- ENQUÊTE -----
+
+    def enqueter(self, ecart: Ecart) -> Optional[Any]:
+        """Cherche la cause d'un écart, et la consigne — sans encore la réparer.
+
+        L'enquêteur observe et conclut ; il ne déclenche aucune réparation tant que le
+        banc d'essai n'a pas montré ce qu'il vaut. C'est la même prudence que le mode
+        ombre de l'arbitre, et pour la même raison : introduire un modèle dans une boucle
+        autonome sans mesure préalable serait un pari.
+
+        Ce que ce journal apporte dès maintenant, même sans réparation : un agent qui dit
+        « le bras dépose en (261.7,-187.5) où il n'y a rien » vaut infiniment mieux qu'un
+        agent qui écrit « chaîne bâtie ». La liste de ce qu'il ne sait pas réparer devient
+        explicite, au lieu d'être reconstituée à la main après coup.
+        """
+        if self.enqueteur is None:
+            return None
+        try:
+            constat = self.enqueteur(self.api, ecart)
+        except Exception as e:                    # une enquête ne casse jamais la boucle
+            self.journal.append(f"enquête en erreur : {type(e).__name__}")
+            return None
+        self.constats.append(constat)
+        self.journal.append(f"ENQUÊTE {ecart.action} -> {constat}")
+        return constat

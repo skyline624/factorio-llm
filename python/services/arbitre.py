@@ -103,36 +103,12 @@ class LLMArbitre:
     """
 
     def __init__(self, cfg=None, client=None):
+        # La construction est partagée avec l'enquêteur : deux composants ont besoin d'un
+        # modèle, et deux copies du même code garantiraient que la prochaine correction
+        # n'en atteigne qu'une.
+        from services.llm_client import construire_client
         self.journal: list[str] = []
-        if cfg is None:
-            try:
-                from config import load_config
-                cfg = load_config()
-            except Exception as e:                      # config absente : on le dit
-                self.cfg = None
-                self._client = client
-                if client is None:
-                    self.journal.append(f"configuration illisible : {e}")
-                return
-        self.cfg = cfg
-        if client is not None:
-            self._client = client
-            return
-        try:
-            import openai
-        except ImportError as e:
-            self._client = None
-            self.journal.append(f"openai indisponible : {e}")
-            return
-        if getattr(cfg, "openai_base_url", None) and getattr(cfg, "llm_enabled", False):
-            self._client = openai.OpenAI(
-                api_key=getattr(cfg, "openai_api_key", None) or "ollama",
-                base_url=cfg.openai_base_url,
-                timeout=getattr(cfg, "llm_timeout", 30),
-            )
-        else:
-            self._client = None
-            self.journal.append("LLM désactivé (base_url vide ou LLM_ENABLED=false)")
+        self._client, self.cfg = construire_client(cfg, client, self.journal)
 
     def __call__(self, etat, options) -> int:
         if not options:
