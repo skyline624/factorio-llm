@@ -21,8 +21,15 @@ et combien de fois la boucle a cessé de progresser.
 cette machine, mais une enquête LLM prend le même temps réel quelle que soit la vitesse.
 Sur une partie chargée en incidents, c'est le modèle qui décide de la durée, pas le jeu.
 
+**Le point de départ est CONTRÔLÉ ou il n'est pas comparable.** Chaque test laisse la
+carte dans l'état où il l'a mise ; deux parties du même code ne mesuraient donc pas la
+même chose. `--depuis-reference` remet le serveur dans l'état figé au préalable
+(`python -m services.save_ref figer`). Sans cela, on compare des parties qui n'ont pas
+commencé au même endroit — et l'écart qu'on lit est du bruit, non un effet du modèle.
+
 Usage :
     python run_partie_longue.py [minutes_de_jeu] [--vitesse N] [--ombre]
+                                [--depuis-reference]
 
 Le journal est écrit en continu (JSONL) : il se lit PENDANT que la partie tourne, ce qui
 est le seul moyen de surveiller sans interrompre.
@@ -38,6 +45,7 @@ from core.mod_api import ModApi
 from core.rcon import get_rcon
 from services import perception
 from services.journal import Journal
+from services.save_ref import restaurer_reference
 
 # Au-delà, le CPU ne suit plus : mesuré, `game.speed=30` ne rend que ×16.6 sur une carte
 # quasi vide, et moins encore avec une usine. Annoncer 30 ne ferait qu'un chiffre faux.
@@ -50,14 +58,42 @@ def _tick(api) -> int:
     return int(t.get("tick", 0)) if isinstance(t, dict) else 0
 
 
-def _mesures(api, coord) -> dict:
-    """La photographie chiffrée d'un tour. C'est la SÉRIE qui informe, pas le point."""
+def _produites(rcon, item: str = "iron-plate") -> int:
+    """Ce que l'usine a RÉELLEMENT produit depuis le début, où que ce soit parti.
+
+    L'inventaire du personnage ne mesurait la production que par accident : il montait
+    parce que l'agent vidait les machines À LA MAIN, et chaque vidage y versait cent
+    plaques. Dès qu'un ramassage automatique existe, la production part au coffre et
+    l'indicateur se fige — on lirait « l'usine ne produit plus » au moment précis où
+    elle devient autonome. La statistique du jeu, elle, ne dépend pas de la destination.
+    """
+    try:
+        return int(str(rcon.query_lua(
+            "local s = game.forces.player.get_item_production_statistics(game.surfaces[1]) "
+            f"rcon.print(s.get_input_count('{item}'))")).strip())
+    except (ValueError, TypeError, AttributeError):
+        return -1
+
+
+def _mesures(api, coord, rcon=None) -> dict:
+    """La photographie chiffrée d'un tour. C'est la SÉRIE qui informe, pas le point.
+
+    Les organes PASSIFS sont comptés à part. Mesuré : « 20 machines dont 17 arrêtées »
+    étaient 16 poteaux électriques (`status=n/a`, ils n'ont pas d'état de marche) et un
+    foreur — le chiffre alarmant ne décrivait rien. Un poteau qui ne « tourne » pas est
+    normal ; un four qui ne tourne pas est une panne. Les confondre fait lire une usine
+    en ruine là où trois machines sur quatre vont bien, et l'inverse quand elles vont mal.
+    """
     sf = api.scan_factory() or {}
-    lignes = sf.get("entities") or []
+    toutes = sf.get("entities") or []
+    # `n/a` est ce que rend le mod pour ce qui n'a pas d'état de marche : poteaux, coffres,
+    # belts. On mesure les machines, pas le mobilier.
+    lignes = [e for e in toutes if e.get("status") not in (None, "n/a")]
     en_marche = sum(1 for e in lignes if e.get("status") in ("working", "normal"))
     inv = perception.inventory(api)
     return {
         "machines": len(lignes),
+        "passifs": len(toutes) - len(lignes),
         "en_marche": en_marche,
         "arretees": len(lignes) - en_marche,
         "ecarts": len(coord.ecarts),
@@ -65,7 +101,10 @@ def _mesures(api, coord) -> dict:
         "inconnus": sum(1 for c in coord.constats
                         if getattr(c, "cause", "") == "inconnu"),
         "coal": inv.get("coal", 0),
+        # Gardé : c'est ce que l'agent a SOUS LA MAIN, donc ce qu'il peut dépenser.
         "iron_plate": inv.get("iron-plate", 0),
+        # Ce que l'usine a produit — la seule des deux qui mesure l'usine.
+        "produites": _produites(rcon) if rcon is not None else -1,
     }
 
 
@@ -84,6 +123,23 @@ def main(argv: list[str]) -> int:
             vitesse = float(argv[argv.index("--vitesse") + 1])
         except (IndexError, ValueError):
             pass
+
+    # La restauration vient AVANT toute connexion : elle arrête le serveur, remet la save
+    # en place et le relance. Un client obtenu plus tôt pointerait sur un processus mort.
+    depuis_reference = "--depuis-reference" in argv
+    if depuis_reference:
+        print("       restauration de l'état de référence (arrêt, copie, relance)...")
+        t0 = time.time()
+        ok, motif = restaurer_reference()
+        print(f"       {motif} ({time.time() - t0:.0f}s)")
+        if not ok:
+            # On ABANDONNE au lieu de partir quand même : une partie lancée depuis un
+            # état inconnu produit des chiffres qu'on croira comparables et qui ne le
+            # sont pas. Mieux vaut pas de mesure qu'une mesure trompeuse.
+            print("       -> partie non lancée : l'état de départ n'est pas celui voulu.")
+            print("          Figer une référence d'abord : "
+                  "python -m services.save_ref figer")
+            return 1
 
     try:
         rcon = get_rcon("127.0.0.1", 27015, "factoriollm")
@@ -115,8 +171,11 @@ def main(argv: list[str]) -> int:
 
     ticks_vises = int(minutes * 60 * 60)
     t0 = _tick(api)
+    # `depuis_reference` est consigné : deux journaux ne se comparent que si l'on sait
+    # lequel est parti d'un état contrôlé.
     jr.ecrire("depart", seed=str(graine).strip(), zone=list(zone), vitesse=vitesse,
               minutes_visees=minutes, tick=t0, ombre=ombre,
+              depuis_reference=depuis_reference,
               arbitre=coord.arbitre is not None, enqueteur=coord.enqueteur is not None)
     print(f"       partie longue : {minutes:.0f} min de jeu à ×{vitesse:.0f} "
           f"(~{minutes / vitesse:.0f} min réelles si le modèle ne ralentit pas)")
@@ -160,7 +219,7 @@ def main(argv: list[str]) -> int:
                 jr.ecart(t, e)
             for c in coord.constats[-2:]:
                 jr.constat(t, c)
-            jr.mesure(t, tour=tour, **_mesures(api, coord))
+            jr.mesure(t, tour=tour, **_mesures(api, coord, rcon))
 
             # « Ne progresse plus » : la même action échoue en boucle. On le compte au
             # lieu de s'arrêter — c'est une donnée de la partie, pas une panne du runner.
@@ -178,7 +237,7 @@ def main(argv: list[str]) -> int:
     finally:
         rcon.query_lua("game.speed = 1 rcon.print('ok')")
 
-    m = _mesures(api, coord)
+    m = _mesures(api, coord, rcon)
     jr.ecrire("fin", tour=tour, ticks=_tick(api) - t0,
               arbitrables=arbitrables, appels=appels, divergences=divergences, **m)
     if coord.arbitre is not None and hasattr(coord.arbitre, "divergences"):
@@ -188,7 +247,9 @@ def main(argv: list[str]) -> int:
 
     print(f"\n       {tour} tour(s), {(_tick(api) - t0) / 3600:.1f} min de jeu")
     print(f"       usine : {m['machines']} machine(s), {m['en_marche']} en marche, "
-          f"{m['arretees']} arrêtée(s)")
+          f"{m['arretees']} arrêtée(s) — plus {m['passifs']} organe(s) passif(s)")
+    print(f"       production : {m['produites']} iron-plate depuis le début "
+          f"(dont {m['iron_plate']} en inventaire)")
     print(f"       écarts : {m['ecarts']} constaté(s), {m['constats']} enquête(s) "
           f"dont {m['inconnus']} sans conclusion")
     # LE chiffre qui décide si une comparaison avec/sans modèle a un sens.

@@ -179,3 +179,22 @@ def get_rcon(host: str = "127.0.0.1", port: int = 27015, password: str = "factor
         if _rcon_singleton is None:
             _rcon_singleton = RconClient(host, port, password, timeout)
         return _rcon_singleton
+
+
+def reset_rcon() -> None:
+    """Oublie le client singleton. A appeler apres tout REDEMARRAGE du serveur.
+
+    Le singleton survit au serveur : il garde une socket morte, et chaque appel paie
+    alors deux tentatives de reconnexion a dix secondes avant d'echouer. Une boucle
+    d'attente qui sonde toutes les trois secondes devient ainsi plus lente que le
+    demarrage qu'elle surveille -- mesure, une restauration d'etat depassait dix minutes
+    alors que le serveur etait revenu en trente secondes.
+    """
+    global _rcon_singleton
+    with _rcon_lock:
+        if _rcon_singleton is not None:
+            try:
+                _rcon_singleton.close()
+            except Exception:
+                pass
+        _rcon_singleton = None
