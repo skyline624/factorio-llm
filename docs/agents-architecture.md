@@ -148,11 +148,26 @@ conclusion était que *le chemin critique est dans le mod, pas dans les agents*.
 fait : le mod sait désormais retirer, tourner, régler une recette et transmettre les
 options de pose, et la boucle autonome tourne au-dessus.
 
-Le déséquilibre s'est inversé. Ce qui bloque maintenant n'est plus l'actionneur mais
-l'**épreuve du réel sur des plans complets** : `LayoutPlanner` S1–S3 calcule bus, fluides
-et beacons depuis longtemps, ces plans sont posables depuis E2, et **aucun ne l'a été**.
-Trois inconnues à lever pour J4 : le kit du mod couvre-t-il les ~40 entités, les poteaux
-du plan couvrent-ils les machines, le terrain accepte-t-il une telle emprise.
+Le déséquilibre s'est inversé. Ce qui bloque maintenant n'est plus l'actionneur mais le
+**dimensionnement des plans** — et ce n'est pas ce qu'on attendait.
+
+**Mesure J4 (E10, en jeu, 29 juillet)** : pour **1 engrenage/s**, `build_layout` produit
+**505 entités dont 468 transport-belts** — 36 belts par machine utile — sur une emprise
+de **382 × 440 tuiles**. Le plan est refusé par le terrain (`obstacle_blocking`), et
+dégager n'y change rien : on a mesuré **7180 arbres, rochers et falaises dans un rayon
+de 400 tuiles**. Un plan qui s'étale sur des centaines de tuiles en croise forcément.
+
+La cause est connue et documentée depuis le MicroPlanner, mais n'avait jamais été
+mesurée sur un plan réel : **la belt de collecte longe TOUT le bord du gisement**, donc
+sa longueur suit la taille du patch et non le débit demandé. Sur un patch de 738 tuiles,
+elle explose. Ce n'est pas un défaut de terrain ni de pose — la pose est débloquée
+depuis E2 — c'est un défaut de conception du LayoutPlanner.
+
+**Conséquence pour l'ordre de chantier** : J4 ne consiste pas à « poser un LayoutPlan »
+mais à **rendre les LayoutPlans posables**, en dimensionnant la collecte au débit
+(nombre de drills nécessaires) plutôt qu'à la géométrie du gisement. C'est un chantier
+sur un composant validé (S0→S4, 177 tests) : il demande un arbitrage explicite avant
+d'être engagé.
 
 ## 5. Catalogue des agents
 
