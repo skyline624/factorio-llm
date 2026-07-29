@@ -142,6 +142,102 @@ def test_inserter_ne_declenche_pas_de_reparation() -> None:
     assert ok
 
 
+def test_options_une_par_cause() -> None:
+    """`enumerer_options` expose TOUTES les réparations légales, pas seulement la 1re.
+
+    C'est ce qui donne un choix à un arbitre : quelle panne traiter d'abord quand
+    plusieurs coexistent n'est pas toujours tranché par la gravité seule.
+    """
+    from agents.coordinator import enumerer_options
+    etat = _etat([_m("electric-furnace", 0, 0, "no_fuel"),
+                  _m("assembling-machine-1", 0, 6, "no_recipe"),
+                  _m("electric-mining-drill", 0, 12, "full_output")])
+    options = enumerer_options(etat)
+    actions = [o.action for o in options]
+    ok = (len(options) == 3 and set(actions) == {"ravitailler", "regler_recette", "evacuer"}
+          # L'ordre par défaut reste le curriculum : les pannes graves d'abord.
+          and options[-1].action == "evacuer")
+    rec("test_options_une_par_cause", ok, f"{actions}")
+    assert ok
+
+
+def test_decide_sans_arbitre_prend_la_premiere() -> None:
+    """Sans arbitre, la décision est exactement `options[0]` — le déterministe intact."""
+    from agents.coordinator import enumerer_options
+    etat = _etat([_m("electric-furnace", 0, 0, "no_fuel"),
+                  _m("assembling-machine-1", 0, 6, "no_recipe")])
+    ok = decide(etat).action == enumerer_options(etat)[0].action
+    rec("test_decide_sans_arbitre_prend_la_premiere", ok, f"{decide(etat)}")
+    assert ok
+
+
+def test_arbitre_choisit_une_autre_option() -> None:
+    """Un arbitre valide impose son choix — c'est le point d'insertion du LLM.
+
+    On compare à `options[1]` plutôt qu'à une action nommée : à gravité égale, le
+    diagnostic départage par nom d'entité, et figer cet ordre dans le test le rendrait
+    faux au premier renommage. Ce qui compte est que l'arbitre l'emporte sur le défaut.
+    """
+    from agents.coordinator import enumerer_options
+    etat = _etat([_m("electric-furnace", 0, 0, "no_fuel"),
+                  _m("assembling-machine-1", 0, 6, "no_recipe")])
+    options = enumerer_options(etat)
+    d = decide(etat, arbitre=lambda e, opts: 1)
+    ok = (len(options) == 2 and d.action == options[1].action
+          and d.action != options[0].action)
+    rec("test_arbitre_choisit_une_autre_option", ok,
+        f"défaut={options[0].action} -> arbitre={d.action}")
+    assert ok
+
+
+def test_arbitre_defaillant_replie_sur_le_deterministe() -> None:
+    """Indice hors bornes, mauvais type, ou exception : la boucle continue quand même.
+
+    Un agent qui s'arrête parce que le modèle est indisponible ou répond n'importe quoi
+    ne vaut rien. Le déterministe est le filet, pas l'exception.
+    """
+    etat = _etat([_m("electric-furnace", 0, 0, "no_fuel"),
+                  _m("assembling-machine-1", 0, 6, "no_recipe")])
+    attendu = decide(etat).action
+    def _explose(e, opts):
+        raise RuntimeError("modèle injoignable")
+    cas = {
+        "hors bornes": decide(etat, arbitre=lambda e, o: 99),
+        "négatif": decide(etat, arbitre=lambda e, o: -1),
+        "mauvais type": decide(etat, arbitre=lambda e, o: "ravitailler"),
+        "booléen": decide(etat, arbitre=lambda e, o: True),
+        "exception": decide(etat, arbitre=_explose),
+        "None": decide(etat, arbitre=lambda e, o: None),
+    }
+    mauvais = [k for k, d in cas.items() if d.action != attendu]
+    rec("test_arbitre_defaillant_replie_sur_le_deterministe", not mauvais,
+        f"repli attendu={attendu} ; écarts={mauvais or 'aucun'}")
+    assert not mauvais, mauvais
+
+
+def test_arbitre_non_appele_sans_choix() -> None:
+    """Une seule option -> pas d'appel : on ne paie pas un aller-retour pour rien.
+
+    C'est le cas le plus fréquent (usine saine, ou panne unique), et c'est ce qui rend
+    le coût d'un arbitrage LLM supportable : un appel par vrai choix, pas par tour.
+    """
+    appels = []
+
+    def _compte(e, opts):
+        appels.append(len(opts))
+        return 0
+
+    decide(_etat([_m("electric-furnace", 0, 0, "working")]), arbitre=_compte)  # « rien »
+    decide(_etat([_m("electric-furnace", 0, 0, "no_fuel")]), arbitre=_compte)  # 1 panne
+    sans_choix = len(appels)
+    decide(_etat([_m("electric-furnace", 0, 0, "no_fuel"),
+                  _m("assembling-machine-1", 0, 6, "no_recipe")]), arbitre=_compte)
+    ok = sans_choix == 0 and len(appels) == 1
+    rec("test_arbitre_non_appele_sans_choix", ok,
+        f"{sans_choix} appel(s) sans choix, {len(appels)} au total")
+    assert ok
+
+
 class _CoordFactice:
     """Coordinator dont on scripte les observations, pour tester la boucle `run`.
 
@@ -155,6 +251,7 @@ class _CoordFactice:
         self.agir_ok = agir_ok
         self.journal: list[str] = []
         self.appels = 0
+        self.arbitre = None          # `tick` le lit ; ces tests portent sur la boucle
         self.run = Coordinator.run.__get__(self)
         self.tick = Coordinator.tick.__get__(self)
 
@@ -218,6 +315,11 @@ def main() -> int:
         test_cause_inconnue_donne_inspecter,
         test_la_cause_la_plus_grave_est_traitee,
         test_inserter_ne_declenche_pas_de_reparation,
+        test_options_une_par_cause,
+        test_decide_sans_arbitre_prend_la_premiere,
+        test_arbitre_choisit_une_autre_option,
+        test_arbitre_defaillant_replie_sur_le_deterministe,
+        test_arbitre_non_appele_sans_choix,
         test_run_sarrete_quand_tout_tourne,
         test_run_sarrete_si_ca_ne_progresse_plus,
         test_run_respecte_le_plafond,

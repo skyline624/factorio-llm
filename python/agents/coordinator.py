@@ -33,7 +33,7 @@ associe l'action qui répare, chacune correspondant à une primitive existante.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Protocol
 
 from services import perception
 from services.factory_doctor import Diagnostic, Symptome, diagnose_zone
@@ -93,41 +93,88 @@ class Decision:
         return f"{self.action}{ou} — {self.raison}"
 
 
-def decide(etat: EtatUsine) -> Decision:
-    """Choisit la prochaine action. Fonction PURE : aucun appel RCON, testable seule.
+class Arbitre(Protocol):
+    """Choisit une option parmi celles que le déterministe a jugées légales.
 
-    L'ordre des règles EST le curriculum :
+    Reçoit l'état et la liste ordonnée, rend un **indice**. Il ne peut donc pas
+    proposer une action impossible — c'est tout l'intérêt du contrat : le benchmark FLE
+    montre que les LLM échouent quand ils GÉNÈRENT librement (coordonnées, séquences)
+    et non quand ils CHOISISSENT.
+    """
+
+    def __call__(self, etat: "EtatUsine", options: list["Decision"]) -> int: ...
+
+
+def enumerer_options(etat: EtatUsine) -> list[Decision]:
+    """Toutes les actions légales dans cet état, de la plus urgente à la moins.
+
+    Fonction PURE. `options[0]` est ce que la V1 déterministe fait — l'ordre EST le
+    curriculum :
       1. réparer ce qui est cassé (une usine arrêtée ne produit rien) ;
       2. produire du courant s'il n'y en a pas (rien d'électrique ne marchera sans) ;
       3. produire des objets s'il n'y a aucune machine ;
       4. sinon, ne rien faire — et le dire, plutôt que de s'agiter.
+
+    Les suivantes sont les autres actions défendables. Elles n'existent que pour un
+    arbitre : quand plusieurs pannes coexistent, laquelle traiter d'abord est un vrai
+    choix, que la gravité seule ne tranche pas toujours (réparer un four à l'arrêt ou
+    un drill qui ralentit toute la chaîne ?).
     """
+    options: list[Decision] = []
     diag = etat.diagnostic
     causes = diag.causes if diag else []
 
-    if causes:
-        # La cause la plus grave d'abord ; à gravité égale, l'ordre du diagnostic
-        # (déjà trié) départage.
-        tete = causes[0]
-        action, explication = REPARATION.get(tete.cause, ("inspecter", "cause inconnue"))
-        return Decision(action=action,
-                        raison=f"{tete.name} : {tete.cause} — {explication}",
-                        priorite=PRIORITE["reparer"], cible=tete)
+    # Une option PAR cause, et non seulement la plus grave. Le tri du diagnostic
+    # (gravité, puis conséquences en dernier) fixe l'ordre par défaut.
+    for c in causes:
+        action, explication = REPARATION.get(c.cause, ("inspecter", "cause inconnue"))
+        options.append(Decision(action=action,
+                                raison=f"{c.name} : {c.cause} — {explication}",
+                                priorite=PRIORITE["reparer"], cible=c))
 
     if not etat.a_de_l_energie:
-        return Decision(action="batir_energie",
-                        raison=("aucun réseau alimenté : rien d'électrique ne "
-                                "fonctionnera avant"),
-                        priorite=PRIORITE["batir_energie"])
+        options.append(Decision(action="batir_energie",
+                                raison=("aucun réseau alimenté : rien d'électrique ne "
+                                        "fonctionnera avant"),
+                                priorite=PRIORITE["batir_energie"]))
+    elif etat.machines == 0:
+        options.append(Decision(action="batir_production",
+                                raison="du courant, mais aucune machine pour en profiter",
+                                priorite=PRIORITE["batir_production"]))
 
-    if etat.machines == 0:
-        return Decision(action="batir_production",
-                        raison="du courant, mais aucune machine pour en profiter",
-                        priorite=PRIORITE["batir_production"])
+    if not options:
+        options.append(Decision(action="rien",
+                                raison=f"{etat.machines} machine(s) en état de marche",
+                                priorite=PRIORITE["rien"]))
+    return options
 
-    return Decision(action="rien",
-                    raison=f"{etat.machines} machine(s) en état de marche",
-                    priorite=PRIORITE["rien"])
+
+def decide(etat: EtatUsine, arbitre: Optional[Arbitre] = None) -> Decision:
+    """Choisit la prochaine action. Fonction PURE : aucun appel RCON, testable seule.
+
+    Sans `arbitre`, rend `enumerer_options(etat)[0]` — le comportement déterministe,
+    inchangé. C'est le point d'insertion prévu pour un modèle, et le seul : c'est ici,
+    et nulle part ailleurs, qu'il y a un arbitrage.
+
+    Trois garde-fous, parce qu'un arbitre distant peut mal répondre ou ne pas répondre :
+      - **une seule option -> il n'est pas appelé.** Inutile de payer un aller-retour
+        pour choisir dans une liste d'un élément, et c'est le cas le plus fréquent ;
+      - un indice hors bornes ou d'un mauvais type -> repli sur `options[0]` ;
+      - une exception (réseau, délai, réponse illisible) -> repli, jamais de plantage.
+        Un agent qui s'arrête parce que le modèle est indisponible ne vaut rien.
+    """
+    options = enumerer_options(etat)
+    if arbitre is None or len(options) <= 1:
+        return options[0]
+    try:
+        choix = arbitre(etat, options)
+    except Exception:
+        return options[0]
+    if not isinstance(choix, int) or isinstance(choix, bool):
+        return options[0]
+    if not 0 <= choix < len(options):
+        return options[0]
+    return options[choix]
 
 
 class Coordinator:
@@ -140,13 +187,17 @@ class Coordinator:
 
     def __init__(self, api, zone: tuple[float, float] = (0.0, 0.0), rayon: float = 30.0,
                  ressource: str = "iron-ore", demande_kw: float = 900.0,
-                 combustible: str = "coal", builder=None):
+                 combustible: str = "coal", builder=None,
+                 arbitre: Optional[Arbitre] = None):
         self.api = api
         self.zone = zone
         self.rayon = rayon
         self.ressource = ressource
         self.demande_kw = demande_kw
         self.combustible = combustible
+        # Point d'insertion d'un arbitrage LLM : None = décision déterministe.
+        # Il n'est consulté que lorsqu'il y a réellement plusieurs options.
+        self.arbitre = arbitre
         self.journal: list[str] = []
         # Mémoire de la boucle : où raccorder la prochaine chaîne, et ce qui a été bâti.
         self.dernier_poteau: Optional[tuple[float, float]] = None
@@ -326,7 +377,7 @@ class Coordinator:
         effet, jamais sur le fait qu'elle ait été prise.
         """
         etat = self.observer()
-        d = decide(etat)
+        d = decide(etat, self.arbitre)
         agi, detail = self.agir(d)
         self.journal.append(f"{d} -> {'agi' if agi else 'sans effet'} ({detail})")
         return d, agi, (self.observer() if agi else etat)
