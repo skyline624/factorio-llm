@@ -363,40 +363,37 @@ def test_sous_objectif_il_etend_au_lieu_de_ne_rien_faire() -> None:
     assert ok
 
 
-def test_on_n_agrandit_pas_une_usine_qui_manque_de_courant() -> None:
-    """Étendre sous un réseau saturé arrête ce qui produisait.
+def test_une_satisfaction_basse_ne_bloque_pas_la_croissance() -> None:
+    """Ce test dit l'inverse de ce que j'avais d'abord écrit, et la mesure a tranché.
 
-    Mesuré : le débit tenait 1.96 avec quatorze machines sur quatorze en marche, puis une
-    extension de plus faisait tomber le réseau entier — seize machines, ZÉRO en marche,
-    débit 0.51. On laisse l'énergie rattraper avant d'ajouter une bouche à nourrir ; la
-    panne `sans_courant` appelle de toute façon `renforcer_energie`, qui est prioritaire.
+    L'intuition semblait solide : ne pas agrandir une usine que le courant ne suit plus,
+    puisqu'une extension de trop faisait tomber le réseau entier. Essayée à 0.95, la
+    garde a fait cesser toute croissance — quarante tours, quatre machines, `rien`
+    trente et une fois — parce que la satisfaction oscille sous 1.0 en régime NORMAL,
+    sans que rien ne soit en panne.
+
+    Le garde-fou existait déjà, ailleurs et mieux : un vrai manque de courant met les
+    machines en `sans_courant`, ce qui est une RÉPARATION (priorité 3) et passe donc
+    avant l'extension (priorité 1). Le curriculum s'en charge ; un veto de plus ne
+    faisait que l'empêcher de vivre.
     """
     etat = _etat(machines=4)
     etat.objectif, etat.debit, etat.satisfaction = 2.0, 0.5, 0.60
     d = decide(etat)
-    ok = d.action != "etendre_production"
-    rec("test_on_n_agrandit_pas_une_usine_qui_manque_de_courant", ok,
-        f"{d.action} (satisfaction 0.60, débit 0.5 pour 2.0)")
+    ok = d.action == "etendre_production"
+    rec("test_une_satisfaction_basse_ne_bloque_pas_la_croissance", ok,
+        f"{d.action} malgré une satisfaction de 0.60")
     assert ok
 
 
-def test_reseau_sain_on_etend_normalement() -> None:
-    """Le pendant : avec du courant en réserve, la règle ne bride pas la croissance."""
-    etat = _etat(machines=4)
-    etat.objectif, etat.debit, etat.satisfaction = 2.0, 0.5, 1.0
-    d = decide(etat)
-    ok = d.action == "etendre_production"
-    rec("test_reseau_sain_on_etend_normalement", ok, f"{d.action} (satisfaction 1.0)")
-    assert ok
-
-
-def test_satisfaction_non_mesuree_ne_bride_pas() -> None:
-    """`None` n'est pas « saturé » : sans mesure, on garde le comportement d'avant."""
-    etat = _etat(machines=4)
-    etat.objectif, etat.debit, etat.satisfaction = 2.0, 0.5, None
-    d = decide(etat)
-    ok = d.action == "etendre_production"
-    rec("test_satisfaction_non_mesuree_ne_bride_pas", ok, f"{d.action} (satisfaction None)")
+def test_le_courant_manquant_passe_avant_l_extension() -> None:
+    """Et c'est bien le CURRICULUM qui protège : une panne électrique est prioritaire."""
+    from agents.coordinator import enumerer_options
+    etat = _etat([_m("electric-furnace", 0, 0, "no_power")], machines=4)
+    etat.objectif, etat.debit = 2.0, 0.5
+    options = [o.action for o in enumerer_options(etat)]
+    ok = options[0] in ("renforcer_energie", "relier") and "etendre_production" in options
+    rec("test_le_courant_manquant_passe_avant_l_extension", ok, f"{options}")
     assert ok
 
 

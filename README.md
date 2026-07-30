@@ -10,14 +10,39 @@ Inspire de `ai-player-v3` (Python+Lua, 3 tiers, LLM stupide) et `airi-factorio`
 
 ## Etat du projet
 
-Socle RCON valide en conception :
-- **mod/** : mod Lua minimal — 2 interfaces RCON `fl_tools` (observation) et
-  `fl_ops` (action async via task_manager), personnage IA headless.
-- **python/** : client RCON natif thread-safe, `ModApi` typé, `GameState`,
-  demo `main.py`.
-- Prochaine etape : `agents/base.py` + `coordinator.py` + 1 agent metier.
+L'agent part d'une carte vierge, batit sa centrale et sa chaine de production,
+repare ce qui tombe en panne, etend son usine sous objectif de debit, et TIENT cet
+objectif : mesure sur 30 minutes de jeu, 35 relevés de debit sur 61 au-dessus de
+2.0 iron-plate/s (pointe 3.12). 286 tests unitaires, une trentaine de scripts de
+verification en jeu.
 
-Voir `docs/architecture.md` et `docs/protocol.md`.
+- **mod/** : mod Lua — interfaces RCON `fl_tools` (observation) et `fl_ops`
+  (action async via task_manager), personnage IA headless.
+- **python/core** : client RCON thread-safe, `ModApi` typé, `GameState`.
+- **python/services** : planners deterministes (production_solver, layout_planner,
+  micro_planner, power_planner), `executor`, `factory_doctor` (diagnostic),
+  `site_finder`, `flux`, `gisements`, `arbitre` (LLM), `journal`, `save_ref`.
+- **python/agents** : `coordinator` (observe / diagnostique / decide / agit /
+  verifie), `factory_builder`, `enqueteur` (LLM outille).
+
+**Le LLM ne genere rien** : le determinisme enumere les options legales, le modele
+en DESIGNE une par son indice (`services/arbitre.py`), et l'Enqueteur choisit quoi
+MESURER dans une liste blanche d'outils de lecture. Toute defaillance du modele
+retombe sur la decision deterministe.
+
+### Mesurer une partie
+
+```
+cd python
+python preparer_reference.py [--rayon N] [--nids N]   # fige un etat de depart
+python run_partie_longue.py 30 --vitesse 10 --ombre --depuis-reference --objectif 2.0
+```
+
+`--depuis-reference` restaure la save figee : sans etat de depart identique, deux
+parties ne se comparent pas. Le monde est fige pendant que le modele reflechit,
+faute de quoi on compare un agent lent a un agent rapide et non deux strategies.
+
+Voir `docs/architecture.md`, `docs/agents-architecture.md` et `docs/protocol.md`.
 
 ## Demarrage rapide (socle)
 

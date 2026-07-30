@@ -77,10 +77,19 @@ FENETRE_DEBIT = 600
 # indéfiniment sur du bruit de mesure.
 MARGE_OBJECTIF = 0.9
 
-# En dessous de cette satisfaction du réseau, on cesse d'agrandir : le courant ne suit
-# déjà plus. `satisfaction` vaut 1.0 quand toutes les machines reçoivent ce qu'elles
-# demandent ; 0.95 laisse passer les creux normaux d'un boiler qui se recharge.
-SATISFACTION_MINI = 0.95
+# PAS de seuil de satisfaction conditionnant l'extension, et c'est une décision prise
+# CONTRE une intuition, sur mesure. Le raisonnement semblait solide : ne pas agrandir une
+# usine que le courant ne suit plus, puisqu'une extension de trop faisait tomber le réseau
+# entier (seize machines, zéro en marche). Essayé à 0.95 : l'agent a cessé de grandir tout
+# court — quarante tours, quatre machines, `rien` trente et une fois, parce que la
+# satisfaction oscille sous 1.0 en régime NORMAL (un boiler qui se recharge) sans que rien
+# ne soit en panne.
+#
+# Le garde-fou existait déjà, ailleurs et mieux : si le courant manque vraiment, les
+# machines passent `sans_courant`, ce qui est une RÉPARATION (priorité 3) et passe donc
+# avant l'extension (priorité 1). Le curriculum s'en charge ; un veto de plus ne faisait
+# que l'empêcher de vivre. `EtatUsine.satisfaction` reste mesurée — elle est utile à lire
+# dans un journal — mais elle ne décide de rien.
 
 # Au-delà de ce nombre d'interventions MANUELLES sur la même machine, on cesse de
 # dépanner et on automatise. Remplir un réservoir est une réparation ; le remplir
@@ -432,15 +441,7 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
             ("etendre_production",
              (etat.objectif is not None and etat.debit is not None
               and etat.machines > 0
-              and etat.debit < etat.objectif * MARGE_OBJECTIF
-              # Ne pas agrandir une usine que le courant ne suit déjà plus. Mesuré :
-              # le débit montait à 1.96 avec quatorze machines sur quatorze en marche,
-              # puis une extension de plus faisait tomber le réseau entier — seize
-              # machines, ZÉRO en marche, débit 0.51. Étendre sous un réseau saturé ne
-              # produit rien et arrête ce qui produisait ; la panne `sans_courant` qui
-              # s'ensuit appelle `renforcer_energie`, qui est prioritaire. On laisse donc
-              # l'énergie rattraper avant d'ajouter une bouche à nourrir.
-              and (etat.satisfaction is None or etat.satisfaction >= SATISFACTION_MINI)),
+              and etat.debit < etat.objectif * MARGE_OBJECTIF),
              (f"{etat.debit:.2f} {etat.objectif_item}/s produits pour "
               f"{etat.objectif:.2f} demandés : l'usine tient, elle ne suffit pas"
               if etat.debit is not None and etat.objectif is not None else ""),
