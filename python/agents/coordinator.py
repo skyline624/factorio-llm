@@ -2113,7 +2113,33 @@ class Coordinator:
         # Il faut le bord, plus la tuile du bras, plus le demi-pas de la belt.
         ecart_src = self._demi_largeur(sx, sy) + 1.5
         ecart_cible = self._demi_largeur(vers[0], vers[1]) + 1.5
-        vers_cible = ((vers[0] + (ecart_cible if sx > vers[0] else -ecart_cible)), vers[1])
+        # CHAQUE FLUX ARRIVE PAR SON PROPRE CÔTÉ. Calculé de la même façon pour tous, le
+        # point d'arrivée était le même pour tous : la belt des engrenages débouchait sur
+        # celle du cuivre une tuile avant la machine, la saturait — « (-21.5,-60.5)
+        # [iron-gear-wheel x4, x4] » juste derrière huit tuiles de cuivre à l'arrêt — et
+        # l'assembleuse restait en `item_ingredient_shortage` alors que les DEUX
+        # ingrédients étaient à moins de deux tuiles d'elle. Deux flux qui desservent la
+        # même machine ne doivent jamais se rejoindre : le côté choisi est réservé, et le
+        # flux suivant en prendra un autre.
+        cotes_cible = [(ecart_cible if sx > vers[0] else -ecart_cible, 0.0),
+                       (0.0, ecart_cible if sy > vers[1] else -ecart_cible),
+                       (-(ecart_cible if sx > vers[0] else -ecart_cible), 0.0),
+                       (0.0, -(ecart_cible if sy > vers[1] else -ecart_cible))]
+        vers_cible = (float(math.floor(vers[0] + cotes_cible[0][0])) + 0.5,
+                      float(math.floor(vers[1] + cotes_cible[0][1])) + 0.5)
+        for dx_t, dy_t in cotes_cible:
+            essai_t = (float(math.floor(vers[0] + dx_t)) + 0.5,
+                       float(math.floor(vers[1] + dy_t)) + 0.5)
+            if reserve is not None and essai_t in reserve:
+                continue
+            occupe = any(e.get("type") == "transport-belt"
+                         for e in site_finder._entites_a(self.api, essai_t[0], essai_t[1], 0.4))
+            if occupe:
+                continue
+            vers_cible = essai_t
+            break
+        if reserve is not None:
+            reserve.add(vers_cible)
 
         # LES QUATRE CÔTÉS DE LA SOURCE, et pas seulement celui qui regarde la cible.
         # Mesuré : un `wooden-chest` occupait exactement la première tuile — le ramassage
@@ -2167,6 +2193,12 @@ class Coordinator:
             if pont is not None:
                 vers_src, charge = essai, pont
                 break
+            # Ce côté ne mène à rien : on retire la tuile posée pour l'essayer. Laissée
+            # là, elle devient une belt ISOLÉE — un morceau de convoyeur qui ne relie
+            # rien, que le banc compte à juste titre comme un défaut de pose.
+            if not deja:
+                self.api.run_action(self.api.remove_entity_at, essai[0], essai[1],
+                                    belt, timeout=20.0)
 
         # NE PAS DÉVERSER SUR LA VOIE D'UN AUTRE FLUX. Mesuré, et c'est la panne la plus
         # retorse rencontrée : le bras de sortie des engrenages déposait sur une tuile
@@ -2252,13 +2284,22 @@ class Coordinator:
         occupees.discard(vers_src)
         occupees.discard(vers_cible)
 
-        attendues, _ = site_finder.tracer_en_l(vers_src, vers_cible, occupees)
+        # ON TRACE JUSQU'À LA TUILE D'ARRIVÉE INCLUSE. `tracer_en_l` s'arrête avant sa
+        # destination ; en visant `vers_cible`, la ligne s'interrompait donc une tuile
+        # trop tôt et la tuile d'arrivée — posée d'avance pour le bras — restait ISOLÉE
+        # dès que le tracé avait fait un détour. Trois convoyeurs orphelins au milieu de
+        # l'usine, qui ne reliaient rien. On vise donc une tuile au-delà, vers la machine.
+        dxa, dya = vers[0] - vers_cible[0], vers[1] - vers_cible[1]
+        norme = max(1.0, math.hypot(dxa, dya))
+        au_dela = (vers_cible[0] + round(dxa / norme), vers_cible[1] + round(dya / norme))
+
+        attendues, _ = site_finder.tracer_en_l(vers_src, au_dela, occupees)
         # Le couloir est RÉSERVÉ dès qu'il est tracé, avant même la pose : le flux suivant
         # ne le proposera plus, qu'il soit ou non déjà matérialisé sur le terrain.
         if reserve is not None:
             reserve.update(attendues)
         tuiles, complete = site_finder.place_belt_line(
-            self.api, vers_src, vers_cible, belt=belt, eviter=occupees)
+            self.api, vers_src, au_dela, belt=belt, eviter=occupees)
         trous = [t for t in attendues if t not in tuiles]
 
         # LA TUILE D'ARRIVÉE DOIT REGARDER LA MACHINE. `tracer_en_l` s'arrête AVANT elle
@@ -2274,6 +2315,13 @@ class Coordinator:
         self.api.run_action(self.api.rotate_entity_at, vers_cible[0], vers_cible[1],
                             vers_aval, belt, timeout=20.0)
         if not tuiles:
+            # ON NE LAISSE PAS DE MORCEAUX DERRIÈRE SOI. Les deux tuiles d'extrémité ont
+            # été posées d'avance pour accrocher les bras ; si le tracé n'aboutit pas,
+            # elles restent seules au milieu de rien — des convoyeurs qui ne relient
+            # personne, que le banc compte à juste titre comme un défaut de pose.
+            for bout in (vers_src, vers_cible):
+                self.api.run_action(self.api.remove_entity_at, bout[0], bout[1], belt,
+                                    timeout=20.0)
             return False, (f"aucun tracé libre entre {nom_src}@({sx:.0f},{sy:.0f}) et "
                            f"{vers_nom} ({distance:.0f} tuiles) sans emprunter une belt "
                            f"existante ({len(occupees)} tuile(s) déjà prises)")
@@ -2399,10 +2447,16 @@ class Coordinator:
         # n'alimente que 2.5 tuiles autour de lui : la première place essayée était
         # justement une de celles qui ne couvrent pas. On pose donc au plus près d'abord,
         # et l'on s'arrête sur le COURANT obtenu, non sur la pose réussie.
+        # PLUS DE PLACES CANDIDATES. Autour d'une machine entourée de belts, les quatre
+        # tuiles voisines sont souvent toutes prises : `relier` renonçait alors, et un
+        # bras tout juste posé restait sans courant au milieu d'un réseau qui passait à
+        # trois tuiles. Un poteau porte plus loin que la tuile d'à côté.
         candidates = sorted(
             {(float(int(cible.x + dx)) + 0.5, float(int(cible.y + dy)) + 0.5)
              for dx, dy in ((2.0, 0.0), (-2.0, 0.0), (0.0, 2.0), (0.0, -2.0),
-                            (2.5, 0.0), (-2.5, 0.0), (0.0, 2.5), (0.0, -2.5))},
+                            (2.5, 0.0), (-2.5, 0.0), (0.0, 2.5), (0.0, -2.5),
+                            (2.0, 2.0), (-2.0, 2.0), (2.0, -2.0), (-2.0, -2.0),
+                            (3.0, 0.0), (-3.0, 0.0), (0.0, 3.0), (0.0, -3.0))},
             key=lambda p: math.hypot(p[0] - cible.x, p[1] - cible.y))
 
         def _poser_a_cote() -> Optional[tuple[float, float]]:

@@ -244,15 +244,44 @@ def main() -> int:
     # pas ; il faut donc la regarder plusieurs fois.
     FENETRES, TICKS = 6, 1500
     cumul_depart = perception.production_cumulee(api, FLACON)
-    entrees, cumuls = [], []
+
+    # LA CONSOMMATION, ET NON LE STOCK. Un instantané de l'entrée ne distingue pas « rien
+    # n'arrive » de « tout est consommé aussitôt » — et c'est le second qui s'est produit :
+    # entrée vide à chaque relevé, pendant que la production, elle, montait. Compter ce
+    # que l'usine CONSOMME est plus juste et plus strict : on exige que les DEUX
+    # ingrédients soient consommés, ce qu'un stock résiduel ne peut pas simuler.
+    def _consommes() -> dict:
+        brut = str(rcon.query_lua(
+            "local f = game.forces.player local s = game.surfaces[1] "
+            "local st = f.get_item_production_statistics(s) "
+            "rcon.print(st.get_output_count('copper-plate') .. '|' "
+            ".. st.get_output_count('iron-gear-wheel'))")).strip()
+        m = brut.split("|")
+        try:
+            return {"copper-plate": int(m[0]), "iron-gear-wheel": int(m[1])}
+        except (ValueError, IndexError):
+            return {"copper-plate": -1, "iron-gear-wheel": -1}
+
+    conso_depart = _consommes()
+    entrees, cumuls, consos = [], [], []
     for _ in range(FENETRES):
         api.run_action(api.wait, TICKS, timeout=300.0)
         etat = _science(rcon)
         entrees.append(int(etat.get("entree", 0) or 0))
         cumuls.append(perception.production_cumulee(api, FLACON))
+        consos.append(_consommes())
     apres = _science(rcon)
 
-    servies = sum(1 for e in entrees if e > 0)
+    # Une fenêtre compte comme SERVIE si l'un des ingrédients y a été consommé ou s'y
+    # trouve en attente : les deux signes disent que la belt a livré.
+    servies = 0
+    precedent = conso_depart
+    for i in range(FENETRES):
+        bouge = any(consos[i].get(k, 0) > precedent.get(k, 0)
+                    for k in ("copper-plate", "iron-gear-wheel"))
+        if bouge or entrees[i] > 0:
+            servies += 1
+        precedent = consos[i]
     produits = (cumuls[-1] - cumul_depart) if cumul_depart >= 0 and cumuls[-1] >= 0 else -1
     actives = sum(1 for a, b in zip([cumul_depart] + cumuls, cumuls) if b > a)
 
@@ -267,7 +296,10 @@ def main() -> int:
     # se vide une bonne fois.
     rec("5: l'assembleuse est servie de façon RÉPÉTÉE", servies >= 2,
         f"entrée vidée, puis servie sur {servies}/{FENETRES} fenêtre(s) de {TICKS} ticks "
-        f"— relevés {entrees} | contenu final : {apres.get('contenu') or 'vide'}")
+        f"— relevés {entrees}, consommé "
+        f"{consos[-1]['copper-plate'] - conso_depart['copper-plate']} cuivre et "
+        f"{consos[-1]['iron-gear-wheel'] - conso_depart['iron-gear-wheel']} engrenage(s)"
+        f" | contenu final : {apres.get('contenu') or 'vide'}")
 
     # --- Rec 6 : et cela PRODUIT, sur la durée ---
     # La statistique de la force, et non l'inventaire de sortie : la sortie est vidée par
