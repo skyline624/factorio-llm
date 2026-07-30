@@ -41,7 +41,16 @@ COMPORTEMENT = [
     ("verify_evacuation_e21.py", "une sortie bouchée finit par recevoir un ramassage"),
     ("verify_defense_e21.py", "une défense qui ne mène à rien cède la place"),
     ("verify_objectif_e22.py", "l'agent mesure son débit et étend sous objectif"),
+    # En DERNIER : c'est le seul qui fige une carte sans dotation. Il la rend garnie
+    # avant de sortir, mais le placer en fin de liste évite que ce rétablissement soit
+    # le seul rempart entre lui et les autres.
+    ("verify_bootstrap_craft.py", "les mains vides, l'agent fabrique ce qu'il pose"),
 ]
+
+# Le bootstrap part d'un inventaire VIDE : il refabrique deux fois sa référence et va
+# chercher son charbon à plus de deux cents tuiles. Lui imposer le délai des autres le
+# ferait échouer en TIMEOUT sur sa seule longueur, ce qui ne mesure rien.
+TIMEOUTS = {"verify_bootstrap_craft.py": 3000.0}
 
 
 def _repartir_de_la_reference() -> None:
@@ -98,7 +107,7 @@ def main(argv: list[str]) -> int:
     resultats = []
     for script, promesse in liste:
         print(f"       ... {script} — {promesse}", flush=True)
-        r = _lancer(script, promesse, timeout=900.0)
+        r = _lancer(script, promesse, timeout=TIMEOUTS.get(script, 900.0))
         resultats.append((r[0], r[1], r[2], promesse))
         print(f"       [{'OK  ' if r[1] else 'FAIL'}] {r[0]:28s} {r[2]}", flush=True)
     print("\n" + "=" * 72)

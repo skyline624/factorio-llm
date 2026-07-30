@@ -13,6 +13,7 @@ pour la décision LLM (P1b), `DeterministicPlanner` pour le fallback / défaut
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -218,6 +219,29 @@ class BaseAgent:
             return {"ok": pos is not None, "detail": f"nearest {a['name']} = {pos}"}
 
         if k == "walk_to_entity":
+            # Au-delà de l'horizon généré, `walk_to_entity` ne trouve pas de chemin :
+            # le personnage s'arrête bien avant, et le minage suivant échoue sur
+            # « cible hors portée ». Mesuré au bootstrap — charbon à 215 tuiles du fer,
+            # l'agent bloqué faute de combustible. On génère alors devant soi et on
+            # marche par bonds (services.deplacement).
+            cible = perception.nearest(api, a["name"])
+            if cible is not None:
+                from services import deplacement
+                if deplacement.distance(api, cible[0], cible[1]) > deplacement.PAS:
+                    ax, ay = deplacement.marcher_vers(api, cible[0], cible[1])
+                    reste = math.hypot(cible[0] - ax, cible[1] - ay)
+                    # Les bonds franchissent la distance ; l'APPROCHE finale reste le
+                    # métier de `walk_to_entity`, qui vise l'entité et non un point.
+                    # Juger l'arrivée sur la seule distance au but faisait échouer une
+                    # marche de 215 tuiles pour les quinze dernières — et le garde-fou
+                    # d'acharnement abandonnait alors le charbon DÉFINITIVEMENT.
+                    res = api.run_action(api.walk_to_entity, a["name"],
+                                         a.get("radius", 300), timeout=120.0)
+                    if isinstance(res, dict):
+                        res["detail"] = (f"{reste:.0f} tuiles après les bonds "
+                                         f"({ax:.0f},{ay:.0f}) puis approche : "
+                                         f"{res.get('detail', '')}")
+                    return res
             return api.run_action(api.walk_to_entity, a["name"], a.get("radius", 300),
                                   timeout=60.0)
 

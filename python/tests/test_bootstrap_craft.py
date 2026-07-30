@@ -168,6 +168,38 @@ def test_les_ressources_restent_minees_et_les_plaques_fondues() -> None:
     assert ok
 
 
+def test_la_decision_de_fabriquer_porte_la_quantite() -> None:
+    """Fabriquer « du charbon » ne veut rien dire : il faut dire COMBIEN.
+
+    Mesuré en jeu, les mains vides : la chaîne burner réclame vingt charbons, l'agent en
+    avait huit, et la décision ne transportait que le NOM. `fabriquer` s'en remettait
+    donc à sa valeur par défaut — une unité — et le plan répondait « rien à faire,
+    l'inventaire en contient déjà assez ». Neuf tours de suite, puis l'abandon définitif
+    de l'action par le garde-fou d'acharnement : la chaîne n'a jamais été posée, et le
+    journal accusait le minage alors que rien n'avait même été tenté.
+    """
+    from agents.coordinator import EtatUsine, enumerer_options
+    from services.factory_doctor import diagnose
+    etat = EtatUsine(machines=0, diagnostic=diagnose([]), reseau=7, production_kw=900.0,
+                     electrique=False, inventaire={"coal": 8},
+                     besoins_production=(("burner-mining-drill", 1), ("coal", 20)))
+    f = next((o for o in enumerer_options(etat) if o.action == "fabriquer"), None)
+    # Le premier manque est la foreuse ; c'est LUI qui doit être proposé, avec sa
+    # quantité — et non un item choisi au hasard dans la liste.
+    ok = (f is not None and f.item == "burner-mining-drill" and f.quantite == 1)
+    rec("test_la_decision_de_fabriquer_porte_la_quantite", ok,
+        f"item={getattr(f, 'item', None)!r} quantite={getattr(f, 'quantite', None)}")
+    assert ok
+
+    etat.inventaire = {"burner-mining-drill": 1, "coal": 8}
+    f = next((o for o in enumerer_options(etat) if o.action == "fabriquer"), None)
+    ok = f is not None and f.item == "coal" and f.quantite == 20
+    rec("test_la_quantite_est_celle_du_besoin_pas_une_unite", ok,
+        f"8 charbons en poche sur 20 requis -> fabriquer {getattr(f, 'item', None)!r} "
+        f"x{getattr(f, 'quantite', None)}")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_machine_hors_table_se_planifie_quand_meme,
               test_le_bootstrap_complet_part_de_rien,
@@ -175,7 +207,8 @@ def main() -> int:
               test_une_recette_inaccessible_le_dit,
               test_le_plan_va_chercher_le_combustible_du_four,
               test_le_charbon_deja_en_poche_ne_se_remine_pas,
-              test_les_ressources_restent_minees_et_les_plaques_fondues):
+              test_les_ressources_restent_minees_et_les_plaques_fondues,
+              test_la_decision_de_fabriquer_porte_la_quantite):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

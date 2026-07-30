@@ -300,6 +300,12 @@ class Decision:
     # Renseigné par `decide` : de quoi savoir, après coup, si le modèle a seulement eu
     # son mot à dire. Une décision sans arbitrage possible n'est pas un désaccord.
     arbitrage: Optional["Arbitrage"] = None
+    # Ce qu'il faut fabriquer, et COMBIEN. Le nom seul ne suffit pas : `fabriquer` s'en
+    # remettait à sa valeur par défaut (une unité), si bien qu'avec huit charbons en
+    # poche sur les vingt que réclame une chaîne burner, le plan répondait « l'inventaire
+    # en contient déjà assez » — neuf tours de suite, jusqu'à l'abandon définitif.
+    item: str = ""
+    quantite: int = 1
 
     def __str__(self) -> str:
         ou = f" @({self.cible.x},{self.cible.y})" if self.cible else ""
@@ -553,14 +559,18 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
             # de déclasser et d'attendre : il consommait une dotation qu'un humain lui
             # avait mise dans les poches, et s'arrêtait quand elle était vide. Déclarer
             # le besoin ne suffit pas — encore faut-il pouvoir y répondre.
-            besoin = manquants[0].split(" ")[0]
+            besoin, requis = next((n, c) for n, c in besoins if inv.get(n, 0) < c)
             if besoin not in dejadits:
                 dejadits.add(besoin)
                 a_faire.append(Decision(
                     action="fabriquer",
                     raison=f"{besoin} manque pour « {o.action} » — le fabriquer plutôt "
                            f"que d'attendre qu'il tombe du ciel",
-                    priorite=urgence))
+                    priorite=urgence,
+                    # La QUANTITÉ voyage avec la décision. Fabriquer « du charbon » sans
+                    # dire combien revenait à en demander une unité : huit en poche
+                    # suffisaient toujours, et la chaîne n'était jamais alimentée.
+                    item=besoin, quantite=requis))
 
     options.extend(a_faire)
 
@@ -951,10 +961,10 @@ class Coordinator:
         if d.action in ("batir_energie", "batir_production"):
             return self.batir(d)
         if d.action == "fabriquer":
-            # L'item manquant est le premier mot de la raison — c'est `enumerer_options`
-            # qui l'y met, et `decide` reste PURE : elle ne sait pas fabriquer, elle dit
-            # seulement qu'il le faudrait.
-            return self.fabriquer(d.raison.split(" ")[0])
+            # `decide` reste PURE : elle ne sait pas fabriquer, elle dit seulement ce
+            # qu'il faudrait et en quelle quantité. Le repli sur la raison couvre les
+            # décisions construites à la main (tests, arbitre) qui ne portent pas d'item.
+            return self.fabriquer(d.item or d.raison.split(" ")[0], max(1, d.quantite))
 
         if d.action == "etendre_production":
             # Une chaîne de PLUS, sur du minerai que le planner ancre lui-même. Même
