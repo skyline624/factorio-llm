@@ -85,23 +85,47 @@ def main() -> int:
         coord.tick()
 
     # --- Rec 3 : une marche par GESTE est franchie ---
-    avant = set(recherche.lire(api).acquises)
-    ok3, detail3 = coord.chercher("automation-science-pack")
-    apres = set(recherche.lire(api).acquises)
-    rec("3: une marche par geste est franchie sans flacon", ok3 and "automation-science-pack" in apres,
-        f"acquises {len(avant)} -> {len(apres)} | {detail3[:70]}")
+    # La marche est choisie DANS L'ARBRE et non écrite en dur : la référence conserve
+    # les technologies à déclencheur déjà satisfait (le compteur de crafts d'une partie
+    # est cumulatif), si bien qu'un nom figé désigne tantôt une marche à franchir,
+    # tantôt une marche déjà acquise. Le test mesurerait alors l'ordre dans lequel on a
+    # lancé les choses.
+    arbre = recherche.lire(api)
+    geste = next((m for m in arbre.marches if m.declencheur is not None and m.gratuite), None)
+    if geste is None:
+        rec("3: une marche par geste est franchie sans flacon", True,
+            "aucune marche par geste ne reste à franchir — déjà toutes acquises")
+        ouvre = []
+    else:
+        avant = set(arbre.acquises)
+        ok3, detail3 = coord.chercher(geste.nom)
+        apres = set(recherche.lire(api).acquises)
+        rec("3: une marche par geste est franchie sans flacon",
+            ok3 and geste.nom in apres,
+            f"{geste.nom} | acquises {len(avant)} -> {len(apres)} | {detail3[:60]}")
+        ouvre = list(geste.debloque)
 
-    # --- Rec 4 : la recette ouverte par cette marche est fabricable ---
-    rec("4: la recette qu'elle ouvre devient fabricable",
-        _recette_ouverte(rcon, "automation-science-pack"),
-        "automation-science-pack passe à enabled=true")
+    # --- Rec 4 : les recettes ouvertes par cette marche sont fabricables ---
+    fermees = [n for n in ouvre if not _recette_ouverte(rcon, n)]
+    rec("4: les recettes qu'elle ouvre deviennent fabricables", not fermees,
+        f"{len(ouvre) - len(fermees)}/{len(ouvre)} ouverte(s)"
+        + (f" — encore fermée(s) : {', '.join(fermees)}" if fermees
+           else (f" : {', '.join(ouvre)}" if ouvre else " (rien à ouvrir)")))
 
     # --- Rec 5 : une marche qui SE PAIE est menée à bout ---
-    # C'est l'autre régime : fabriquer vingt flacons depuis le minerai, poser un
-    # laboratoire, le brancher, le charger, et attendre que la recherche aboutisse.
-    ok5, detail5 = coord.chercher("logistics")
-    rec("5: une marche qui se paie est menée à bout", ok5,
-        detail5[:110])
+    # L'autre régime : fabriquer les flacons depuis le minerai, poser un laboratoire, le
+    # brancher, le charger, et attendre que la recherche aboutisse. On prend la MOINS
+    # CHÈRE de celles qui restent — le sujet est le mécanisme, pas l'endurance.
+    payantes = [m for m in recherche.lire(api).marches if m.cout]
+    payante = min(payantes, key=lambda m: m.unites) if payantes else None
+    if payante is None:
+        rec("5: une marche qui se paie est menée à bout", False,
+            "aucune marche payante à portée — la scène n'est pas montée")
+        ouvre5 = []
+    else:
+        ok5, detail5 = coord.chercher(payante.nom)
+        rec("5: une marche qui se paie est menée à bout", ok5, detail5[:110])
+        ouvre5 = list(payante.debloque)
 
     # --- Rec 6 : le laboratoire a été posé ET alimenté ---
     labo = str(rcon.query_lua(
@@ -114,9 +138,11 @@ def main() -> int:
         f"laboratoire {labo}")
 
     # --- Rec 7 : les recettes de la technologie payée sont ouvertes ---
-    ouvertes = [n for n in ("underground-belt", "splitter") if _recette_ouverte(rcon, n)]
-    rec("7: les recettes de la technologie payée sont ouvertes", len(ouvertes) == 2,
-        f"{', '.join(ouvertes) or 'aucune'} sur underground-belt, splitter")
+    manquantes = [n for n in ouvre5 if not _recette_ouverte(rcon, n)]
+    rec("7: les recettes de la technologie payée sont ouvertes",
+        bool(ouvre5) and not manquantes,
+        f"{len(ouvre5) - len(manquantes)}/{len(ouvre5)} ouverte(s) : {', '.join(ouvre5)}"
+        + (f" — encore fermée(s) : {', '.join(manquantes)}" if manquantes else ""))
 
     rcon.query_lua("game.speed = 1 rcon.print(1)")
     rcon.close()

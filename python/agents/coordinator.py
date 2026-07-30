@@ -1492,6 +1492,9 @@ class Coordinator:
                            f"à fabriquer")
 
         ok, detail = self.fabriquer(cible, vise)
+        # Même précaution que dans `chercher` : le déclencheur tombe au tick suivant la
+        # production, jamais dans la foulée du craft.
+        self.api.run_action(self.api.wait, 30, timeout=30.0)
         acquise = recherche.lire(self.api).acquises
         gagnee = marche.nom in acquise
         return gagnee, (f"pour ouvrir {recette} : {marche} — {detail}"
@@ -1574,6 +1577,11 @@ class Coordinator:
                 marche, perception.inventory(self.api))
             if cible:
                 ok, detail = self.fabriquer(cible, vise)
+                # Le jeu évalue les déclencheurs au tick SUIVANT la production. Relire
+                # dans la foulée du craft fait conclure à l'échec sur une technologie
+                # qui tombe un instant plus tard : mesuré au banc, `chercher` rendait
+                # False pendant que le compteur d'acquises passait bien de 2 à 3.
+                self.api.run_action(self.api.wait, 30, timeout=30.0)
                 acquise = techno in recherche.lire(self.api).acquises
                 return acquise, f"{marche} — {detail}"
 
