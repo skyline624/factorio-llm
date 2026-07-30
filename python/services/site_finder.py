@@ -232,6 +232,41 @@ def degager_tuile(api, x: float, y: float, timeout: float = 20.0) -> bool:
     return retire
 
 
+def poteau_connecte_le_plus_proche(api, x: float, y: float, rayon: float = 80.0
+                                   ) -> Optional[tuple[float, float, int]]:
+    """Le poteau ALIMENTÉ le plus proche de (x, y) : (px, py, networkId), ou None.
+
+    C'est le point de départ d'une ligne de transmission. Sans lui, `relier` ne pouvait
+    que poser un poteau contre la machine — ce qui suffit tant que le réseau est à portée
+    et ne sert à rien dès qu'il ne l'est plus. Mesuré en partie longue : l'agent étend sa
+    production à quinze ou vingt tuiles de la centrale, et l'Enquêteur concluait « le pôle
+    le plus proche est sur le réseau 128 mais trop loin », sept fois par partie, sans que
+    la boucle n'en tire de réparation.
+
+    Un poteau sans `electric_network_id` est écarté : le relier ne relierait à rien.
+    """
+    try:
+        brut = api.rcon.query_lua(
+            f"local s = game.surfaces[1] local best, bd = nil, 1e18 "
+            f"for _, e in pairs(s.find_entities_filtered{{type='electric-pole', "
+            f"area={{{{{x - rayon},{y - rayon}}},{{{x + rayon},{y + rayon}}}}}}}) do "
+            f"  local id = e.electric_network_id "
+            f"  if id then "
+            f"    local d = (e.position.x - {x})^2 + (e.position.y - {y})^2 "
+            f"    if d < bd then bd = d best = e end end end "
+            f"if best then rcon.print(best.position.x .. ',' .. best.position.y .. ',' "
+            f".. best.electric_network_id) else rcon.print('') end")
+    except Exception:
+        return None
+    morceaux = str(brut).strip().split(",")
+    if len(morceaux) != 3:
+        return None
+    try:
+        return (float(morceaux[0]), float(morceaux[1]), int(float(morceaux[2])))
+    except ValueError:
+        return None
+
+
 def ancres_libres_sur_minerai(api, bbox: dict, autour: tuple[float, float],
                               ecart: int = 4, plafond: int = 8,
                               degagement: float = 2.0) -> list[tuple[float, float]]:

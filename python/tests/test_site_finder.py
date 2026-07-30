@@ -252,6 +252,48 @@ def test_emplacement_sans_issue_est_libere() -> None:
     assert ok
 
 
+class _RconMuet:
+    """Un RCON qui rend ce qu'on lui dit — de quoi éprouver la LECTURE, sans serveur."""
+
+    def __init__(self, reponse):
+        self.reponse = reponse
+
+    def query_lua(self, code: str) -> str:
+        if isinstance(self.reponse, Exception):
+            raise self.reponse
+        return self.reponse
+
+
+class _ApiRcon:
+    def __init__(self, reponse):
+        self.rcon = _RconMuet(reponse)
+
+
+def test_poteau_connecte_lu_correctement() -> None:
+    """La position et l'identifiant de réseau sont extraits de la réponse du jeu."""
+    from services.site_finder import poteau_connecte_le_plus_proche
+    r = poteau_connecte_le_plus_proche(_ApiRcon("-23.5,-62.5,128"), 0.0, 0.0)
+    ok = r == (-23.5, -62.5, 128)
+    rec("test_poteau_connecte_lu_correctement", ok, f"{r}")
+    assert ok
+
+
+def test_aucun_poteau_connecte_rend_none() -> None:
+    """Aucun réseau à portée : il manque une CENTRALE, pas une ligne.
+
+    Rendre None plutôt qu'une position par défaut est ce qui permet à l'appelant de le
+    dire — tirer une ligne vers un poteau qui n'a pas de courant ne relierait à rien.
+    """
+    from services.site_finder import poteau_connecte_le_plus_proche
+    vide = poteau_connecte_le_plus_proche(_ApiRcon(""), 0.0, 0.0)
+    casse = poteau_connecte_le_plus_proche(_ApiRcon("bruit;sans;virgules"), 0.0, 0.0)
+    plante = poteau_connecte_le_plus_proche(_ApiRcon(RuntimeError("rcon mort")), 0.0, 0.0)
+    ok = vide is None and casse is None and plante is None
+    rec("test_aucun_poteau_connecte_rend_none", ok,
+        f"vide={vide} illisible={casse} rcon_mort={plante}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_ligne_droite_connexe,
@@ -262,6 +304,8 @@ def main() -> int:
         test_prolongement_retourne_le_raccord,
         test_inserter_oriente_vers_la_cible,
         test_emplacement_sans_issue_est_libere,
+        test_poteau_connecte_lu_correctement,
+        test_aucun_poteau_connecte_rend_none,
     ]
     for t in tests:
         t()

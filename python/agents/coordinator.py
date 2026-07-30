@@ -782,17 +782,7 @@ class Coordinator:
             return ok, (f"ravitaillement de {c.name}@({c.x},{c.y}) "
                         f"(n°{self._ravitaillements.get((c.name, round(c.x), round(c.y)), 0)})")
         if d.action == "relier":
-            # Poteau au plus près de la machine débranchée, sur les quatre côtés.
-            for dx, dy in ((2.5, 0.0), (-2.5, 0.0), (0.0, 2.5), (0.0, -2.5)):
-                x, y = float(int(c.x + dx)) + 0.5, float(int(c.y + dy)) + 0.5
-                chk = self.api.can_place_check("small-electric-pole", x, y, "north")
-                if not (isinstance(chk, dict) and chk.get("can_place")):
-                    continue
-                r = self.api.run_action(self.api.place_entity_at, "small-electric-pole",
-                                        x, y, "north", None, timeout=20.0)
-                if isinstance(r, dict) and r.get("ok"):
-                    return True, f"poteau posé en ({x},{y}) pour {c.name}"
-            return False, f"aucune position de poteau libre autour de {c.name}"
+            return self.relier(c)
 
         if d.action == "regler_recette":
             # Une machine sans recette ne produit rien et n'appelle rien : elle attend.
@@ -1171,6 +1161,60 @@ class Coordinator:
         ok, detail = self.approvisionner(faux_symptome, besoin)
         return ok, (f"{machine}@{pose} fabrique « {item} » pour {cible.name} "
                     f"({bras}@{livraison[:2]}) — entrée : {detail}")
+
+    def relier(self, cible, pole: str = "small-electric-pole") -> tuple[bool, str]:
+        """Rattache une machine au réseau — en tirant une LIGNE si le réseau est loin.
+
+        Poser un poteau contre la machine suffit tant que le réseau est à portée de fil,
+        et ne sert à rien dès qu'il ne l'est plus. C'est ce qui arrivait à chaque
+        extension : mesuré en partie longue, l'agent bâtit ses nouvelles chaînes à quinze
+        ou vingt tuiles de la centrale, l'Enquêteur concluait sept fois « le pôle le plus
+        proche est sur le réseau 128 mais TROP LOIN », et la boucle reposait un poteau
+        isolé de plus. Dix machines sur vingt restaient à l'arrêt.
+
+        Le poteau local est donc posé d'abord — il alimente la machine —, puis on vérifie
+        s'il a du courant, et sinon on tire la ligne DEPUIS le réseau JUSQU'À lui. C'est
+        `place_pole_line`, déjà éprouvée sur 104 tuiles en E5, qui chaîne sur les
+        positions réellement posées et refuse tout maillon au-delà de la portée de fil.
+        """
+        from services import site_finder
+
+        local = None
+        for dx, dy in ((2.5, 0.0), (-2.5, 0.0), (0.0, 2.5), (0.0, -2.5)):
+            x, y = float(int(cible.x + dx)) + 0.5, float(int(cible.y + dy)) + 0.5
+            if not site_finder.can_place(self.api, pole, x, y):
+                continue
+            r = self.api.run_action(self.api.place_entity_at, pole, x, y, "north",
+                                    None, timeout=20.0)
+            if isinstance(r, dict) and r.get("ok"):
+                local = (x, y)
+                break
+        if local is None:
+            # Peut-être un poteau est-il déjà là — auquel cas ce n'est pas la place qui
+            # manque, mais le courant, et la ligne reste à tirer.
+            proches = [e for e in site_finder._entites_a(self.api, cible.x, cible.y, 3.0)
+                       if e.get("type") == "electric-pole"]
+            if not proches:
+                return False, f"aucune position de poteau libre autour de {cible.name}"
+            local = (float(proches[0].get("x", cible.x)), float(proches[0].get("y", cible.y)))
+
+        etat = self.api.get_power_state(cible.x, cible.y, 3.0) or {}
+        if etat.get("networkId") is not None:
+            return True, f"poteau posé en {local} pour {cible.name} — réseau atteint"
+
+        # Le poteau local est isolé : il faut aller chercher le courant là où il est.
+        source = site_finder.poteau_connecte_le_plus_proche(self.api, cible.x, cible.y)
+        if source is None:
+            return False, (f"poteau posé en {local} mais aucun réseau alimenté à portée "
+                           f"de {cible.name} — il manque une centrale, pas une ligne")
+        poses, complete = site_finder.place_pole_line(
+            self.api, (source[0], source[1]), local, pole=pole)
+        apres = self.api.get_power_state(cible.x, cible.y, 3.0) or {}
+        relie = apres.get("networkId") is not None
+        return relie, (f"ligne de {len(poses)} poteau(x) depuis le réseau {source[2]} "
+                       f"en ({source[0]},{source[1]}) jusqu'à {cible.name}"
+                       + ("" if complete else " — INTERROMPUE par un obstacle")
+                       + ("" if relie else " — toujours sans réseau"))
 
     def batir_evacuation(self, cible, coffre: str = "wooden-chest") -> tuple[bool, str]:
         """Pose un ramassage PERMANENT en sortie : un coffre, et un bras qui l'y verse.
