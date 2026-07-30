@@ -1903,6 +1903,19 @@ class Coordinator:
         minerai = {"copper-plate": "copper-ore", "iron-plate": "iron-ore",
                    "stone-brick": "stone"}.get(item)
         if minerai is not None:
+            # ON VA D'ABORD SUR LE GISEMENT. `batir_production` cherche ses ancres via
+            # `scan_patch`, qui scanne autour de l'AVATAR et non d'un point arbitraire —
+            # limitation connue du socle. Tant que l'agent reste près du fer, le cuivre à
+            # soixante-treize tuiles lui est invisible : la chaîne n'est bâtie que les
+            # fois où il s'y trouvait par hasard, pour un minage. C'est toute
+            # l'intermittence qu'on observait — un run sur trois s'effondrait dès le
+            # premier constat, faute d'une source que rien n'avait pu voir.
+            from services import deplacement
+
+            ou = perception.nearest(self.api, minerai)
+            if ou is not None and ou[2] > 40:
+                deplacement.marcher_vers(self.api, ou[0], ou[1])
+
             precedente = self.ressource
             try:
                 self.ressource = minerai
@@ -1910,7 +1923,22 @@ class Coordinator:
                                            raison=f"il faut du {item} pour la science"))
             finally:
                 self.ressource = precedente
-            return bool(ok)
+            if not ok:
+                return False
+
+            # ET ON LA BRANCHE — cinquième fois que cette règle se rappelle à nous. Une
+            # chaîne bâtie à soixante-treize tuiles de la centrale n'a aucun courant : sa
+            # foreuse n'extrait rien, son four ne reçoit donc jamais de minerai et n'a
+            # jamais de recette. Elle est invisible comme source, et l'agent conclut
+            # « rien ne produit de copper-plate » devant une chaîne qu'il vient de poser.
+            # Ce qu'on pose, on l'alimente.
+            for machine in site_finder._entites_a(self.api, *(perception.nearest(
+                    self.api, minerai) or (self.zone[0], self.zone[1], 0))[:2], 12.0):
+                if machine.get("type") not in ("mining-drill", "furnace", "inserter"):
+                    continue
+                self.brancher(str(machine.get("name")),
+                              float(machine.get("x", 0.0)), float(machine.get("y", 0.0)))
+            return True
 
         # Une pièce intermédiaire : une assembleuse de plus, réglée sur elle.
         if perception.recipe_of(self.api, item) is None:
