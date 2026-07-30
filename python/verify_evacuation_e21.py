@@ -178,15 +178,51 @@ def main() -> int:
     # --- 2 : au-delà du seuil, la décision bascule ---
     # Le comptage lui-même est éprouvé hors ligne (test_coordinator) ; ce qu'on veut voir
     # ici est la bascule sur un état RÉELLEMENT observé en jeu.
+    #
+    # On laisse d'abord l'agent remettre la chaîne EN SERVICE. Mesuré : après le premier
+    # vidage, l'inserter était débranché, le four ne recevait plus rien et passait en
+    # `other` — un four qui ne travaille pas n'est jamais `full_output`, quoi qu'on mette
+    # dans sa sortie. Reboucher une machine à l'arrêt n'éprouve rien.
+    for _ in range(6):
+        if coord._statut_de(api, fn, fx, fy) in ("working", "normal", "full_output"):
+            break
+        coord.tick()
+        api.run_action(api.wait, 300, timeout=120.0)
+    print(f"       le four est « {coord._statut_de(api, fn, fx, fy)} » avant le second "
+          f"bouchon")
+    # L'agent pose desormais un ramassage DES la construction (E22h) : la sortie ne se
+    # bouche donc plus toute seule, et c'est exactement l'effet recherche. Pour eprouver
+    # la bascule -- qui sert encore aux machines baties avant, ou dont le coffre est plein
+    # -- il faut retirer ce ramassage. On enleve le coffre : le bras n'a plus ou deposer.
+    otes = rcon.query_lua(
+        f"local s = game.surfaces[1] local n = 0 "
+        f"for _, e in pairs(s.find_entities_filtered{{name='wooden-chest', "
+        f"area={{{{{fx - 6},{fy - 6}}},{{{fx + 6},{fy + 6}}}}}}}) do "
+        f"e.destroy() n = n + 1 end rcon.print(n)")
+    print(f"       {str(otes).strip()} coffre(s) de ramassage retire(s) pour reproduire "
+          f"la panne")
     coord._evacuations[(fn, round(fx), round(fy))] = SEUIL_AUTOMATISATION
     _boucher(rcon, fn, fx, fy)
+    api.run_action(api.wait, 300, timeout=120.0)
     etat = coord.observer()
+    # On cherche l'option qui porte sur LA machine dont on a forcé le compteur, et non la
+    # première venue : un four plein bloque aussi le foreur en amont, dont la sortie est
+    # alors « bloquée » elle aussi. Prendre la première `sortie_bloquee` faisait lire la
+    # décision concernant le foreur — pour lequel aucun vidage n'a été compté — et le
+    # test échouait sur un comportement parfaitement correct.
     apres = next((o for o in enumerer_options(etat) if o.cible is not None
-                  and o.cible.cause == "sortie_bloquee"), None)
+                  and o.cible.cause == "sortie_bloquee"
+                  and o.cible.name == fn
+                  and round(o.cible.x) == round(fx)
+                  and round(o.cible.y) == round(fy)), None)
+    # Un test qui échoue doit dire ce qu'il a VU, sinon il faut rejouer la partie à la
+    # main pour l'apprendre : on affiche donc l'état réel du four et les causes retenues.
+    vu = coord._statut_de(api, fn, fx, fy)
+    causes = [(s.name, s.cause) for s in (etat.diagnostic.causes if etat.diagnostic else [])]
     rec("e21-2 : au-delà du seuil, il décide de BÂTIR l'évacuation",
         apres is not None and apres.action == "batir_evacuation" and apres.faisable,
-        f"{apres.action if apres else '—'} "
-        f"({apres.raison[-70:] if apres else ''})")
+        f"{apres.action if apres else 'aucune option sur ce four'} — {fn} est « {vu} » ; "
+        f"causes vues : {causes[:4]}")
     if apres is None or apres.action != "batir_evacuation":
         return _verdict(rcon)
 
