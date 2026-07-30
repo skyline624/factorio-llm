@@ -202,6 +202,21 @@ def main(argv: list[str]) -> int:
         "local n = 0 for _, t in pairs(f.technologies) do if t.researched then n = n + 1 end end "
         "rcon.print(n)")).strip()
 
+    # LES GISEMENTS SE REGENERENT, pour la même raison que l'arbre des technologies :
+    # `preparer_reference` fige l'ÉTAT COURANT, minerai entamé compris. Une partie qui
+    # mine deux mille unités de fer laisse donc une référence plus pauvre que la
+    # précédente, et la suivante plus pauvre encore. Mesuré : après quelques parties,
+    # `verify_doctor_e6` partait en SKIP sur « chaîne non posée, can_place=False » —
+    # une foreuse électrique exige du minerai sous elle, et il n'y en avait plus.
+    # Le banc ne mesurait alors plus le diagnostic mais l'usure de la carte.
+    ressources = str(rcon.query_lua(
+        "local s = game.surfaces[1] "
+        "local ok = pcall(function() s.regenerate_entity({'iron-ore', 'copper-ore', "
+        "'coal', 'stone', 'crude-oil'}) end) "
+        "local n = 0 "
+        "for _, e in pairs(s.find_entities_filtered{type='resource'}) do n = n + 1 end "
+        "rcon.print((ok and 'ok' or 'echec') .. '|' .. n)")).strip()
+
     efface = _rase(rcon)
     # Le terrain doit EXISTER avant d'être dégagé : hors des tuiles générées, il n'y a
     # rien à trouver et rien à poser (leçon S4d).
@@ -223,6 +238,8 @@ def main(argv: list[str]) -> int:
         print(f"       carte rase : {efface} entité(s) du joueur effacée(s), "
               f"{degage} obstacle(s) dégagé(s) sur {rayon:.0f} tuiles")
         print(f"       recherche remise à zéro : {techs} technologie(s) acquise(s)")
+        print(f"       gisements régénérés : {ressources.replace('|', ' -> ')} tuile(s) "
+              f"de ressource")
         print(f"       SANS DOTATION : {str(vide).strip()} objet(s) retiré(s) — "
               f"l'agent part les mains vides")
     else:
@@ -230,6 +247,8 @@ def main(argv: list[str]) -> int:
         print(f"       carte rase : {efface} entité(s) du joueur effacée(s), "
               f"{degage} obstacle(s) dégagé(s) sur {rayon:.0f} tuiles")
         print(f"       recherche remise à zéro : {techs} technologie(s) acquise(s)")
+        print(f"       gisements régénérés : {ressources.replace('|', ' -> ')} tuile(s) "
+              f"de ressource")
         print(f"       dotation : {doses}/{len(DOTATION)} lots insérés"
               + (f" | REFUSÉS : {', '.join(refuses)}" if refuses else ""))
 
