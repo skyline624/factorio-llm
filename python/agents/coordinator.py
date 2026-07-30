@@ -1838,12 +1838,19 @@ class Coordinator:
         self.api.run_action(self.api.wait, 900, timeout=300.0)
 
         faits = []
+        # UNE SEULE RÉSERVATION POUR TOUS LES FLUX. Chaque couloir tracé s'y inscrit, si
+        # bien que le suivant ne peut plus le proposer — même au-delà des 64 tuiles que
+        # l'observation du jeu sait voir. C'est ce qui manquait : les lignes se
+        # disputaient un terrain que chacune croyait libre.
+        reserve: set = set()
+
         # Les sources intermédiaires d'abord : une assembleuse à engrenages qui n'a pas
         # de plaques ne sert à rien en aval.
         for nom, ou in intermediaires:
             for sous in (perception.recipe_of(self.api, nom) or []):
                 s_nom = sous[0] if isinstance(sous, (tuple, list)) else str(sous)
-                ok, detail = self.amener(s_nom, ou, "assembling-machine-1")
+                ok, detail = self.amener(s_nom, ou, "assembling-machine-1",
+                                         reserve=reserve)
                 (faits if ok else manques).append(f"[pour {nom}] {detail}")
 
         # ON LAISSE LEUR CHANCE AUX CHAÎNES LOINTAINES. Celle du cuivre est à soixante-dix
@@ -1866,7 +1873,8 @@ class Coordinator:
                 if self._source_de(nom) is None:
                     encore.append(nom)
                     continue
-                ok, detail = self.amener(nom, cible, "assembling-machine-1")
+                ok, detail = self.amener(nom, cible, "assembling-machine-1",
+                                         reserve=reserve)
                 (faits if ok else manques).append(detail)
             restants = encore
             if not restants or passe == 2:
@@ -2061,7 +2069,8 @@ class Coordinator:
         return None
 
     def amener(self, item: str, vers: tuple[float, float], vers_nom: str,
-               belt: str = "transport-belt") -> tuple[bool, str]:
+               belt: str = "transport-belt",
+               reserve: Optional[set] = None) -> tuple[bool, str]:
         """Fait venir `item` jusqu'à la machine en `vers` : bras, belt, bras.
 
         C'est ce qui sépare une usine d'une corvée. L'assembleuse de science tournait sur
@@ -2116,11 +2125,47 @@ class Coordinator:
                  (0.0, ecart_src if vers[1] > sy else -ecart_src),
                  (-(ecart_src if vers[0] > sx else -ecart_src), 0.0),
                  (0.0, -(ecart_src if vers[1] > sy else -ecart_src))]
-        vers_src = (sx + cotes[0][0], sy + cotes[0][1])
+        vers_src = (float(math.floor(sx + cotes[0][0])) + 0.5,
+                    float(math.floor(sy + cotes[0][1])) + 0.5)
+        # UN CÔTÉ NE VAUT QUE S'IL PERMET D'ACCROCHER LE BRAS. Poser la tuile de belt et
+        # découvrir ensuite qu'aucun emplacement de bras ne convient laissait une ligne
+        # de soixante-dix tuiles sans chargement — inutile de bout en bout. On essaie
+        # donc chaque côté JUSQU'AU BRAS, et l'on ne retient que celui qui va au bout.
+        # ON NE SORT PAS PAR OÙ L'ON ENTRE. Mesuré, et c'est la boucle qui a résisté le
+        # plus longtemps : deux bras se faisaient face sur la même tuile — l'un sortait
+        # les engrenages vers la belt, l'autre les y reprenait pour les remettre dans
+        # l'assembleuse. Vingt-trois pièces produites, aucune arrivée, et les deux bras
+        # en `waiting_for_space_in_destination`. Chaque entité, prise séparément, faisait
+        # exactement son travail. Un côté déjà servi par un flux ENTRANT est donc écarté.
+        entrants = set()
+        for ins in site_finder._entites_a(self.api, sx, sy, 5.0):
+            if ins.get("type") != "inserter" or ins.get("dropX") is None:
+                continue
+            if (abs(float(ins["dropX"]) - sx) <= 2.0
+                    and abs(float(ins["dropY"]) - sy) <= 2.0):
+                entrants.add((float(math.floor(float(ins.get("x", 0.0)))) + 0.5,
+                              float(math.floor(float(ins.get("y", 0.0)))) + 0.5))
+
+        charge = None
         for dx_c, dy_c in cotes:
             essai = (float(math.floor(sx + dx_c)) + 0.5, float(math.floor(sy + dy_c)) + 0.5)
-            if site_finder.can_place(self.api, belt, essai[0], essai[1]):
-                vers_src = essai
+            # La tuile du bras qui desservirait ce côté : entre la machine et la belt.
+            milieu = (float(math.floor((sx + essai[0]) / 2)) + 0.5,
+                      float(math.floor((sy + essai[1]) / 2)) + 0.5)
+            if milieu in entrants:
+                continue
+            deja = any(e.get("type") == "transport-belt"
+                       for e in site_finder._entites_a(self.api, essai[0], essai[1], 0.4))
+            if not deja and not site_finder.can_place(self.api, belt, essai[0], essai[1]):
+                continue
+            if not deja:
+                self.api.run_action(self.api.place_entity_at, belt, essai[0], essai[1],
+                                    "north", None, timeout=20.0)
+            pont = site_finder.place_inserter_vers(
+                self.api, essai, (sx, sy), belt, nom="inserter",
+                source_types=(nom_src,), cible_pos=essai)
+            if pont is not None:
+                vers_src, charge = essai, pont
                 break
 
         # NE PAS DÉVERSER SUR LA VOIE D'UN AUTRE FLUX. Mesuré, et c'est la panne la plus
@@ -2140,11 +2185,19 @@ class Coordinator:
         # aucun L praticable, et l'on ne pose alors rien du tout là où l'on posait une
         # ligne presque complète. Ce qu'il faut absolument éviter est la voie d'un AUTRE
         # FLUX — la retourner casse ce qui marchait ; un poteau, lui, ne fait qu'un trou.
-        occupees = {(float(e.get("x", 0.0)), float(e.get("y", 0.0)))
-                    for e in site_finder._entites_a(
-                        self.api, (sx + vers[0]) / 2, (sy + vers[1]) / 2,
-                        max(16.0, distance))
-                    if e.get("type") == "transport-belt"}
+        # LA RÉSERVATION EST TENUE EN MÉMOIRE, pas relue du jeu. `inspect_at` plafonne son
+        # rayon à 64 tuiles : sur une ligne de soixante-quinze, les belts du bout étaient
+        # tout simplement INVISIBLES, et chaque flux redécouvrait un terrain qu'il croyait
+        # libre. C'est la raison de fond pour laquelle les tracés se disputaient l'espace
+        # quoi qu'on fasse — on réservait à l'aveugle au-delà de l'horizon d'observation.
+        # Un couloir se réserve AVANT de poser, et la réservation se transmet d'un flux au
+        # suivant.
+        occupees = set(reserve) if reserve is not None else set()
+        occupees |= {(float(e.get("x", 0.0)), float(e.get("y", 0.0)))
+                     for e in site_finder._entites_a(
+                         self.api, (sx + vers[0]) / 2, (sy + vers[1]) / 2,
+                         max(16.0, min(distance, 60.0)))
+                     if e.get("type") == "transport-belt"}
 
         # ET L'EMPRISE DES DEUX MACHINES QU'ON RELIE. Mesuré : le tracé des engrenages
         # passait par le CENTRE de l'assembleuse dont il partait — « tracé INTERROMPU en
@@ -2154,7 +2207,11 @@ class Coordinator:
         # essayé et donne moins bien (plus aucun L praticable).
         for cx, cy in ((sx, sy), (vers[0], vers[1])):
             demi = self._demi_largeur(cx, cy)
-            pas = int(demi) + 1
+            # L'EMPRISE, PAS LA PÉRIPHÉRIE. Interdire une tuile de plus tout autour
+            # revenait à poser deux carrés de 5x5 autour de machines distantes de six
+            # tuiles : plus aucun passage entre elles, et « aucun tracé libre » sur une
+            # liaison de six tuiles. On bloque la machine elle-même, rien de plus.
+            pas = max(0, int(demi))
             for ex in range(-pas, pas + 1):
                 for ey in range(-pas, pas + 1):
                     occupees.add((float(math.floor(cx + ex)) + 0.5,
@@ -2173,7 +2230,33 @@ class Coordinator:
         # On CONNAÎT le tracé avant de poser : cela permet de dire ensuite quelles tuiles
         # manquent, et non le seul mot « INTERROMPU ». Une ligne coupée ne transporte
         # rien, et savoir OÙ elle est coupée est la moitié du diagnostic.
+        # LES BRAS D'ABORD, LA BELT ENSUITE. Un bras est CONTRAINT — il doit toucher la
+        # machine — tandis qu'une belt peut faire le tour. En déroulant la ligne en
+        # premier, on saturait les abords des machines et il ne restait plus une tuile
+        # pour les bras : « 6 tuiles de belt posées, SANS bras de chargement, SANS bras de
+        # déchargement » sur une liaison de six tuiles. On pose donc les deux tuiles
+        # d'extrémité, on accroche les bras, et la belt vient relier ce qui est acquis.
+        # Le bras de chargement est deja accroche (choix du cote, plus haut). Reste
+        # celui du dechargement, cote machine cible.
+        if not any(e.get("type") == "transport-belt"
+                   for e in site_finder._entites_a(self.api, vers_cible[0], vers_cible[1], 0.4)):
+            self.api.run_action(self.api.place_entity_at, belt, vers_cible[0],
+                                vers_cible[1], "north", None, timeout=20.0)
+        decharge = site_finder.place_inserter_vers(
+            self.api, vers, vers_cible, vers_nom, nom="inserter", source_types=(belt,))
+
+        # SES PROPRES EXTRÉMITÉS NE SONT PAS DES OBSTACLES. On vient de poser une tuile
+        # de belt à chaque bout pour y accrocher les bras ; les compter comme « déjà
+        # prises » interdisait au tracé de partir de son propre départ — « aucun tracé
+        # libre » partout, et cinq tuiles isolées en tout et pour tout.
+        occupees.discard(vers_src)
+        occupees.discard(vers_cible)
+
         attendues, _ = site_finder.tracer_en_l(vers_src, vers_cible, occupees)
+        # Le couloir est RÉSERVÉ dès qu'il est tracé, avant même la pose : le flux suivant
+        # ne le proposera plus, qu'il soit ou non déjà matérialisé sur le terrain.
+        if reserve is not None:
+            reserve.update(attendues)
         tuiles, complete = site_finder.place_belt_line(
             self.api, vers_src, vers_cible, belt=belt, eviter=occupees)
         trous = [t for t in attendues if t not in tuiles]
@@ -2182,16 +2265,8 @@ class Coordinator:
                            f"{vers_nom} ({distance:.0f} tuiles) sans emprunter une belt "
                            f"existante ({len(occupees)} tuile(s) déjà prises)")
 
-        # `cible_pos` : on exige LA tuile, pas « une belt ». Sans cela le bras de
-        # chargement déposait volontiers sur la belt d'un autre flux — même nom, même
-        # type, et les pièces repartaient chez le voisin.
-        charge = site_finder.place_inserter_vers(
-            self.api, tuiles[0], (sx, sy), belt, nom="inserter", source_types=(nom_src,),
-            cible_pos=tuiles[0])
-        # Pas de `cible_pos` ici : la cible est une machine large, dont le dépôt tombe
-        # sur un bord et non sur le centre. Son NOM suffit à la distinguer.
-        decharge = site_finder.place_inserter_vers(
-            self.api, vers, tuiles[-1], vers_nom, nom="inserter", source_types=(belt,))
+        # Les bras ont déjà été posés plus haut, avant la belt : ils sont contraints,
+        # elle ne l'est pas.
         # Les bras sont ÉLECTRIQUES, et celui du bout de la belt est aussi loin que la
         # source : soixante-dix tuiles de la centrale, donc hors de toute couverture.
         # Mesuré — belt déroulée, bras posés aux deux bouts, et pas un objet transporté.
