@@ -130,6 +130,31 @@ def test_cause_hors_vocabulaire_devient_inconnu() -> None:
     assert ok, str(r)
 
 
+def test_un_accent_ne_fait_pas_perdre_une_enquete() -> None:
+    """Le vocabulaire reste fermé sur le SENS, pas sur l'orthographe.
+
+    Mesuré en partie longue : le modèle a rendu « machine_debranchée » après huit outils
+    appelés, et toute l'enquête a été ramenée à `inconnu` pour un é. Refuser sur un
+    accent n'écarte pas une hypothèse douteuse — cela jette une conclusion juste, et la
+    boucle perd la seule chose qu'elle cherchait.
+    """
+    r = _enq([[("conclure", {"cause": "machine_debranchée",
+                             "preuve": "connected=false, networkId=nil"})]])(
+        FauxApi(), _Ecart())
+    ok = r.cause == "machine_debranchee"
+    rec("test_un_accent_ne_fait_pas_perdre_une_enquete", ok, str(r))
+    assert ok, str(r)
+
+
+def test_une_cause_inventee_reste_refusee() -> None:
+    """La tolérance porte sur la forme, jamais sur le fond : l'invention reste écartée."""
+    r = _enq([[("conclure", {"cause": "LES BITERS ONT TOUT MANGÉ",
+                             "preuve": "j'en suis convaincu"})]])(FauxApi(), _Ecart())
+    ok = r.cause == "inconnu" and "hors vocabulaire" in r.preuve
+    rec("test_une_cause_inventee_reste_refusee", ok, str(r))
+    assert ok, str(r)
+
+
 def test_conclusion_sans_preuve_refusee() -> None:
     """Sans mesure à l'appui, une cause est une opinion — et déclencherait une réparation.
 
@@ -202,6 +227,8 @@ def test_vocabulaire_ferme_et_documente() -> None:
 def main() -> int:
     for t in (test_enquete_mesure_puis_conclut, test_outil_hors_liste_blanche_refuse,
               test_cause_hors_vocabulaire_devient_inconnu,
+        test_un_accent_ne_fait_pas_perdre_une_enquete,
+        test_une_cause_inventee_reste_refusee,
               test_conclusion_sans_preuve_refusee, test_budget_borne_les_mesures,
               test_modele_absent_rend_inconnu, test_modele_muet_rend_inconnu,
               test_reponses_tronquees_avant_envoi, test_vocabulaire_ferme_et_documente):

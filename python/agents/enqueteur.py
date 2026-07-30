@@ -394,8 +394,24 @@ class Enqueteur:
         return {"continu": r.continu, "tuiles_parcourues": r.tuiles, "cause": r.cause,
                 "rupture": list(r.rupture) if r.rupture else None, "detail": r.detail}
 
+    @staticmethod
+    def _normaliser(cause: str) -> str:
+        """Ramène une cause à la forme du vocabulaire : sans accent, en minuscules.
+
+        Le vocabulaire est fermé et il doit le rester — mais le refuser sur un ACCENT
+        n'écarte pas une hypothèse douteuse, il jette une conclusion juste. Mesuré : le
+        modèle a rendu « machine_debranchée » après huit outils appelés, et l'enquête
+        entière a été ramenée à `inconnu` pour un é. La rigueur porte sur le SENS des
+        causes admises, pas sur leur orthographe.
+        """
+        import unicodedata
+        sans_accent = "".join(
+            c for c in unicodedata.normalize("NFD", cause.strip().lower())
+            if unicodedata.category(c) != "Mn")
+        return sans_accent.replace(" ", "_").replace("-", "_")
+
     def _conclure(self, args: dict, appels: int) -> Constat:
-        cause = str(args.get("cause", "")).strip()
+        cause = self._normaliser(str(args.get("cause", "")))
         preuve = str(args.get("preuve", "")).strip()
         if cause not in CAUSES:
             self.journal.append(f"cause hors vocabulaire : {cause!r}")
