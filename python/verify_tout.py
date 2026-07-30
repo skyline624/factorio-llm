@@ -89,14 +89,18 @@ def _lancer(script: str, promesse: str, timeout: float) -> tuple[str, bool, str]
 def main(argv: list[str]) -> int:
     rapide = "--rapide" in argv
     liste = SOCLE + ([] if rapide else COMPORTEMENT)
+    # `flush` partout : une batterie dure un quart d'heure, et une sortie redirigée vers
+    # un fichier reste bufferisée jusqu'au dernier script. On ne saurait pas lequel tourne
+    # ni lequel a déjà échoué — c'est le même principe que le journal des parties, qui se
+    # lit PENDANT qu'elles tournent.
     print(f"       {len(liste)} vérification(s) en jeu"
-          + (" (socle seulement)" if rapide else "") + "\n")
+          + (" (socle seulement)" if rapide else "") + "\n", flush=True)
     resultats = []
     for script, promesse in liste:
-        print(f"       ... {script} — {promesse}")
+        print(f"       ... {script} — {promesse}", flush=True)
         r = _lancer(script, promesse, timeout=900.0)
         resultats.append((r[0], r[1], r[2], promesse))
-        print(f"       [{'OK  ' if r[1] else 'FAIL'}] {r[0]:28s} {r[2]}")
+        print(f"       [{'OK  ' if r[1] else 'FAIL'}] {r[0]:28s} {r[2]}", flush=True)
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _, _ in resultats if ok)
     for script, ok, resume, promesse in resultats:
