@@ -201,6 +201,44 @@ def tracer_en_l(depart: tuple[float, float], arrivee: tuple[float, float],
     return plus_court, not any(t in interdites for t in plus_court)
 
 
+def _enjamber(api, tuiles: list, i: int, direction: str, belt: str,
+              timeout: float = 20.0) -> list:
+    """Franchit par un SOUTERRAIN ce qu'on ne peut ni occuper ni ôter.
+
+    Un `underground-belt` porte cinq tuiles : on pose l'entrée sur la dernière case
+    libre AVANT l'obstacle et la sortie sur la première case libre APRÈS. Le sens
+    (`input`/`output`) se donne À LA CRÉATION — `belt_to_ground_type` est en lecture
+    seule —, d'où l'option `ug_type` que le mod applique puis RELIT, en corrigeant par
+    rotation si le jeu n'a pas suivi.
+
+    Rend les tuiles réellement posées (vide si le franchissement échoue).
+    """
+    ug = "underground-belt"
+    entree = tuiles[i - 1] if i > 0 else None
+    if entree is None:
+        return []
+    for saut in range(1, 5):
+        if i + saut >= len(tuiles):
+            return []
+        sortie = tuiles[i + saut]
+        if not can_place(api, ug, sortie[0], sortie[1], direction):
+            continue
+        if not can_place(api, ug, entree[0], entree[1], direction):
+            # L'entrée porte déjà une belt ordinaire : on la remplace par le souterrain.
+            api.run_action(api.remove_entity_at, entree[0], entree[1], belt,
+                           timeout=timeout)
+            if not can_place(api, ug, entree[0], entree[1], direction):
+                return []
+        a = api.run_action(api.place_entity_at, ug, entree[0], entree[1], direction,
+                           {"ug_type": "input"}, timeout=timeout)
+        b = api.run_action(api.place_entity_at, ug, sortie[0], sortie[1], direction,
+                           {"ug_type": "output"}, timeout=timeout)
+        if all(isinstance(r, dict) and r.get("ok") for r in (a, b)):
+            return [entree, sortie]
+        return []
+    return []
+
+
 def place_belt_line(api, depart: tuple[float, float], arrivee: tuple[float, float],
                     belt: str = "transport-belt", timeout: float = 20.0,
                     garde: int = 200, portee: float = 0.0,
@@ -266,7 +304,17 @@ def place_belt_line(api, depart: tuple[float, float], arrivee: tuple[float, floa
             # tuile par tuile — c'est ce que fait un joueur, et le seul obstacle qu'on
             # s'autorise à ôter est celui que la nature a mis là.
             if not degager_tuile(api, bx, by, timeout) or not can_place(api, belt, bx, by, d):
-                continue                 # infranchissable : la belt aura un trou, on le dira
+                # ON PASSE DESSOUS. Ce qu'on ne peut ni occuper ni ôter — un bras, un
+                # poteau, une machine posée par un autre flux — se franchit par un
+                # SOUTERRAIN, exactement comme le ferait un joueur. Mesuré : trois
+                # inserters sur l'axe du cuivre coupaient la ligne, et les déclarer
+                # infranchissables au tracé ne laissait plus aucun chemin (« aucun tracé
+                # libre » sur quatorze tuiles). Un obstacle ne doit pas faire renoncer :
+                # il doit se contourner PAR DESSOUS.
+                saut = _enjamber(api, tuiles, i, d, belt, timeout)
+                if saut:
+                    poses.extend(saut)
+                continue                 # sinon : la belt aura un trou, on le dira
         r = api.run_action(api.place_entity_at, belt, bx, by, d, None, timeout=timeout)
         if isinstance(r, dict) and r.get("ok"):
             poses.append((bx, by))
