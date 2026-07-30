@@ -32,7 +32,7 @@ import sys
 from agents.coordinator import Coordinator
 from core.mod_api import ModApi
 from core.rcon import get_rcon
-from services import deplacement, save_ref
+from services import deplacement, perception, save_ref
 
 FLACON = "automation-science-pack"
 RESULTS: list[tuple[str, bool, str]] = []
@@ -175,26 +175,44 @@ def main() -> int:
         f"    e.get_inventory(defines.inventory.assembling_machine_output).clear() "
         f"  end end rcon.print('vide')")
 
-    # 67 tuiles de belt à ~1.9 tuile/s font une quarantaine de secondes de jeu : on
-    # laisse le double, sans quoi l'on mesurerait la longueur du trajet.
-    api.run_action(api.wait, 4800, timeout=600.0)
+    # ON ÉCHANTILLONNE, on ne prend pas une photo. Un instantané de l'entrée sous-estime
+    # tout : l'assembleuse consomme au fur et à mesure, si bien qu'on peut la trouver
+    # vide alors qu'elle est servie en continu. Et un seul relevé ne distingue pas un
+    # FLUX d'un sursaut — les objets déjà sur la belt au moment du montage arrivent une
+    # fois, puis plus rien. Ce que ce banc doit prouver est que la boucle ne s'arrête
+    # pas ; il faut donc la regarder plusieurs fois.
+    FENETRES, TICKS = 6, 1500
+    cumul_depart = perception.production_cumulee(api, FLACON)
+    entrees, cumuls = [], []
+    for _ in range(FENETRES):
+        api.run_action(api.wait, TICKS, timeout=300.0)
+        etat = _science(rcon)
+        entrees.append(int(etat.get("entree", 0) or 0))
+        cumuls.append(perception.production_cumulee(api, FLACON))
     apres = _science(rcon)
+
+    servies = sum(1 for e in entrees if e > 0)
+    produits = (cumuls[-1] - cumul_depart) if cumul_depart >= 0 and cumuls[-1] >= 0 else -1
+    actives = sum(1 for a, b in zip([cumul_depart] + cumuls, cumuls) if b > a)
 
     # --- Rec 4 : l'agent a monté la chaîne (constat de forme) ---
     rec("4: la chaîne d'alimentation est montée", ok_alim, detail_alim[:115])
 
-    # --- Rec 5 : LE CONSTAT QUI TRANCHE — les ingrédients sont ARRIVÉS ---
-    # Les quatre précédents peuvent être verts pendant que rien ne circule.
-    arrives = int(apres.get("entree", 0) or 0)
-    rec("5: l'assembleuse reçoit sans qu'on lui porte rien", arrives > 0,
-        f"entrée vidée puis {arrives} ingrédient(s) arrivé(s) par la belt "
-        f"(assembleuse en ({apres.get('x', 0):.0f},{apres.get('y', 0):.0f}))")
+    # --- Rec 5 : LE CONSTAT QUI TRANCHE — les ingrédients arrivent, et ILS REVIENNENT ---
+    # Les quatre précédents peuvent être verts pendant que rien ne circule. Exiger
+    # plusieurs fenêtres servies distingue une belt qui alimente d'un stock résiduel qui
+    # se vide une bonne fois.
+    rec("5: l'assembleuse est servie de façon RÉPÉTÉE", servies >= 2,
+        f"entrée vidée, puis servie sur {servies}/{FENETRES} fenêtre(s) de {TICKS} ticks "
+        f"— relevés {entrees}")
 
-    # --- Rec 6 : et cela PRODUIT ---
-    sortis = int(apres.get("sortie", 0) or 0)
-    rec("6: des flacons sortent de ce qui est arrivé", sortis > 0,
-        f"{sortis} flacon(s) produit(s) depuis des ingrédients convoyés "
-        f"(sortie remise à zéro avant l'attente)")
+    # --- Rec 6 : et cela PRODUIT, sur la durée ---
+    # La statistique de la force, et non l'inventaire de sortie : la sortie est vidée par
+    # le bras vers le laboratoire, si bien qu'on lirait « rien produit » au moment même
+    # où la chaîne devient autonome.
+    rec("6: la production de flacons se poursuit", produits >= 3 and actives >= 2,
+        f"{produits} flacon(s) produit(s) sur {FENETRES} fenêtre(s), dont {actives} "
+        f"avec progression — cumul {cumul_depart} -> {cumuls[-1]}")
 
     rcon.query_lua("game.speed = 1 rcon.print(1)")
     rcon.close()

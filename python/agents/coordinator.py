@@ -1807,18 +1807,46 @@ class Coordinator:
             return False, (f"aucune assembleuse réglée sur {flacon} — il faut d'abord "
                            f"automatiser la science")
 
+        # BÂTIR D'ABORD, RELIER ENSUITE, et c'est l'ordre qui compte.
+        #
+        # Mesuré : une machine qui vient d'être posée n'est pas encore reconnaissable
+        # comme source. Un four n'a de recette qu'une fois qu'on lui a donné du minerai ;
+        # tant qu'il est vide, il ne « produit » rien aux yeux de `_source_de`. En
+        # bâtissant et reliant ingrédient par ingrédient, on demandait donc à
+        # l'assembleuse à engrenages de se brancher sur un four de fer qui n'existait
+        # pour elle qu'un instant plus tard : elle restait à sec, et toute la chaîne
+        # butait sur l'ingrédient manquant — l'entrée de la science servie en continu,
+        # et un seul flacon produit en six fenêtres.
         recette = perception.recipe_of(self.api, flacon) or []
-        faits, manques = [], []
-        for ing in recette:
-            nom = ing[0] if isinstance(ing, (tuple, list)) else str(ing)
+        besoins = [ing[0] if isinstance(ing, (tuple, list)) else str(ing)
+                   for ing in recette]
+        intermediaires, manques = [], []
+        for nom in besoins:
+            if self._source_de(nom) is not None:
+                continue
+            ou = self._batir_la_source_de(nom)
+            if not ou:
+                manques.append(f"{nom} (rien ne le produit et rien n'a pu être bâti)")
+            elif isinstance(ou, tuple):
+                intermediaires.append((nom, ou))
 
-            # Pas de source ? On en fabrique une, plutôt que de constater le manque.
+        # On laisse les sources DÉMARRER : le temps qu'un four reçoive son minerai et
+        # prenne sa recette, il devient repérable.
+        self.api.run_action(self.api.wait, 180, timeout=60.0)
+
+        faits = []
+        # Les sources intermédiaires d'abord : une assembleuse à engrenages qui n'a pas
+        # de plaques ne sert à rien en aval.
+        for nom, ou in intermediaires:
+            for sous in (perception.recipe_of(self.api, nom) or []):
+                s_nom = sous[0] if isinstance(sous, (tuple, list)) else str(sous)
+                ok, detail = self.amener(s_nom, ou, "assembling-machine-1")
+                (faits if ok else manques).append(f"[pour {nom}] {detail}")
+
+        for nom in besoins:
             if self._source_de(nom) is None:
-                bati = self._batir_la_source_de(nom)
-                if not bati:
-                    manques.append(f"{nom} (rien ne le produit et rien n'a pu être bâti)")
-                    continue
-
+                manques.append(f"{nom} : toujours aucune source")
+                continue
             ok, detail = self.amener(nom, cible, "assembling-machine-1")
             (faits if ok else manques).append(detail)
 
@@ -1826,12 +1854,16 @@ class Coordinator:
             f"science alimentée : {' ; '.join(faits)}"
             + (f" — MANQUE : {' ; '.join(manques)}" if manques else ""))
 
-    def _batir_la_source_de(self, item: str) -> bool:
+    def _batir_la_source_de(self, item: str):
         """Fait apparaître de quoi produire `item` : une chaîne, ou une assembleuse.
 
         Une plaque se fond au bout d'une chaîne sur son minerai ; une pièce se fabrique
         dans une assembleuse qu'on règle et qu'on branche. Les deux montages existent
         déjà, il ne manquait que d'en choisir un.
+
+        Rend True pour une chaîne (elle s'alimente seule depuis son gisement), et la
+        POSITION pour une assembleuse — celle-ci devra être reliée à ses propres
+        ingrédients, ce que l'appelant fait dans un second temps.
         """
         from services import site_finder
 
@@ -1873,12 +1905,11 @@ class Coordinator:
                     self.relier(Symptome(name="assembling-machine-1", x=x, y=y,
                                          cause="debranchee", gravite=1,
                                          detail="assembleuse posée à l'instant"))
-                # Elle-même doit être alimentée : ses ingrédients viennent d'ailleurs.
-                for sous in (perception.recipe_of(self.api, item) or []):
-                    s_nom = sous[0] if isinstance(sous, (tuple, list)) else str(sous)
-                    if self._source_de(s_nom) is not None:
-                        self.amener(s_nom, (x, y), "assembling-machine-1")
-                return True
+                # Elle sera alimentée dans un SECOND temps : ses ingrédients viennent de
+                # machines qui, à cet instant, peuvent n'avoir encore rien produit — donc
+                # être invisibles comme sources. On rend sa position et l'appelant relie
+                # une fois tout bâti.
+                return (x, y)
         return False
 
     def brancher(self, nom: str, x: float, y: float) -> bool:
