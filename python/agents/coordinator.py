@@ -2265,7 +2265,23 @@ class Coordinator:
         # la ligne garde un trou dès sa première tuile, et plus aucun bras ne peut la
         # charger. Interdire ces deux emprises-là suffit : les interdire TOUTES a été
         # essayé et donne moins bien (plus aucun L praticable).
-        for cx, cy in ((sx, sy), (vers[0], vers[1])):
+        # TOUTES LES MACHINES, pas seulement les deux qu'on relie. Mesuré : la belt du
+        # cuivre courait de (-32.5,-65.5) jusqu'à (-24.5,-65.5) puis s'arrêtait net —
+        # elle butait sur l'assembleuse à engrenages posée en (-23,-65), qu'aucun tracé
+        # ne peut traverser. Les objets s'accumulaient en amont, les bras de déchargement
+        # attendaient en aval, et rien dans la pose ne le signalait.
+        #
+        # On interdit les MACHINES et rien d'autre : interdire tout ce qui est bâti,
+        # poteaux et coffres compris, a été essayé et donne moins bien (plus aucun L
+        # praticable). Une machine est infranchissable ; un poteau se contourne d'une
+        # tuile.
+        obstacles = [(float(e.get("x", 0.0)), float(e.get("y", 0.0)))
+                     for e in site_finder._entites_a(
+                         self.api, (sx + vers[0]) / 2, (sy + vers[1]) / 2,
+                         max(16.0, min(distance, 60.0)))
+                     if e.get("type") in ("furnace", "assembling-machine", "lab",
+                                          "mining-drill", "boiler", "generator")]
+        for cx, cy in [(sx, sy), (vers[0], vers[1])] + obstacles:
             demi = self._demi_largeur(cx, cy)
             # L'EMPRISE, PAS LA PÉRIPHÉRIE. Interdire une tuile de plus tout autour
             # revenait à poser deux carrés de 5x5 autour de machines distantes de six
