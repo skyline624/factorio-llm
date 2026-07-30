@@ -182,7 +182,13 @@ def tracer_en_l(depart: tuple[float, float], arrivee: tuple[float, float],
     # contourne que par au-delà de son extrémité. Mesuré par le test unitaire — un
     # barrage vertical complet entre le départ et l'arrivée n'était franchi par aucune
     # des deux formes de L, ni par un coude décalé sur le seul axe de départ.
-    for pas in (1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6):
+    # L'ÉVENTAIL DOIT SUIVRE L'ENCOMBREMENT. Une fois les machines, poteaux, coffres et
+    # bras déclarés infranchissables, six pas de décalage ne suffisent plus : le tracé
+    # rendait « aucun trajet libre » sur quatorze tuiles de distance. On cherche plus
+    # loin — le coût est nul (le calcul est pur) et un chemin trouvé vaut mieux qu'une
+    # ligne qu'on renonce à poser.
+    for pas in (1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7, 8, -8,
+                9, -9, 10, -10, 12, -12):
         candidats.append(_chemin(x1, y0 + pas))
         candidats.append(_chemin(x0 + pas, y1))
         candidats.append(_chemin(x0, y1 + pas))

@@ -2279,6 +2279,17 @@ class Coordinator:
                      for e in site_finder._entites_a(
                          self.api, (sx + vers[0]) / 2, (sy + vers[1]) / 2,
                          max(16.0, min(distance, 60.0)))
+                     # Les POTEAUX comptent aussi : ils n'occupent qu'une tuile, mais
+                     # `degager_tuile` n'ôte que ce que la nature a mis là — jamais nos
+                     # ouvrages. Mesuré : « tracé INTERROMPU en (-32,-62), (-22,-62),
+                     # (-18,-62) », trois poteaux sur l'axe du cuivre, et une ligne en
+                     # morceaux qui ne transportait rien. Une tuile qu'on ne peut ni
+                     # occuper ni libérer doit être contournée à la planification.
+                     # SEULEMENT LES MACHINES. Y ajouter les poteaux, coffres et bras a
+                     # été essayé : le trajet devient impossible (« aucun tracé libre »
+                     # sur quatorze tuiles), même en élargissant l'éventail des coudes.
+                     # Une machine est un mur ; le reste ne coupe qu'une tuile, et mieux
+                     # vaut une ligne avec un trou à réparer qu'aucune ligne du tout.
                      if e.get("type") in ("furnace", "assembling-machine", "lab",
                                           "mining-drill", "boiler", "generator")]
         for cx, cy in [(sx, sy), (vers[0], vers[1])] + obstacles:
@@ -2405,7 +2416,13 @@ class Coordinator:
         sans_courant = [f"({p[0]:.0f},{p[1]:.0f})"
                         for p in (charge, decharge) if p is not None
                         and not self.brancher("inserter", p[0], p[1])]
-        ok = charge is not None and decharge is not None and not sans_courant
+        # UNE LIGNE COUPÉE NE TRANSPORTE RIEN, et ne doit donc pas compter comme montée.
+        # `amener` rendait `True` sur un tracé interrompu dès lors que les deux bras
+        # étaient posés et alimentés : l'appelant croyait la liaison faite, ne réessayait
+        # pas, et l'assembleuse attendait un ingrédient qui n'arriverait jamais. On exige
+        # la CONTINUITÉ — c'est elle qu'on est venu chercher.
+        ok = (charge is not None and decharge is not None and not sans_courant
+              and complete)
         return ok, (f"{item} : {nom_src}@({sx:.0f},{sy:.0f}) -> {len(tuiles)} tuile(s) de "
                     f"belt -> {vers_nom} ({distance:.0f} tuiles"
                     + ("" if complete else
