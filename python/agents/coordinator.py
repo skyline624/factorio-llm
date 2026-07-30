@@ -573,7 +573,11 @@ class Coordinator:
     # ----- OBSERVE -----
 
     def observer(self) -> EtatUsine:
-        diag = diagnose_zone(self.api, self.zone[0], self.zone[1], self.rayon)
+        # Les centrales sont observées à part : elles se posent au bord de l'eau, donc
+        # hors de la zone de l'usine, et le diagnostic ne les voyait jamais. Mesuré :
+        # deux boilers à sec, quatre centrales muettes à cent tuiles, production nulle.
+        diag = diagnose_zone(self.api, self.zone[0], self.zone[1], self.rayon,
+                             rows_sup=perception.centrales(self.api))
         etat = EtatUsine(machines=diag.machines, diagnostic=diag)
         # Un point du réseau suffit à savoir s'il y a du courant : on interroge la
         # première machine observée plutôt que toutes (chaque appel est un aller-retour).
@@ -1603,7 +1607,11 @@ class Coordinator:
         if sp.get("bbox"):
             for a in site_finder.ancres_libres_sur_minerai(
                     self.api, sp["bbox"], self.zone,
-                    ecart=self.builder.ECART_ANCRES):
+                    ecart=self.builder.ECART_ANCRES,
+                    # Ce que la boucle SURVEILLE est ce qu'elle peut réparer : une chaîne
+                    # hors du rayon diagnostiqué n'existe pour elle qu'au moment où elle
+                    # la pose.
+                    distance_max=self.rayon):
                 if a not in candidats:
                     candidats.append(a)
         if not candidats:

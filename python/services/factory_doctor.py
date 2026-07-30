@@ -191,15 +191,29 @@ def diagnose(rows: list[dict], power: Optional[dict] = None) -> Diagnostic:
 
 def diagnose_zone(api, x: float, y: float, radius: float = 30.0,
                   types: tuple[str, ...] = ("mining-drill", "furnace", "assembling-machine",
-                                            "inserter", "generator", "boiler")) -> Diagnostic:
+                                            "inserter", "generator", "boiler"),
+                  rows_sup=None) -> Diagnostic:
     """Observe une zone puis la diagnostique.
 
     Le personnage doit être à portée : `scan_area` est centré sur LUI et non sur (x, y).
     L'appelant s'y téléporte ou s'y rend au préalable.
+
+    `rows_sup` ajoute des machines observées AILLEURS. Les centrales se posent au bord de
+    l'eau, parfois à cent tuiles de l'usine : elles échappaient donc au diagnostic, et
+    deux boilers à sec ont arrêté toute la production sans qu'aucune cause ne soit
+    produite. Une machine déjà vue dans la zone n'est pas ajoutée deux fois — elle
+    compterait double dans `machines` et produirait deux fois la même cause.
     """
     sa = api.scan_area(radius)
     rows = [e for e in (sa.get("entities", []) if isinstance(sa, dict) else [])
             if e.get("type") in types]
+    vues = {(e.get("name"), round(float(e.get("x", 0.0))), round(float(e.get("y", 0.0))))
+            for e in rows}
+    for e in (rows_sup or []):
+        cle = (e.get("name"), round(float(e.get("x", 0.0))), round(float(e.get("y", 0.0))))
+        if cle not in vues:
+            vues.add(cle)
+            rows.append(e)
     power: dict[tuple[float, float], dict] = {}
     for r in rows:
         cause, gravite, _ = _classer(r.get("status"))

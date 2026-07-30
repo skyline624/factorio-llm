@@ -44,6 +44,50 @@ def nearest(api: ModApi, name: str) -> Optional[tuple[float, float, int]]:
     return (float(r["x"]), float(r["y"]), int(r.get("distance", 0)))
 
 
+def centrales(api: ModApi,
+              types: tuple[str, ...] = ("boiler", "generator", "offshore-pump")
+              ) -> list[dict]:
+    """Les organes de production électrique de l'agent, OÙ QU'ILS SOIENT.
+
+    Le diagnostic passe par `scan_area`, centré sur le personnage, et ne voit donc que
+    l'usine. Or les centrales se posent au bord de l'EAU : mesuré, l'usine était en
+    (-27,-60) et ses quatre centrales entre (15,-2) et (46,36), soit soixante à cent
+    vingt tuiles plus loin — hors de portée du diagnostic. Deux de leurs boilers étaient
+    à sec (`fuel=0`), les moteurs à l'arrêt, la production nulle, et rien ne le signalait :
+    l'agent ne peut pas réparer ce qu'il ne regarde pas.
+
+    On lit leur emprise en un appel, puis leurs lignes complètes par `inspect_at` — qui
+    est centré sur un POINT, lui. Passer par le mod plutôt que par du Lua brut évite de
+    réimplémenter le mapping des statuts (`status_name`), dont l'entier ne se lit pas.
+    """
+    noms = ",".join(f"'{t}'" for t in types)
+    try:
+        brut = api.rcon.query_lua(
+            f"local s = game.surfaces[1] "
+            f"local x1, y1, x2, y2 = 1e9, 1e9, -1e9, -1e9 local n = 0 "
+            f"for _, e in pairs(s.find_entities_filtered{{type={{{noms}}}}}) do "
+            f"  local p = e.position n = n + 1 "
+            f"  if p.x < x1 then x1 = p.x end if p.x > x2 then x2 = p.x end "
+            f"  if p.y < y1 then y1 = p.y end if p.y > y2 then y2 = p.y end end "
+            f"if n == 0 then rcon.print('') else "
+            f"rcon.print(x1 .. ',' .. y1 .. ',' .. x2 .. ',' .. y2) end")
+    except Exception:
+        return []
+    morceaux = str(brut).strip().split(",")
+    if len(morceaux) != 4:
+        return []
+    try:
+        x1, y1, x2, y2 = (float(v) for v in morceaux)
+    except ValueError:
+        return []
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    # +8 : une emprise réduite à un point donnerait un rayon nul, et un boiler fait 3×2.
+    rayon = max(abs(x2 - x1), abs(y2 - y1)) / 2.0 + 8.0
+    r = api.inspect_at(cx, cy, rayon)
+    lignes = r.get("entities", []) if isinstance(r, dict) else []
+    return [e for e in lignes if e.get("type") in types]
+
+
 def production_cumulee(api: ModApi, item: str) -> int:
     """Combien d'unités de `item` l'usine a produites depuis le début. -1 si illisible.
 

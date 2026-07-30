@@ -143,6 +143,23 @@ def test_statut_jamais_rencontre_se_voit() -> None:
     assert ok
 
 
+def test_une_centrale_a_sec_est_une_cause() -> None:
+    """Un boiler sans combustible arrête toute l'usine — encore faut-il le regarder.
+
+    Mesuré : l'usine en (-27,-60), ses quatre centrales entre (15,-2) et (46,36), donc
+    hors du rayon de diagnostic. Deux boilers à `fuel=0`, moteurs à l'arrêt, production
+    nulle — et ZÉRO cause produite. Le doctor savait pourtant traiter `no_fuel` ; il ne
+    voyait simplement pas la machine.
+    """
+    d = diagnose([_m("boiler", 28, 36, "no_fuel", type_="boiler"),
+                  _m("electric-furnace", -26, -60, "no_power")])
+    causes = {s.cause for s in d.causes}
+    ok = "sans_combustible" in causes
+    rec("test_une_centrale_a_sec_est_une_cause", ok,
+        f"{[(s.name, s.cause, s.racine) for s in d.symptomes]}")
+    assert ok
+
+
 def test_gisement_epuise_est_une_cause_propre() -> None:
     """Le foreur à sec affame tout l'aval : c'est LUI la cause, pas les machines à jeun.
 
@@ -189,6 +206,7 @@ def main() -> int:
         test_statut_non_interprete_ne_produit_rien,
         test_statut_jamais_rencontre_se_voit,
         test_gisement_epuise_est_une_cause_propre,
+        test_une_centrale_a_sec_est_une_cause,
         test_gravite_ordonne_le_diagnostic,
         test_resume_lisible,
     ]

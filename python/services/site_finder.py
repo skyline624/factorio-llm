@@ -269,7 +269,9 @@ def poteau_connecte_le_plus_proche(api, x: float, y: float, rayon: float = 80.0
 
 def ancres_libres_sur_minerai(api, bbox: dict, autour: tuple[float, float],
                               ecart: int = 4, plafond: int = 8,
-                              degagement: float = 2.0) -> list[tuple[float, float]]:
+                              degagement: float = 2.0,
+                              distance_max: Optional[float] = None
+                              ) -> list[tuple[float, float]]:
     """Tuiles de minerai NON bâties d'un gisement, les plus proches de `autour` d'abord.
 
     Pourquoi ce détour, alors que `scan_patch` renvoie déjà un `sample` : mesuré en jeu,
@@ -315,6 +317,15 @@ def ancres_libres_sur_minerai(api, bbox: dict, autour: tuple[float, float],
         except ValueError:
             continue
     libres.sort(key=lambda p: math.hypot(p[0] - autour[0], p[1] - autour[1]))
+    if distance_max is not None:
+        # Un gisement s'étend bien au-delà de ce qu'une usine peut desservir. Mesuré :
+        # faute de plafond, une extension est allée s'ancrer à 66 tuiles — hors du rayon
+        # diagnostiqué et hors du réseau électrique. L'Enquêteur l'a constatée absente
+        # (« inspect_at(-93,-59) a retourné entities: [] ») alors qu'elle avait bien été
+        # posée : elle était simplement là où personne ne regardait. Mieux vaut dire
+        # qu'il n'y a plus de place que d'en prendre une inexploitable.
+        libres = [p for p in libres
+                  if math.hypot(p[0] - autour[0], p[1] - autour[1]) <= distance_max]
     retenus: list[tuple[float, float]] = []
     for p in libres:
         if len(retenus) >= plafond:
