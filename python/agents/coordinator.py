@@ -32,6 +32,7 @@ associe l'action qui répare, chacune correspondant à une primitive existante.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Protocol
 
@@ -1530,16 +1531,62 @@ class Coordinator:
         """
         from services import site_finder
 
-        local = None
-        for dx, dy in ((2.5, 0.0), (-2.5, 0.0), (0.0, 2.5), (0.0, -2.5)):
-            x, y = float(int(cible.x + dx)) + 0.5, float(int(cible.y + dy)) + 0.5
-            if not site_finder.can_place(self.api, pole, x, y):
-                continue
-            r = self.api.run_action(self.api.place_entity_at, pole, x, y, "north",
-                                    None, timeout=20.0)
-            if isinstance(r, dict) and r.get("ok"):
-                local = (x, y)
-                break
+        def _pose_confirmee(x: float, y: float) -> bool:
+            """Le poteau est-il RÉELLEMENT là ? La réponse de l'action ne suffit pas.
+
+            Mesuré au banc : `place_entity_at` rend `ok=False` et le poteau apparaît
+            quand même une fraction de seconde plus tard — la pose est asynchrone, et la
+            réponse précède parfois l'effet. `relier` concluait donc à l'échec sur une
+            pose réussie, puis le tour suivant retrouvait la place occupée et cherchait
+            ailleurs. C'est la règle déjà payée par l'executor : ne jamais croire un
+            verdict d'action, le confirmer sur le terrain.
+            """
+            return any(e.get("type") == "electric-pole"
+                       for e in site_finder._entites_a(self.api, x, y, 0.6))
+
+        # Les places CANDIDATES, triées par écart réel à la machine. L'arrondi sur une
+        # tuile transforme un décalage de 2.5 en 3.0 selon le signe, et un petit poteau
+        # n'alimente que 2.5 tuiles autour de lui : la première place essayée était
+        # justement une de celles qui ne couvrent pas. On pose donc au plus près d'abord,
+        # et l'on s'arrête sur le COURANT obtenu, non sur la pose réussie.
+        candidates = sorted(
+            {(float(int(cible.x + dx)) + 0.5, float(int(cible.y + dy)) + 0.5)
+             for dx, dy in ((2.0, 0.0), (-2.0, 0.0), (0.0, 2.0), (0.0, -2.0),
+                            (2.5, 0.0), (-2.5, 0.0), (0.0, 2.5), (0.0, -2.5))},
+            key=lambda p: math.hypot(p[0] - cible.x, p[1] - cible.y))
+
+        def _poser_a_cote() -> Optional[tuple[float, float]]:
+            """Pose jusqu'à ce que la machine soit ALIMENTÉE, et non jusqu'à la 1re pose.
+
+            Un poteau posé n'est pas un poteau utile : `relier` s'arrêtait dès qu'une
+            pose réussissait, y compris à trois tuiles de la machine — c'est-à-dire hors
+            de sa portée d'alimentation. Il rendait alors « posé pour inserter » sur une
+            machine toujours morte, et le tour suivant rediagnostiquait la même panne.
+            """
+            dernier = None
+            for x, y in candidates:
+                if not _pose_confirmee(x, y):
+                    if not site_finder.can_place(self.api, pole, x, y):
+                        continue
+                    self.api.run_action(self.api.place_entity_at, pole, x, y, "north",
+                                        None, timeout=20.0)
+                    if not _pose_confirmee(x, y):
+                        continue
+                dernier = (x, y)
+                etat = self.api.get_power_state(cible.x, cible.y, 3.0) or {}
+                if etat.get("connected") is True:
+                    return dernier
+            return dernier
+
+        local = _poser_a_cote()
+        if local is None:
+            # Le terrain n'a pas fini de se libérer. Mesuré au banc : `relier` arrive au
+            # tour SUIVANT la pose d'une chaîne, les quatre places autour de la machine
+            # sont encore refusées, et le même appel réussit quelques secondes plus tard
+            # sans que rien n'ait bougé entre-temps. Une place occupée à l'instant où
+            # l'on regarde n'est pas une place occupée.
+            self.api.run_action(self.api.wait, 60, timeout=30.0)
+            local = _poser_a_cote()
         if local is None:
             # Peut-être un poteau est-il déjà là — auquel cas ce n'est pas la place qui
             # manque, mais le courant, et la ligne reste à tirer.
@@ -1548,6 +1595,14 @@ class Coordinator:
             if not proches:
                 return False, f"aucune position de poteau libre autour de {cible.name}"
             local = (float(proches[0].get("x", cible.x)), float(proches[0].get("y", cible.y)))
+
+        # Le réseau électrique se recalcule APRÈS la pose, et la pose elle-même est
+        # asynchrone. Lire dans la foulée fait constater « toujours pas de courant » sur
+        # un poteau qui n'existe pas encore : mesuré au banc, `relier` échouait au tour
+        # même où l'usine venait d'être bâtie, puis réussissait sur la MÊME scène quelques
+        # secondes plus tard — sans que rien n'ait été posé entre les deux. On laisse donc
+        # le jeu prendre acte avant de juger.
+        self.api.run_action(self.api.wait, 30, timeout=30.0)
 
         # `connected` et NON `networkId` : la même confusion a produit les îlots qu'on
         # répare ici. Tout poteau posé reçoit un identifiant de réseau, fût-il isolé —
@@ -1563,6 +1618,15 @@ class Coordinator:
         if source is None:
             return False, (f"poteau posé en {local} mais aucun réseau alimenté à portée "
                            f"de {cible.name} — il manque une centrale, pas une ligne")
+        # Tirer une ligne d'un point vers LUI-MÊME ne pose rien et ne relie personne.
+        # Cela arrivait quand aucune place n'était libre autour de la machine : on
+        # retombait sur un poteau existant, qui se trouvait être la source, et le message
+        # annonçait fièrement « ligne de 0 poteau(x) ». Le manque n'est pas une ligne mais
+        # une PLACE à portée de la machine.
+        if math.hypot(source[0] - local[0], source[1] - local[1]) < 1.0:
+            return False, (f"{cible.name} n'est couverte par aucun poteau, et il n'y a "
+                           f"aucune place libre autour d'elle pour en poser un")
+
         poses, complete = site_finder.place_pole_line(
             self.api, (source[0], source[1]), local, pole=pole)
         apres = self.api.get_power_state(cible.x, cible.y, 3.0) or {}
@@ -1627,6 +1691,18 @@ class Coordinator:
                         self.api.run_action(self.api.move_items_at, "coal", bras,
                                             pose[0], pose[1], self.AMORCE_BRAS, True,
                                             timeout=20.0)
+                    else:
+                        # Un bras ÉLECTRIQUE posé sans courant est une panne qu'on se
+                        # fabrique à soi-même. Mesuré au banc : le ramassage posait son
+                        # inserter hors de toute couverture, le tour suivant le
+                        # diagnostiquait « débranchée », et l'agent passait son temps à
+                        # réparer ce qu'il venait de construire au lieu de grandir.
+                        # Même règle que pour les chaînes : ce qu'on pose, on l'alimente.
+                        etat = self.api.get_power_state(pose[0], pose[1], 1.0) or {}
+                        if etat.get("connected") is not True:
+                            self.relier(Symptome(name=bras, x=pose[0], y=pose[1],
+                                                 cause="debranchee", gravite=1,
+                                                 detail="bras d'évacuation posé à l'instant"))
                     cle = (cible.name, round(cible.x), round(cible.y))
                     # La mémoire est REMISE À ZÉRO : la machine a désormais un ramassage,
                     # et un prochain bouchon serait un incident neuf, pas la suite de

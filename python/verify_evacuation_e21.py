@@ -164,16 +164,41 @@ def main() -> int:
     print(f"       usine bâtie : {fn}@({fx},{fy}) parmi {len(lignes)} entité(s)")
 
     # --- 1 : premier bouchon -> on VIDE, on ne construit pas ---
+    # L'agent pose désormais un ramassage EN MÊME TEMPS que sa chaîne (« ce qu'on pose,
+    # on l'évacue »). Un four ainsi servi ne se bouche plus : on remplissait sa sortie,
+    # le bras la vidait dans la seconde, et le diagnostic avait raison de ne rien
+    # signaler — on croyait alors mesurer un défaut du diagnostic. Ce test porte sur une
+    # sortie RÉELLEMENT bloquée : on retire donc d'abord ce qui la dessert.
+    retires = str(rcon.query_lua(
+        f"local s = game.surfaces[1] local n = 0 "
+        f"for _, e in pairs(s.find_entities_filtered{{type='inserter', "
+        f"area={{{{{fx - 4.5},{fy - 4.5}}},{{{fx + 4.5},{fy + 4.5}}}}}}}) do "
+        f"if e.pickup_target and e.pickup_target.name == '{fn}' then "
+        f"e.destroy() n = n + 1 end end rcon.print(n)")).strip()
     mis = _boucher(rcon, fn, fx, fy)
     api.run_action(api.wait, 60, timeout=60.0)
+
+    # Le bouchon TIENT-IL ? Sans ce contrôle, un test qui échoue à boucher se lit comme
+    # un diagnostic aveugle, et l'on va corriger le mauvais fichier (leçon E6).
+    reste = int(str(rcon.query_lua(
+        f"local s = game.surfaces[1] local n = 0 "
+        f"for _, e in pairs(s.find_entities_filtered{{name='{fn}', "
+        f"area={{{{{fx - 1.5},{fy - 1.5}}},{{{fx + 1.5},{fy + 1.5}}}}}}}) do "
+        f"local inv = e.get_output_inventory() "
+        f"if inv then n = n + inv.get_item_count('iron-plate') end end "
+        f"rcon.print(n)")).strip() or 0)
+    print(f"       {retires} bras de ramassage retiré(s) ; sortie chargée à "
+          f"{reste} plaque(s) après attente")
+
     etat = coord.observer()
     options = enumerer_options(etat)
     premiere = next((o for o in options if o.cible is not None
                      and o.cible.cause == "sortie_bloquee"), None)
     rec("e21-1 : une sortie pleine se répare d'abord par un vidage",
-        premiere is not None and premiere.action == "evacuer",
-        f"{mis} plaque(s) forcée(s) dans la sortie -> "
-        f"{premiere.action if premiere else 'aucune option sortie_bloquee'}")
+        bool(reste) and premiere is not None and premiere.action == "evacuer",
+        f"{mis} plaque(s) forcée(s), {reste} restée(s) en sortie -> "
+        f"{premiere.action if premiere else 'aucune option sortie_bloquee'}"
+        if reste else "SCENE NON MONTEE : la sortie s'est vidée, rien à diagnostiquer")
 
     # --- 2 : au-delà du seuil, la décision bascule ---
     # Le comptage lui-même est éprouvé hors ligne (test_coordinator) ; ce qu'on veut voir
