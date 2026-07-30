@@ -176,29 +176,45 @@ def main() -> int:
         f"if e.pickup_target and e.pickup_target.name == '{fn}' then "
         f"e.destroy() n = n + 1 end end rcon.print(n)")).strip()
     mis = _boucher(rcon, fn, fx, fy)
-    api.run_action(api.wait, 60, timeout=60.0)
 
-    # Le bouchon TIENT-IL ? Sans ce contrôle, un test qui échoue à boucher se lit comme
-    # un diagnostic aveugle, et l'on va corriger le mauvais fichier (leçon E6).
-    reste = int(str(rcon.query_lua(
-        f"local s = game.surfaces[1] local n = 0 "
-        f"for _, e in pairs(s.find_entities_filtered{{name='{fn}', "
-        f"area={{{{{fx - 1.5},{fy - 1.5}}},{{{fx + 1.5},{fy + 1.5}}}}}}}) do "
-        f"local inv = e.get_output_inventory() "
-        f"if inv then n = n + inv.get_item_count('iron-plate') end end "
-        f"rcon.print(n)")).strip() or 0)
+    # On attend l'ÉTAT, pas un délai. Une sortie remplie ne suffit pas : le four ne se
+    # déclare `full_output` qu'en tentant d'y déposer une fournée, ce qui arrive au
+    # bout d'un temps variable selon qu'il fondait déjà ou non. Avec une attente fixe de
+    # soixante ticks, ce test passait une fois sur deux — vert lancé seul, rouge dans la
+    # batterie — et l'on aurait cherché la panne dans le diagnostic.
+    reste, statut = 0, ""
+    for _ in range(8):
+        api.run_action(api.wait, 120, timeout=90.0)
+        sortie = str(rcon.query_lua(
+            f"local s = game.surfaces[1] local n, st = 0, '' "
+            f"for _, e in pairs(s.find_entities_filtered{{name='{fn}', "
+            f"area={{{{{fx - 1.5},{fy - 1.5}}},{{{fx + 1.5},{fy + 1.5}}}}}}}) do "
+            f"local inv = e.get_output_inventory() "
+            f"if inv then n = n + inv.get_item_count('iron-plate') end "
+            f"for k, v in pairs(defines.entity_status) do "
+            f"if v == e.status then st = k end end end "
+            f"rcon.print(n .. '|' .. st)")).strip()
+        nombre, _, statut = sortie.partition("|")
+        try:
+            reste = int(nombre)
+        except ValueError:
+            reste = 0
+        if statut == "full_output":
+            break
     print(f"       {retires} bras de ramassage retiré(s) ; sortie chargée à "
-          f"{reste} plaque(s) après attente")
+          f"{reste} plaque(s), statut du four : {statut or 'inconnu'}")
 
     etat = coord.observer()
     options = enumerer_options(etat)
     premiere = next((o for o in options if o.cible is not None
                      and o.cible.cause == "sortie_bloquee"), None)
+    montee = bool(reste) and statut == "full_output"
     rec("e21-1 : une sortie pleine se répare d'abord par un vidage",
-        bool(reste) and premiere is not None and premiere.action == "evacuer",
-        f"{mis} plaque(s) forcée(s), {reste} restée(s) en sortie -> "
+        montee and premiere is not None and premiere.action == "evacuer",
+        f"{mis} plaque(s) forcée(s), {reste} restée(s), four {statut} -> "
         f"{premiere.action if premiere else 'aucune option sortie_bloquee'}"
-        if reste else "SCENE NON MONTEE : la sortie s'est vidée, rien à diagnostiquer")
+        if montee else f"SCENE NON MONTEE : {reste} plaque(s) en sortie, four "
+                       f"{statut or 'sans statut'} — le four ne se déclare pas plein")
 
     # --- 2 : au-delà du seuil, la décision bascule ---
     # Le comptage lui-même est éprouvé hors ligne (test_coordinator) ; ce qu'on veut voir
