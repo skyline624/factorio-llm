@@ -259,12 +259,87 @@ def test_option_sans_materiel_est_declassee() -> None:
     etat.menace = _menace(IMMINENTE)
     options = enumerer_options(etat)
     defense = next((o for o in options if o.action == "defendre"), None)
+    fabrique = next((o for o in options if o.action == "fabriquer"), None)
     ok = (defense is not None and not defense.faisable and defense.priorite == 0
           and "INFAISABLE" in defense.raison and "gun-turret" in defense.raison
-          # ... et la production, elle, reste faisable : elle passe donc devant.
-          and options[0].action == "batir_production")
+          # Et le manque APPELLE désormais une fabrication, au rang de l'action qu'elle
+          # débloque. C'est ce que ce test annonçait depuis le début — « il faudra un
+          # jour décider d'aller fabriquer ce qui manque » : déclarer un besoin sans
+          # pouvoir y répondre, c'était attendre qu'un humain remplisse les poches.
+          and fabrique is not None and "gun-turret" in fabrique.raison
+          and options[0].action == "fabriquer")
     rec("test_option_sans_materiel_est_declassee", ok,
         f"{[(o.action, o.priorite, o.faisable) for o in options]}")
+    assert ok
+
+
+def test_un_manque_appelle_une_fabrication() -> None:
+    """Déclarer un besoin ne suffit pas : encore faut-il pouvoir y répondre.
+
+    L'agent consommait une dotation de 21 lots posée par un humain et s'arrêtait quand
+    elle était vide — il ne savait pas produire une foreuse de plus. « Autonome » restait
+    un mot tant que le manque ne déclenchait rien.
+    """
+    from agents.coordinator import SEUIL_AUTOMATISATION, enumerer_options
+    # Une sortie vidée deux fois appelle `batir_evacuation`, qui réclame un bras et un
+    # coffre. Sans eux, la construction est déclassée — et doit désormais appeler leur
+    # fabrication.
+    etat = _etat([_m("electric-furnace", 10, 20, "full_output")], machines=2,
+                 inventaire={"coal": 100})              # ni inserter, ni coffre
+    etat.evacuations = {("electric-furnace", 10, 20): SEUIL_AUTOMATISATION}
+    options = enumerer_options(etat)
+    fab = [o for o in options if o.action == "fabriquer"]
+    ok = len(fab) == 1 and "inserter" in fab[0].raison
+    rec("test_un_manque_appelle_une_fabrication", ok,
+        f"{[(o.action, o.raison.split(' ')[0]) for o in options]}")
+    assert ok
+
+
+def test_la_fabrication_herite_de_l_urgence_qu_elle_debloque() -> None:
+    """Une pièce qui manque pour une RÉPARATION est urgente comme une réparation.
+
+    Un rang fixe pour `fabriquer` doublerait tout le curriculum d'un cran : l'agent
+    fabriquerait une tourelle avant de rallumer un four à l'arrêt.
+    """
+    from agents.coordinator import PRIORITE, SEUIL_AUTOMATISATION, enumerer_options
+    etat = _etat([_m("electric-furnace", 10, 20, "full_output")], machines=2,
+                 inventaire={"coal": 100})
+    etat.evacuations = {("electric-furnace", 10, 20): SEUIL_AUTOMATISATION}
+    fab = next((o for o in enumerer_options(etat) if o.action == "fabriquer"), None)
+    ok = fab is not None and fab.priorite == PRIORITE["reparer"]
+    rec("test_la_fabrication_herite_de_l_urgence_qu_elle_debloque", ok,
+        f"priorite={fab.priorite if fab else None} (reparer={PRIORITE['reparer']})")
+    assert ok
+
+
+def test_rien_a_fabriquer_quand_l_inventaire_suffit() -> None:
+    """Le pendant : avec le matériel, aucune fabrication n'est proposée."""
+    from agents.coordinator import SEUIL_AUTOMATISATION, enumerer_options
+    etat = _etat([_m("electric-furnace", 10, 20, "full_output")], machines=2,
+                 inventaire=OUTILLE)
+    etat.evacuations = {("electric-furnace", 10, 20): SEUIL_AUTOMATISATION}
+    ok = not any(o.action == "fabriquer" for o in enumerer_options(etat))
+    rec("test_rien_a_fabriquer_quand_l_inventaire_suffit", ok,
+        f"{[o.action for o in enumerer_options(etat)]}")
+    assert ok
+
+
+def test_un_meme_manque_ne_se_propose_qu_une_fois() -> None:
+    """Deux machines pleines ne demandent pas deux fois le même bras.
+
+    Sans cette garde, une usine de dix machines bouchées produirait dix fabrications
+    identiques, et l'agent passerait son tour à choisir entre des jumelles.
+    """
+    from agents.coordinator import SEUIL_AUTOMATISATION, enumerer_options
+    etat = _etat([_m("electric-furnace", 10, 20, "full_output"),
+                  _m("electric-furnace", 30, 40, "full_output")], machines=3,
+                 inventaire={"coal": 100})
+    etat.evacuations = {("electric-furnace", 10, 20): SEUIL_AUTOMATISATION,
+                        ("electric-furnace", 30, 40): SEUIL_AUTOMATISATION}
+    fab = [o for o in enumerer_options(etat) if o.action == "fabriquer"]
+    ok = len(fab) == 1 and "inserter" in fab[0].raison
+    rec("test_un_meme_manque_ne_se_propose_qu_une_fois", ok,
+        f"{len(fab)} fabrication(s) pour 2 machines bouchees")
     assert ok
 
 

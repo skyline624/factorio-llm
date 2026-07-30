@@ -114,7 +114,23 @@ def _plan(goal: ProductionGoal, sim_inv: dict[str, int],
     missing = need - have
     spec = ITEM_PROD.get(goal.item)
     if spec is None:
-        raise ValueError(f"item non couvert par le planificateur P1 : {goal.item!r}")
+        # Tout ce qui a une RECETTE se fabrique — inutile de tenir une liste à la main.
+        # `ITEM_PROD` reste la table des cas qui ne se déduisent pas : ce qui se MINE (une
+        # ressource n'a pas de recette) et ce qui se FOND (un four n'est pas un craft à la
+        # main). Le reste s'en déduit, et c'est ce qui ouvre le bootstrap : `stone-furnace`,
+        # `burner-mining-drill` et `burner-inserter` n'y figuraient pas, si bien que
+        # l'agent ne pouvait planifier aucune des trois machines de sa première chaîne.
+        #
+        # `per=1` est un défaut prudent : quelques recettes en rendent deux (transport-belt,
+        # copper-cable), auquel cas on en fabrique une de trop. Mieux vaut ce léger excès
+        # qu'une chaîne qui s'arrête faute d'une pièce.
+        if recipe_lookup(goal.item) is not None:
+            spec = {"mode": "craft", "per": 1}
+        else:
+            raise ValueError(
+                f"ni ressource, ni recette accessible pour {goal.item!r} — soit c'est une "
+                f"matière première que le planificateur ne connaît pas, soit la recette "
+                f"est VERROUILLÉE et il faut d'abord la rechercher")
 
     mode = spec["mode"]
     steps: list[Step] = []

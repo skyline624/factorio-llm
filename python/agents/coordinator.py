@@ -64,6 +64,10 @@ REPARATION: dict[str, tuple[str, str]] = {
 #     défendables s'équivalent — et donc le premier endroit où un arbitre LLM aurait
 #     quelque chose à apporter.
 PRIORITE = {"defendre_urgence": 4, "reparer": 3, "batir_energie": 2, "defendre": 2,
+            # `fabriquer` n'a pas de rang propre : il HÉRITE de celui de l'action qu'il
+            # débloque (cf. `enumerer_options`). Une pièce qui manque pour une réparation
+            # est urgente comme une réparation ; pour une extension, comme une extension.
+            # Lui donner un rang fixe doublerait tout le curriculum d'un cran.
             "batir_production": 1, "etendre_production": 1, "rien": 0}
 
 # Fenêtre minimale, en ticks de JEU, pour mesurer un débit. Deux observations rapprochées
@@ -488,13 +492,34 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
     # chaque tour. On la relègue et on dit pourquoi — c'est ce qui permet, plus tard, de
     # décider d'aller fabriquer ce qui manque.
     inv = etat.inventaire or {}
+    a_faire: list[Decision] = []          # les fabrications que les manques appellent
+    dejadits: set = set()                 # un item manquant ne se propose qu'une fois
     for o in options:
         manquants = [f"{n} ({inv.get(n, 0)}/{c})"
                      for n, c in BESOINS.get(o.action, ()) if inv.get(n, 0) < c]
         if manquants:
+            # La priorité d'ORIGINE, avant déclassement : c'est elle que la fabrication
+            # hérite. Une pièce qui manque pour une réparation est plus urgente qu'une
+            # pièce qui manque pour la défense, elle-même plus urgente qu'une pièce pour
+            # une extension — sinon `fabriquer` doublerait tout le curriculum d'un cran.
+            urgence = o.priorite
             o.priorite = 0
             o.faisable = False
             o.raison += f" — INFAISABLE, il manque : {', '.join(manquants)}"
+            # Ce qui manque peut se FABRIQUER. Sans cette option, l'agent se contentait
+            # de déclasser et d'attendre : il consommait une dotation qu'un humain lui
+            # avait mise dans les poches, et s'arrêtait quand elle était vide. Déclarer
+            # le besoin ne suffit pas — encore faut-il pouvoir y répondre.
+            besoin = manquants[0].split(" ")[0]
+            if besoin not in dejadits:
+                dejadits.add(besoin)
+                a_faire.append(Decision(
+                    action="fabriquer",
+                    raison=f"{besoin} manque pour « {o.action} » — le fabriquer plutôt "
+                           f"que d'attendre qu'il tombe du ciel",
+                    priorite=urgence))
+
+    options.extend(a_faire)
 
     # Tri STABLE par priorité décroissante : l'ordre relatif des réparations (déjà
     # trié par le diagnostic) est préservé, et la défense se glisse au bon rang.
@@ -863,6 +888,12 @@ class Coordinator:
             return False, "rien à faire"
         if d.action in ("batir_energie", "batir_production"):
             return self.batir(d)
+        if d.action == "fabriquer":
+            # L'item manquant est le premier mot de la raison — c'est `enumerer_options`
+            # qui l'y met, et `decide` reste PURE : elle ne sait pas fabriquer, elle dit
+            # seulement qu'il le faudrait.
+            return self.fabriquer(d.raison.split(" ")[0])
+
         if d.action == "etendre_production":
             # Une chaîne de PLUS, sur du minerai que le planner ancre lui-même. Même
             # parti que `renforcer_energie` et `redeployer_foreur` : on ajoute au lieu de
@@ -1271,6 +1302,44 @@ class Coordinator:
         ok, detail = self.approvisionner(faux_symptome, besoin)
         return ok, (f"{machine}@{pose} fabrique « {item} » pour {cible.name} "
                     f"({bras}@{livraison[:2]}) — entrée : {detail}")
+
+    def fabriquer(self, item: str, combien: int = 1) -> tuple[bool, str]:
+        """Se procure `item` : miner, fondre, crafter — dans cet ordre s'il le faut.
+
+        C'est ce qui sépare un agent autonome d'un agent approvisionné. Jusqu'ici il
+        consommait une dotation qu'un humain lui avait mise dans les poches (21 lots) et
+        s'arrêtait quand elle était vide : il ne savait pas produire une foreuse de plus.
+
+        Le plan vient de `knowledge.plan_production`, qui arbitre sur l'INVENTAIRE — ce
+        qu'on possède déjà n'est pas refabriqué — et descend récursivement jusqu'au
+        minerai. `BaseAgent.act` l'exécute en s'arrêtant à la première étape ratée.
+
+        Une recette VERROUILLÉE est dite comme telle : `small-electric-pole`, `inserter`
+        et `electric-mining-drill` sont `enabled=false` sur une carte neuve (mesuré).
+        Ce n'est pas un trou du planificateur, c'est la recherche qui manque — et
+        confondre les deux enverrait chercher au mauvais endroit.
+        """
+        from services.knowledge import ProductionGoal, plan_production, plan_summary
+
+        inv = perception.inventory(self.api)
+        try:
+            steps = plan_production(ProductionGoal(item, combien), inv,
+                                    lambda x: perception.recipe_of(self.api, x))
+        except ValueError as e:
+            return False, f"{item} ne peut pas être fabriqué : {e}"
+        if not steps:
+            return False, f"{item} : rien à faire, l'inventaire en contient déjà assez"
+
+        avant = inv.get(item, 0)
+        resultats = self.builder.act(steps)
+        # On ne croit pas `ok=True` : c'est l'INVENTAIRE qui tranche (leçon E1). Un craft
+        # mis en file peut échouer plus tard, et une étape verte ne prouve rien.
+        apres = perception.inventory(self.api).get(item, 0)
+        gagne = apres - avant
+        rates = [r for r in resultats if not (isinstance(r, dict) and r.get("ok") is True)]
+        return gagne > 0, (f"{item} : {avant} -> {apres} ({gagne:+d}) en "
+                           f"{len(steps)} étape(s) [{plan_summary(steps)[:70]}]"
+                           + (f" — bloqué sur {str(rates[0])[:60]}" if rates else ""))
 
     def _alimenter_la_chaine(self, ancre: tuple[float, float],
                              rayon: float = 8.0) -> int:
