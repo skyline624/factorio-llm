@@ -84,23 +84,36 @@ def _poser_source(rcon, item: str, minerai: str, x: float, y: float) -> str:
     garnit à la main ferait illusion le temps d'une fournée, puis tarirait — et le banc
     mesurerait alors l'endurance d'une chaîne minière au lieu du convoyage.
     """
-    return str(rcon.query_lua(
+    rcon.query_lua(
         f"local s = game.surfaces[1] local f = game.forces.player "
         f"for _, e in pairs(s.find_entities_filtered{{area={{{{{x - 4},{y - 4}}},"
         f"{{{x + 4},{y + 4}}}}}, force='player'}}) do e.destroy() end "
-        f"local four = s.create_entity{{name='electric-furnace', position={{{x},{y}}}, "
-        f"force=f}} "
-        f"local coffre = s.create_entity{{name='wooden-chest', position={{{x + 3},{y}}}, "
-        f"force=f}} "
-        f"local bras = s.create_entity{{name='inserter', position={{{x + 1.5},{y}}}, "
+        f"s.create_entity{{name='electric-furnace', position={{{x},{y}}}, force=f}} "
+        f"s.create_entity{{name='wooden-chest', position={{{x + 3},{y}}}, force=f}} "
+        f"s.create_entity{{name='inserter', position={{{x + 1.5},{y}}}, "
         f"force=f, direction=defines.direction.west}} "
-        f"local pole = s.create_entity{{name='small-electric-pole', "
+        f"s.create_entity{{name='small-electric-pole', "
         f"position={{{x - 2.5},{y + 2.5}}}, force=f}} "
-        f"if not (four and coffre and bras) then rcon.print('echec') return end "
-        f"coffre.get_inventory(defines.inventory.chest).insert{{name='{minerai}', "
-        f"count=2000}} "
-        f"rcon.print(string.format('%s@(%.0f,%.0f) servi par un bras depuis un coffre', "
-        f"'{item}', four.position.x, four.position.y))")).strip()
+        f"rcon.print('cree')")
+
+    # LE GARNISSAGE DANS UNE REQUÊTE SÉPARÉE. Fait dans la foulée de `create_entity`,
+    # l'insertion ne prend pas : l'inventaire de l'entité n'est pas encore disponible.
+    # Mesuré — les fours affichaient `in=0` alors qu'on venait d'y verser cent minerais,
+    # donc aucune recette, donc invisibles comme sources ; et rejouer la même insertion
+    # séparément rendait « insere=50, contenu=50 ». Même famille que la pose asynchrone :
+    # on ne chaîne pas une écriture sur une entité qui vient de naître.
+    return str(rcon.query_lua(
+        f"local s = game.surfaces[1] local dit = 'echec' "
+        f"for _, e in pairs(s.find_entities_filtered{{name='wooden-chest', "
+        f"area={{{{{x + 2},{y - 1}}},{{{x + 4},{y + 1}}}}}}}) do "
+        f"  e.get_inventory(defines.inventory.chest).insert{{name='{minerai}', count=2000}} end "
+        f"for _, e in pairs(s.find_entities_filtered{{name='electric-furnace', "
+        f"area={{{{{x - 1},{y - 1}}},{{{x + 1},{y + 1}}}}}}}) do "
+        f"  local i = e.get_inventory(defines.inventory.furnace_source) "
+        f"  if i then i.insert{{name='{minerai}', count=100}} "
+        f"    dit = string.format('%s@(%.0f,%.0f) amorce de %d, servi par un bras', "
+        f"'{item}', e.position.x, e.position.y, i.get_item_count()) end end "
+        f"rcon.print(dit)")).strip()
 
 
 def main() -> int:
@@ -122,12 +135,26 @@ def main() -> int:
     coord = Coordinator(api, zone=zone, rayon=25.0)
 
     # --- SCÈNE : l'énergie, puis DEUX SOURCES pérennes à courte distance ---
-    for _ in range(2):
-        coord.tick()
+    # UN SEUL tour, celui de l'énergie. Le second bâtissait une chaîne de fer dont
+    # l'agent se servait ensuite comme source — à quatorze tuiles de la nôtre, hors de
+    # la scène que ce banc contrôle, et parfois sans courant. Deux sources concurrentes
+    # rendaient le résultat imprévisible : on ne savait plus laquelle était mesurée.
+    coord.tick()
     cuivre = _poser_source(rcon, "copper-plate", "copper-ore", zone[0] - 14, zone[1] - 6)
     fer = _poser_source(rcon, "iron-plate", "iron-ore", zone[0] + 14, zone[1] - 6)
-    # Les fours sont électriques : ils doivent être reliés comme le reste.
+
+    # ET ON TIRE LE COURANT JUSQU'À ELLES. Un four électrique sans courant ne fond rien,
+    # n'a donc jamais de recette, et reste invisible comme source : mesuré, les deux
+    # sources posées par ce banc affichaient `rec=AUCUNE` et `no_power`, et le constat 1
+    # concluait « aucune source de fer » sur une scène que le banc venait de monter.
+    # Une scène doit être FONCTIONNELLE, pas seulement présente — c'est la même règle que
+    # pour l'agent, et le banc n'y échappe pas.
+    from services import site_finder
+    depart = site_finder.poteau_alimente_le_plus_proche(api, zone[0], zone[1])
     for dx in (-14, 14):
+        cible_p = (zone[0] + dx - 2.5, zone[1] - 6 + 2.5)
+        if depart is not None:
+            site_finder.place_pole_line(api, (depart[0], depart[1]), cible_p)
         coord.brancher("electric-furnace", zone[0] + dx, zone[1] - 6)
         coord.brancher("inserter", zone[0] + dx + 1.5, zone[1] - 6)
     # Les chaudières sont regarnies : un boiler brûle son charbon en moins de deux
