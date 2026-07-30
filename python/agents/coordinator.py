@@ -2317,18 +2317,45 @@ class Coordinator:
         # trop tôt et la tuile d'arrivée — posée d'avance pour le bras — restait ISOLÉE
         # dès que le tracé avait fait un détour. Trois convoyeurs orphelins au milieu de
         # l'usine, qui ne reliaient rien. On vise donc une tuile au-delà, vers la machine.
-        dxa, dya = vers[0] - vers_cible[0], vers[1] - vers_cible[1]
-        norme = max(1.0, math.hypot(dxa, dya))
-        au_dela = (vers_cible[0] + round(dxa / norme), vers_cible[1] + round(dya / norme))
-
-        attendues, _ = site_finder.tracer_en_l(vers_src, au_dela, occupees)
+        # ON VISE LA TUILE D'ARRIVÉE ELLE-MÊME. Viser une tuile AU-DELÀ paraissait plus
+        # sûr — la ligne engloberait l'arrivée — mais un trajet en L peut atteindre ce
+        # point par un autre côté et laisser la tuile d'arrivée ORPHELINE : mesuré,
+        # quatre belts isolées dont une chargée de sept objets, à une tuile d'une ligne
+        # qui ne la touchait pas. `tracer_en_l` s'arrête juste avant sa cible : viser
+        # l'arrivée garantit donc que la dernière tuile posée lui est ADJACENTE.
+        attendues, _ = site_finder.tracer_en_l(vers_src, vers_cible, occupees)
         # Le couloir est RÉSERVÉ dès qu'il est tracé, avant même la pose : le flux suivant
         # ne le proposera plus, qu'il soit ou non déjà matérialisé sur le terrain.
         if reserve is not None:
             reserve.update(attendues)
         tuiles, complete = site_finder.place_belt_line(
-            self.api, vers_src, au_dela, belt=belt, eviter=occupees)
+            self.api, vers_src, vers_cible, belt=belt, eviter=occupees)
         trous = [t for t in attendues if t not in tuiles]
+
+        # LE RACCORD FINAL. `tracer_en_l` s'arrête juste avant sa cible, mais un trajet
+        # en L peut avoir contourné : la dernière tuile posée n'est alors pas voisine de
+        # l'arrivée, qui reste ORPHELINE — mesuré, trois belts isolées dont celle du
+        # cuivre, et l'assembleuse ne recevait que des engrenages. On comble le peu qui
+        # sépare les deux plutôt que de laisser un flux coupé.
+        if tuiles:
+            bx, by = tuiles[-1]
+            garde = 0
+            while (abs(bx - vers_cible[0]) + abs(by - vers_cible[1]) > 1.0
+                   and garde < 12):
+                garde += 1
+                if abs(bx - vers_cible[0]) >= abs(by - vers_cible[1]):
+                    pas_x = 1.0 if vers_cible[0] > bx else -1.0
+                    bx, d_r = bx + pas_x, ("east" if pas_x > 0 else "west")
+                else:
+                    pas_y = 1.0 if vers_cible[1] > by else -1.0
+                    by, d_r = by + pas_y, ("south" if pas_y > 0 else "north")
+                if abs(bx - vers_cible[0]) + abs(by - vers_cible[1]) < 0.1:
+                    break
+                if not any(e.get("type") == "transport-belt"
+                           for e in site_finder._entites_a(self.api, bx, by, 0.4)):
+                    self.api.run_action(self.api.place_entity_at, belt, bx, by, d_r,
+                                        None, timeout=20.0)
+                    tuiles.append((bx, by))
 
         # LA TUILE D'ARRIVÉE DOIT REGARDER LA MACHINE. `tracer_en_l` s'arrête AVANT elle
         # — c'est nous qui l'avons posée d'avance, pour y accrocher le bras, avec

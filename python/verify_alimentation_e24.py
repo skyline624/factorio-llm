@@ -77,7 +77,7 @@ def _science(rcon) -> dict:
         return {}
 
 
-def _poser_source(rcon, item: str, minerai: str, x: float, y: float) -> str:
+def _poser_source(rcon, api, item: str, minerai: str, x: float, y: float) -> str:
     """Une source PÉRENNE, posée par le banc : coffre -> bras -> four.
 
     Pérenne au sens de l'agent : une machine qu'un bras remplit tout seul. Un four qu'on
@@ -90,11 +90,28 @@ def _poser_source(rcon, item: str, minerai: str, x: float, y: float) -> str:
         f"{{{x + 4},{y + 4}}}}}, force='player'}}) do e.destroy() end "
         f"s.create_entity{{name='electric-furnace', position={{{x},{y}}}, force=f}} "
         f"s.create_entity{{name='wooden-chest', position={{{x + 3},{y}}}, force=f}} "
-        f"s.create_entity{{name='inserter', position={{{x + 1.5},{y}}}, "
-        f"force=f, direction=defines.direction.west}} "
         f"s.create_entity{{name='small-electric-pole', "
         f"position={{{x - 2.5},{y + 2.5}}}, force=f}} "
         f"rcon.print('cree')")
+
+    # LE BRAS SE POSE AVEC `place_inserter_vers`, qui LIT son pickup et son drop réels et
+    # tourne jusqu'à ce que les deux tombent où il faut. Créé à la main avec une
+    # orientation devinée, il ne desservait pas le four : mesuré, `servi_par=0` alors que
+    # le four affichait soixante-huit plaques en sortie — la source était donc rejetée
+    # comme non pérenne, et l'agent allait en bâtir une à quatre-vingt-douze tuiles au
+    # lieu d'utiliser celle-ci. On ne DÉDUIT pas le sens d'un bras : on le mesure.
+    from services import site_finder
+    site_finder.place_inserter_vers(api, (x, y), (x + 3, y), "electric-furnace",
+                                    nom="inserter", source_types=("wooden-chest",))
+    # Et le poteau qui couvre le bras : mesuré, ce bras-là sortait `no_power` — le four
+    # était alimenté, lui, mais pas ce qui devait le remplir. La source aurait tari dès
+    # son amorce consommée, et le banc aurait mesuré l'endurance d'un stock au lieu d'un
+    # convoyage. Ce que ce banc pose, il l'alimente : la règle vaut aussi pour lui.
+    rcon.query_lua(
+        f"local s = game.surfaces[1] local f = game.forces.player "
+        f"if s.can_place_entity{{name='small-electric-pole', position={{{x + 1.5},{y + 2}}}}} "
+        f"then s.create_entity{{name='small-electric-pole', "
+        f"position={{{x + 1.5},{y + 2}}}, force=f}} end rcon.print('ok')")
 
     # LE GARNISSAGE DANS UNE REQUÊTE SÉPARÉE. Fait dans la foulée de `create_entity`,
     # l'insertion ne prend pas : l'inventaire de l'entité n'est pas encore disponible.
@@ -140,8 +157,8 @@ def main() -> int:
     # la scène que ce banc contrôle, et parfois sans courant. Deux sources concurrentes
     # rendaient le résultat imprévisible : on ne savait plus laquelle était mesurée.
     coord.tick()
-    cuivre = _poser_source(rcon, "copper-plate", "copper-ore", zone[0] - 14, zone[1] - 6)
-    fer = _poser_source(rcon, "iron-plate", "iron-ore", zone[0] + 14, zone[1] - 6)
+    cuivre = _poser_source(rcon, api, "copper-plate", "copper-ore", zone[0] - 14, zone[1] - 6)
+    fer = _poser_source(rcon, api, "iron-plate", "iron-ore", zone[0] + 14, zone[1] - 6)
 
     # ET ON TIRE LE COURANT JUSQU'À ELLES. Un four électrique sans courant ne fond rien,
     # n'a donc jamais de recette, et reste invisible comme source : mesuré, les deux
@@ -182,6 +199,25 @@ def main() -> int:
         return 0
 
     ok_alim, detail_alim = coord.alimenter_la_science()
+
+    # TOUT CE QUI EST POSÉ DOIT AVOIR DU COURANT — y compris ce que la scène a monté et
+    # ce que l'agent a ajouté. Mesuré : le bras qui verse dans le laboratoire et ceux qui
+    # remplissent les fours sortaient `no_power`, chacun à quelques tuiles d'un réseau
+    # vivant. On repasse donc brancher ce qui ne l'est pas, plutôt que de mesurer une
+    # usine à moitié morte.
+    sans_jus = str(rcon.query_lua(
+        "local s = game.surfaces[1] local out = {} "
+        "for _, e in pairs(s.find_entities_filtered{type='inserter', force='player'}) do "
+        "  if e.status == defines.entity_status.no_power then "
+        "    out[#out+1] = e.position.x .. ',' .. e.position.y end end "
+        "rcon.print(table.concat(out, ';'))")).strip()
+    for coord_txt in [c for c in sans_jus.split(";") if c]:
+        try:
+            bx, by = (float(v) for v in coord_txt.split(","))
+        except ValueError:
+            continue
+        coord.brancher("inserter", bx, by)
+    api.run_action(api.wait, 120, timeout=60.0)
 
     # --- Rec 1 : les deux sources sont RECONNUES ---
     # L'agent doit voir ce qui produit, et ne retenir que ce qui est réellement alimenté :
