@@ -176,6 +176,32 @@ def main(argv: list[str]) -> int:
     api.set_test_mode(True)
     api.setup()
     api.reset_character()
+
+    # L'ARBRE DES TECHNOLOGIES est remis à son état de départ, et c'est indispensable :
+    # une partie qui débloque `electronics` laisse la carte avec l'électrique ouvert, et
+    # la référence figée ensuite n'est plus une carte neuve. Deux parties cessent alors
+    # d'être comparables — exactement ce que cette référence existe pour éviter. C'est
+    # arrivé : après quelques essais sur la recherche, `preparer_reference` figeait une
+    # carte où `lab`, `inserter` et `small-electric-pole` étaient déjà fabricables.
+    #
+    # `steam-power` est REDONNÉE : c'est la seule technologie acquise sur une carte
+    # neuve, et c'est elle qui ouvre boiler, steam-engine, pipe et offshore-pump. La
+    # retirer laisserait l'agent sans centrale possible, et l'on mesurerait alors une
+    # impuissance qu'on aurait soi-même fabriquée.
+    #
+    # CE QUE CE RESET NE PEUT PAS DÉFAIRE, et c'est mesuré : une technologie à
+    # DÉCLENCHEUR déjà satisfait retombe aussitôt, parce que le compteur de crafts de la
+    # partie est cumulatif. Après avoir fondu dix plaques de cuivre une fois,
+    # `electronics` revient immédiatement — le reset rend donc 2 technologies, pas 1.
+    # C'est une propriété du monde, pas un défaut : pour retrouver une carte réellement
+    # vierge, il faut une nouvelle carte. L'essentiel est tenu — l'état de départ reste
+    # STABLE d'une partie à l'autre au lieu d'accumuler les acquis de la précédente.
+    techs = str(rcon.query_lua(
+        "local f = game.forces.player f.reset_technologies() "
+        "f.technologies['steam-power'].researched = true "
+        "local n = 0 for _, t in pairs(f.technologies) do if t.researched then n = n + 1 end end "
+        "rcon.print(n)")).strip()
+
     efface = _rase(rcon)
     # Le terrain doit EXISTER avant d'être dégagé : hors des tuiles générées, il n'y a
     # rien à trouver et rien à poser (leçon S4d).
@@ -196,12 +222,14 @@ def main(argv: list[str]) -> int:
         doses, refuses = 0, []
         print(f"       carte rase : {efface} entité(s) du joueur effacée(s), "
               f"{degage} obstacle(s) dégagé(s) sur {rayon:.0f} tuiles")
+        print(f"       recherche remise à zéro : {techs} technologie(s) acquise(s)")
         print(f"       SANS DOTATION : {str(vide).strip()} objet(s) retiré(s) — "
               f"l'agent part les mains vides")
     else:
         doses, refuses = _doter(rcon)
         print(f"       carte rase : {efface} entité(s) du joueur effacée(s), "
               f"{degage} obstacle(s) dégagé(s) sur {rayon:.0f} tuiles")
+        print(f"       recherche remise à zéro : {techs} technologie(s) acquise(s)")
         print(f"       dotation : {doses}/{len(DOTATION)} lots insérés"
               + (f" | REFUSÉS : {', '.join(refuses)}" if refuses else ""))
 

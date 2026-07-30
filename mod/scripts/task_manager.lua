@@ -1035,7 +1035,25 @@ local function state_researching(params)
     if not tech then M._complete("technologie inexistante: " .. params.technology_name, false) return end
     if tech.researched then M._complete("deja recherchee", true) return end
     if not tech.enabled then M._complete("technologie verrouillee", false) return end
-    force.add_research(params.technology_name)
+    -- `add_research` REND un booleen, et son refus etait ignore : la tache partait
+    -- alors en attente d'une recherche jamais lancee, jusqu'au timeout du garde-fou.
+    -- Mesure : `research_technology('automation-science-pack')` rendait « timeout »
+    -- avec `current_research = nil` -- c'est-a-dire un refus immediat maquille en
+    -- attente, qui envoie chercher la panne du cote du delai.
+    --
+    -- Le cas normal est celui d'une technologie a DECLENCHEUR (Factorio 2.0) : elle ne
+    -- se met pas en file, elle tombe quand le geste est fait. Le dire evite de
+    -- s'acharner sur la file de recherche alors qu'il fallait aller fabriquer.
+    if not force.add_research(params.technology_name) then
+      local tr = tech.prototype and tech.prototype.research_trigger
+      if tr then
+        M._complete("technologie a declencheur (" .. tostring(tr.type)
+                    .. ") : elle ne se met pas en file, il faut accomplir le geste", false)
+      else
+        M._complete("recherche refusee (prerequis, ou file pleine)", false)
+      end
+      return
+    end
     params.started = true
     log("[fl] recherche lancee: " .. params.technology_name)
     return
