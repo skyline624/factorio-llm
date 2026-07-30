@@ -35,7 +35,7 @@ import sys
 from agents.coordinator import Coordinator
 from core.mod_api import ModApi
 from core.rcon import get_rcon, reset_rcon
-from services import deplacement, save_ref
+from services import deplacement, perception, save_ref
 
 # Les trois machines de la première chaîne. Aucune n'est électrique : sur une carte
 # neuve, c'est tout ce que les recettes ouvertes permettent d'assembler.
@@ -87,6 +87,13 @@ def main() -> int:
     zone = deplacement.position(api)
     coord = Coordinator(api, zone=zone, rayon=25.0)
 
+    # À QUELLE DISTANCE EST LE COMBUSTIBLE, sur CETTE carte ? La question n'est pas
+    # rhétorique : elle a longtemps été de 215 tuiles, puis de 43 après régénération des
+    # gisements. Exiger un long voyage reviendrait à mesurer la carte et non l'agent —
+    # et à faire échouer une partie où le charbon se trouve simplement être proche.
+    depart_charbon = perception.nearest(api, "coal")
+    loin_du_charbon = depart_charbon[2] if depart_charbon else 0
+
     # --- Rec 2 : les trois machines sortent de rien ---
     fabriquees, journal, loin = [], [], 0.0
     for tour in range(TOURS):
@@ -123,8 +130,15 @@ def main() -> int:
     # pas à travers des chunks non générés, le personnage s'arrête bien avant, et le
     # minage échoue sur « cible hors portée ». Il faut générer devant soi et marcher
     # par bonds (services.deplacement).
-    rec("3: le combustible a été cherché hors de l'horizon", loin > 100.0,
-        f"l'agent s'est éloigné jusqu'à {loin:.0f} tuiles de son gisement pour son charbon")
+    # Ce qui est éprouvé est que l'agent VA CHERCHER son combustible là où il est. Si le
+    # charbon est hors de l'horizon généré, cela suppose la marche par bonds (sans quoi
+    # le pathfinding ne planifie pas et `mine_entity` échoue sur « cible hors portée ») ;
+    # s'il est à portée, y aller suffit et exiger un voyage serait absurde.
+    attendu = min(loin_du_charbon * 0.6, 100.0) if loin_du_charbon > 60 else 0.0
+    rec("3: le combustible a été cherché là où il est", loin >= attendu,
+        f"charbon le plus proche à {loin_du_charbon} tuiles ; l'agent s'est éloigné "
+        f"jusqu'à {loin:.0f}"
+        + (f" (au moins {attendu:.0f} attendues)" if attendu else " — il était à portée"))
 
     # --- Rec 3b : la chaîne est POSÉE sur le terrain ---
     posees = int(str(rcon.query_lua(

@@ -742,7 +742,17 @@ function M.inspect_at(x, y, radius)
   local char = player_mod.get_ai_entity()
   local surface = char and char.surface or game.surfaces.nauvis or game.surfaces[1]
   if not surface then return json.encode({error = "aucune surface"}) end
-  local r = math.min((radius and radius > 0) and radius or 0.5, 16)
+  -- Le plafond etait de 16 tuiles, applique EN SILENCE. Un appelant qui demandait 25 --
+  -- le Coordinator le fait avec son propre rayon d'usine -- en obtenait 16 sans que rien
+  -- ne le dise, et se croyait donc devant une zone vide. Mesure : une foreuse posee a 18
+  -- tuiles de la zone etait introuvable, `verify_gisement_e21` concluait « l'usine ne
+  -- produit pas apres 14 tours » et se mettait en SKIP, alors que l'usine tournait et que
+  -- le journal annoncait « 7 machines en etat de marche ».
+  --
+  -- Le plafond reste (une aire sans borne rendrait des milliers de lignes), mais il est
+  -- porte a la taille d'une usine reelle. Le champ `radius` rend TOUJOURS le rayon
+  -- effectivement inspecte : un appelant qui demande plus doit pouvoir s'en apercevoir.
+  local r = math.min((radius and radius > 0) and radius or 0.5, 64)
   -- Recherche par AIRE, et non par {position, radius} : la variante `radius` compare le
   -- CENTRE des entites au point, si bien qu'une machine 3x2 dont le centre est a une
   -- tuile n'est jamais trouvee -- alors que le point interroge tombe en plein dedans.
