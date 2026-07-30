@@ -767,9 +767,12 @@ class Coordinator:
 
         if d.action == "relier" and c is not None:
             return Attente(
-                f"{c.name} appartient à un réseau",
-                lambda api: (api.get_power_state(c.x, c.y, 3.0) or {}).get("networkId"),
-                lambda n: n is not None,
+                f"{c.name} reçoit du courant",
+                # `connected`, pas `networkId` : une machine branchée sur un réseau sans
+                # générateur porte un identifiant et ne reçoit rien. L'attente validait
+                # ainsi des raccordements à des îlots morts.
+                lambda api: (api.get_power_state(c.x, c.y, 3.0) or {}).get("connected"),
+                lambda b: b is True,
                 delai_ticks=30)
 
         if d.action == "defendre":
@@ -1246,19 +1249,24 @@ class Coordinator:
                 return False, f"aucune position de poteau libre autour de {cible.name}"
             local = (float(proches[0].get("x", cible.x)), float(proches[0].get("y", cible.y)))
 
+        # `connected` et NON `networkId` : la même confusion a produit les îlots qu'on
+        # répare ici. Tout poteau posé reçoit un identifiant de réseau, fût-il isolé —
+        # mesuré, cinq machines portaient fièrement `networkId=129` avec zéro générateur
+        # dessus, `connected=false` et `bufferEnergy=0`. Un identifiant ne dit rien de ce
+        # qui circule ; seul `connected` le dit.
         etat = self.api.get_power_state(cible.x, cible.y, 3.0) or {}
-        if etat.get("networkId") is not None:
+        if etat.get("connected") is True:
             return True, f"poteau posé en {local} pour {cible.name} — réseau atteint"
 
         # Le poteau local est isolé : il faut aller chercher le courant là où il est.
-        source = site_finder.poteau_connecte_le_plus_proche(self.api, cible.x, cible.y)
+        source = site_finder.poteau_alimente_le_plus_proche(self.api, cible.x, cible.y)
         if source is None:
             return False, (f"poteau posé en {local} mais aucun réseau alimenté à portée "
                            f"de {cible.name} — il manque une centrale, pas une ligne")
         poses, complete = site_finder.place_pole_line(
             self.api, (source[0], source[1]), local, pole=pole)
         apres = self.api.get_power_state(cible.x, cible.y, 3.0) or {}
-        relie = apres.get("networkId") is not None
+        relie = apres.get("connected") is True
         return relie, (f"ligne de {len(poses)} poteau(x) depuis le réseau {source[2]} "
                        f"en ({source[0]},{source[1]}) jusqu'à {cible.name}"
                        + ("" if complete else " — INTERROMPUE par un obstacle")

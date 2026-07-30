@@ -232,26 +232,39 @@ def degager_tuile(api, x: float, y: float, timeout: float = 20.0) -> bool:
     return retire
 
 
-def poteau_connecte_le_plus_proche(api, x: float, y: float, rayon: float = 80.0
+def poteau_alimente_le_plus_proche(api, x: float, y: float, rayon: float = 80.0
                                    ) -> Optional[tuple[float, float, int]]:
-    """Le poteau ALIMENTÉ le plus proche de (x, y) : (px, py, networkId), ou None.
+    """Le poteau relié à un réseau QUI PRODUIT, le plus proche de (x, y). Ou None.
 
     C'est le point de départ d'une ligne de transmission. Sans lui, `relier` ne pouvait
     que poser un poteau contre la machine — ce qui suffit tant que le réseau est à portée
-    et ne sert à rien dès qu'il ne l'est plus. Mesuré en partie longue : l'agent étend sa
-    production à quinze ou vingt tuiles de la centrale, et l'Enquêteur concluait « le pôle
-    le plus proche est sur le réseau 128 mais trop loin », sept fois par partie, sans que
-    la boucle n'en tire de réparation.
+    et ne sert à rien dès qu'il ne l'est plus.
 
-    Un poteau sans `electric_network_id` est écarté : le relier ne relierait à rien.
+    AVOIR UN `electric_network_id` N'EST PAS ÊTRE ALIMENTÉ, et la première version de
+    cette fonction l'a confondu. Tout poteau posé reçoit un identifiant de réseau, même
+    isolé au milieu de nulle part. `relier` tirait donc des lignes vers des réseaux morts
+    et fabriquait des îlots : mesuré en partie longue, réseau 128 avec 3 générateurs et
+    6 consommateurs, réseau 129 avec ZÉRO générateur et 5 consommateurs — cinq machines
+    branchées sur du vide, `connected=false`, `bufferEnergy=0` — et un réseau 131 avec
+    2 générateurs et aucun consommateur, c'est-à-dire une centrale bâtie pour rien.
+
+    On établit donc d'abord quels réseaux ont un GÉNÉRATEUR, et l'on ne retient que
+    ceux-là. Même famille que la leçon d'E3 : un générateur ne produit que ce qui est
+    consommé, et un identifiant ne dit rien de ce qui circule.
     """
     try:
         brut = api.rcon.query_lua(
-            f"local s = game.surfaces[1] local best, bd = nil, 1e18 "
+            f"local s = game.surfaces[1] local vivants = {{}} "
+            # Un réseau n'est vivant que s'il porte de quoi produire. Les boilers ne
+            # comptent pas : ils chauffent, ils ne génèrent pas d'électricité.
+            f"for _, g in pairs(s.find_entities_filtered{{type={{'generator', "
+            f"'solar-panel', 'reactor'}}}}) do "
+            f"  if g.electric_network_id then vivants[g.electric_network_id] = true end end "
+            f"local best, bd = nil, 1e18 "
             f"for _, e in pairs(s.find_entities_filtered{{type='electric-pole', "
             f"area={{{{{x - rayon},{y - rayon}}},{{{x + rayon},{y + rayon}}}}}}}) do "
             f"  local id = e.electric_network_id "
-            f"  if id then "
+            f"  if id and vivants[id] then "
             f"    local d = (e.position.x - {x})^2 + (e.position.y - {y})^2 "
             f"    if d < bd then bd = d best = e end end end "
             f"if best then rcon.print(best.position.x .. ',' .. best.position.y .. ',' "
