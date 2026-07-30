@@ -227,4 +227,47 @@ function M.nearest_free_entity(surface, force, from, ents, radius)
   return best, couvertes
 end
 
+-- en_service(surface, force, entity) : cette machine fait-elle partie d'une chaine ?
+--
+-- Une machine est EN SERVICE des qu'un bras la vise -- pour la remplir ou pour la vider.
+-- La reprendre revient a demonter une chaine qui tourne.
+--
+-- Mesure qui a impose ce garde-fou : le plan de fusion pose un four, fond, puis
+-- « reprend le four » (E23c, et c'est une bonne idee : cela evite de laisser derriere
+-- soi des fours a sec). Mais `mine_entity` vise le plus PROCHE du nom demande. Apres
+-- quelques fabrications, l'agent avait ainsi repris les fours de ses propres chaines :
+-- plus un seul four sur la carte, quatre-vingt-trois tuiles de belt intactes, et une
+-- alimentation qui s'arretait sans que rien ne l'explique. On croyait l'amont « epuise »
+-- alors qu'il avait ete DEMONTE.
+function M.en_service(surface, force, entity)
+  if not (entity and entity.valid) then return false end
+  local bb = entity.bounding_box
+  for _, ins in ipairs(surface.find_entities_filtered({
+        type = "inserter", force = force, position = entity.position, radius = 3 })) do
+    for _, p in ipairs({ins.pickup_position, ins.drop_position}) do
+      if p and p.x >= bb.left_top.x - 0.1 and p.x <= bb.right_bottom.x + 0.1
+         and p.y >= bb.left_top.y - 0.1 and p.y <= bb.right_bottom.y + 0.1 then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+-- nearest_idle_entity(surface, force, from, ents) : la plus proche qui ne serve a RIEN.
+-- Rend (entite, combien_en_service).
+function M.nearest_idle_entity(surface, force, from, ents)
+  local best, bd, occupees = nil, math.huge, 0
+  for _, e in ipairs(ents) do
+    if M.en_service(surface, force, e) then
+      occupees = occupees + 1
+    else
+      local dx, dy = e.position.x - from.x, e.position.y - from.y
+      local d = dx * dx + dy * dy
+      if d < bd then bd = d best = e end
+    end
+  end
+  return best, occupees
+end
+
 return M

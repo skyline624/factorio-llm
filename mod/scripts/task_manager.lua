@@ -465,6 +465,18 @@ local function state_mining(char, params)
     -- sur le bord du gisement suffit a bloquer un minage manuel que rien n'empechait.
     local target, couvertes = utils_entity.nearest_free_entity(
       char.surface, char.force, char.position, ents, 6)
+    -- Et si c'est une MACHINE qu'on reprend, jamais une qui sert : voir en_service.
+    if target and target.type ~= "resource" then
+      local libre, occupees = utils_entity.nearest_idle_entity(
+        char.surface, char.force, char.position, ents)
+      if not libre then
+        M._complete("toutes les " .. tostring(params.entity_name) .. " a portee sont en "
+                    .. "service (" .. occupees .. ") : les reprendre demonterait une chaine",
+                    false)
+        return
+      end
+      target = libre
+    end
     if not target then
       M._complete("minerai sous foreuse (" .. couvertes .. " tuile(s) couverte(s), "
                   .. "aucune libre a portee)", false)
@@ -504,6 +516,17 @@ local function state_mining(char, params)
     if #ents == 0 then return end -- stall grandit
     local target, couvertes = utils_entity.nearest_free_entity(
       char.surface, char.force, char.position, ents, 6)
+    if target and target.type ~= "resource" then
+      local libre, occupees = utils_entity.nearest_idle_entity(
+        char.surface, char.force, char.position, ents)
+      if not libre then
+        M._complete("toutes les " .. tostring(params.entity_name) .. " a portee sont en "
+                    .. "service (" .. occupees .. ") : les reprendre demonterait une chaine",
+                    false)
+        return
+      end
+      target = libre
+    end
     if not target then
       M._complete("minerai sous foreuse (" .. couvertes .. " tuile(s) couverte(s), "
                   .. "aucune libre a portee)", false)
