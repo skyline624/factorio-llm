@@ -585,10 +585,9 @@ class Coordinator:
         self._debit: Optional[float] = None     # dernier débit calculé, en items/s de jeu
         # Le bâti vu à la dernière observation : « étendre » se vérifie par une usine plus
         # GRANDE, et l'attente est construite après l'action, donc trop tard pour observer
-        # l'avant.
-        self._machines_vues = 0
-        # Le même comptage, mais pris depuis la ZONE et limité aux machines qui
-        # PRODUISENT — c'est la seule grandeur qu'une extension doit faire monter.
+        # l'avant. Compté depuis la ZONE et limité aux machines qui PRODUISENT — un
+        # comptage pris depuis le personnage ne se compare pas au suivant, celui-ci ayant
+        # été téléporté entre-temps.
         self._machines_posees = 0
         # D'où part la chaîne qui alimente chaque machine : la tuile de sortie du foreur.
         # Sans ce point de départ, on ne peut pas SUIVRE le flux, et donc pas vérifier
@@ -658,7 +657,6 @@ class Coordinator:
         etat.echecs = dict(self._echecs)
         etat.debit, etat.objectif = self._mesurer_debit(), self.objectif_par_s
         etat.objectif_item = self.objectif_item
-        self._machines_vues = etat.machines
         # Compté depuis la ZONE, indépendamment d'où se trouve le personnage : c'est ce
         # que l'attente d'une extension comparera, et deux comptages ne se comparent que
         # s'ils sont pris du même endroit.
