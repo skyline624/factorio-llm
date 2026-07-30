@@ -44,10 +44,29 @@ COMPORTEMENT = [
 ]
 
 
+def _repartir_de_la_reference() -> None:
+    """Remet l'état de départ AVANT chaque script, pour qu'aucun n'hérite du précédent.
+
+    Mesuré : `verify_doctor_e6` rend 4/4 lancé seul et 3/4 dans la batterie, parce que le
+    script d'avant lui laissait une usine déjà cassée et que son premier cas suppose une
+    usine SAINE. Un enchaînement qui fait échouer un test valide ne mesure plus rien — il
+    mesure l'ordre dans lequel on a lancé les choses.
+
+    Les scripts qui restaurent déjà eux-mêmes le referont : six secondes, et l'assurance
+    que chacun part du même endroit.
+    """
+    try:
+        from services import save_ref
+        save_ref.restaurer_reference()
+    except Exception:
+        pass                    # pas de référence figée : les scripts feront avec
+
+
 def _lancer(script: str, promesse: str, timeout: float) -> tuple[str, bool, str]:
     """Rend (script, réussi, résumé). Un script absent ou en erreur n'est jamais un succès."""
     if not os.path.exists(script):
         return script, False, "ABSENT"
+    _repartir_de_la_reference()
     t0 = time.time()
     try:
         p = subprocess.run([sys.executable, script], capture_output=True, text=True,

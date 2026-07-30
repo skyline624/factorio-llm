@@ -124,6 +124,18 @@ def main() -> int:
 
     api.set_test_mode(True)
     api.setup()
+
+    # La reference peut porter des nids (elle sert aussi aux tests de defense). Ici le
+    # sujet est autre : laisses en place, ils consomment les premiers tours en `defendre`
+    # et l'usine n'est jamais batie -- le test se met alors en SKIP sans rien avoir
+    # eprouve. On ecarte donc la menace explicitement, plutot que d'esperer qu'elle se
+    # taise.
+    otes = rcon.query_lua(
+        "local s = game.surfaces[1] local n = 0 "
+        "for _, e in pairs(s.find_entities_filtered{force='enemy'}) do "
+        "e.destroy() n = n + 1 end rcon.print(n)")
+    print(f"       {str(otes).strip()} entite(s) ennemie(s) ecartee(s) : ce test ne "
+          f"porte pas sur la defense")
     pos = (api.get_state().get("character") or {}).get("position") or {}
     zone = (float(pos.get("x", 0.0)), float(pos.get("y", 0.0)))
     coord = Coordinator(api, zone=zone, rayon=25.0)
