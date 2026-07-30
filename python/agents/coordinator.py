@@ -2260,6 +2260,19 @@ class Coordinator:
         tuiles, complete = site_finder.place_belt_line(
             self.api, vers_src, vers_cible, belt=belt, eviter=occupees)
         trous = [t for t in attendues if t not in tuiles]
+
+        # LA TUILE D'ARRIVÉE DOIT REGARDER LA MACHINE. `tracer_en_l` s'arrête AVANT elle
+        # — c'est nous qui l'avons posée d'avance, pour y accrocher le bras, avec
+        # l'orientation par défaut. Mesuré : la belt du fer descendait chargée sur onze
+        # tuiles, et la douzième pointait au NORD, à contre-courant. Les deux se faisaient
+        # face, le flux s'arrêtait là, le bras de chargement passait en
+        # `waiting_for_space_in_destination` pendant que celui du bout attendait des
+        # objets qui n'arrivaient jamais. Une seule tuile à l'envers, et rien ne le dit.
+        dx_f, dy_f = vers[0] - vers_cible[0], vers[1] - vers_cible[1]
+        vers_aval = (("east" if dx_f > 0 else "west") if abs(dx_f) >= abs(dy_f)
+                     else ("south" if dy_f > 0 else "north"))
+        self.api.run_action(self.api.rotate_entity_at, vers_cible[0], vers_cible[1],
+                            vers_aval, belt, timeout=20.0)
         if not tuiles:
             return False, (f"aucun tracé libre entre {nom_src}@({sx:.0f},{sy:.0f}) et "
                            f"{vers_nom} ({distance:.0f} tuiles) sans emprunter une belt "
