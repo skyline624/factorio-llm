@@ -264,6 +264,29 @@ def place_belt_line(api, depart: tuple[float, float], arrivee: tuple[float, floa
         r = api.run_action(api.place_entity_at, belt, bx, by, d, None, timeout=timeout)
         if isinstance(r, dict) and r.get("ok"):
             poses.append((bx, by))
+
+    # ON REPASSE SUR LES TROUS. Une belt à laquelle il manque UNE tuile ne transporte
+    # rien, et rien ne le signale : les objets s'accumulent au bord du trou pendant que
+    # chaque entité, prise séparément, a l'air juste. Mesuré sur une ligne de soixante-
+    # quinze tuiles : deux trous seulement, sur de la terre ordinaire — l'un parce que
+    # l'avatar s'y tenait au moment de la pose, l'autre sans cause durable. Une seconde
+    # passe les comble, et c'est la règle du projet : on ne croit pas une pose, on la
+    # confirme.
+    manquantes = [t for t in tuiles if t not in poses]
+    for bx, by in manquantes:
+        i = tuiles.index((bx, by))
+        suivant = tuiles[i + 1] if i + 1 < len(tuiles) else (x1, y1)
+        dx, dy = suivant[0] - bx, suivant[1] - by
+        d = ("east" if dx > 0 else "west") if abs(dx) >= abs(dy) else \
+            ("south" if dy > 0 else "north")
+        if any(e.get("type") == "transport-belt" for e in _entites_a(api, bx, by, 0.4)):
+            poses.append((bx, by))
+            continue
+        if not can_place(api, belt, bx, by, d):
+            degager_tuile(api, bx, by, timeout)
+        api.run_action(api.place_entity_at, belt, bx, by, d, None, timeout=timeout)
+        if any(e.get("type") == "transport-belt" for e in _entites_a(api, bx, by, 0.4)):
+            poses.append((bx, by))
     return poses, len(poses) == len(tuiles)
 
 

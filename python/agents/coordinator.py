@@ -2080,8 +2080,24 @@ class Coordinator:
         # Il faut le bord, plus la tuile du bras, plus le demi-pas de la belt.
         ecart_src = self._demi_largeur(sx, sy) + 1.5
         ecart_cible = self._demi_largeur(vers[0], vers[1]) + 1.5
-        vers_src = ((sx + (ecart_src if vers[0] > sx else -ecart_src)), sy)
         vers_cible = ((vers[0] + (ecart_cible if sx > vers[0] else -ecart_cible)), vers[1])
+
+        # LES QUATRE CÔTÉS DE LA SOURCE, et pas seulement celui qui regarde la cible.
+        # Mesuré : un `wooden-chest` occupait exactement la première tuile — le ramassage
+        # que la chaîne pose elle-même en sortie de son four. La belt n'y démarrait donc
+        # jamais, et sans première tuile aucun bras ne peut charger : « 79 tuiles posées,
+        # tracé INTERROMPU, SANS bras de chargement ». On ne dispute pas la place à son
+        # propre ouvrage, on se pose à côté.
+        cotes = [(ecart_src if vers[0] > sx else -ecart_src, 0.0),
+                 (0.0, ecart_src if vers[1] > sy else -ecart_src),
+                 (-(ecart_src if vers[0] > sx else -ecart_src), 0.0),
+                 (0.0, -(ecart_src if vers[1] > sy else -ecart_src))]
+        vers_src = (sx + cotes[0][0], sy + cotes[0][1])
+        for dx_c, dy_c in cotes:
+            essai = (float(math.floor(sx + dx_c)) + 0.5, float(math.floor(sy + dy_c)) + 0.5)
+            if site_finder.can_place(self.api, belt, essai[0], essai[1]):
+                vers_src = essai
+                break
 
         # NE PAS DÉVERSER SUR LA VOIE D'UN AUTRE FLUX. Mesuré, et c'est la panne la plus
         # retorse rencontrée : le bras de sortie des engrenages déposait sur une tuile
