@@ -65,10 +65,26 @@ def _science(rcon) -> dict:
     if len(m) != 4:
         return {}
     try:
-        return {"entree": int(m[0]), "sortie": int(m[1]),
+        etat = {"entree": int(m[0]), "sortie": int(m[1]),
                 "x": float(m[2]), "y": float(m[3])}
     except ValueError:
         return {}
+    # QUELS ingrédients, et pas seulement combien. Un total de deux ne dit pas si la
+    # recette peut tourner : deux plaques de cuivre sans engrenage ne produisent rien, et
+    # c'est précisément ce qui arrivait — l'entrée servie en continu, la production à
+    # l'arrêt faute du second ingrédient.
+    detail = str(rcon.query_lua(
+        f"local s = game.surfaces[1] local out = '' "
+        f"for _, e in pairs(s.find_entities_filtered{{name='assembling-machine-1'}}) do "
+        f"  local ok, r = pcall(function() return e.get_recipe() end) "
+        f"  if ok and r and r.name == '{FLACON}' then "
+        f"    local i = e.get_inventory(defines.inventory.assembling_machine_input) "
+        f"    if i then local d = {{}} "
+        f"      for _, st in pairs(i.get_contents()) do "
+        f"        d[#d+1] = st.name .. 'x' .. st.count end "
+        f"      out = table.concat(d, ',') end end end rcon.print(out)")).strip()
+    etat["contenu"] = detail
+    return etat
 
 
 def main() -> int:
@@ -251,7 +267,7 @@ def main() -> int:
     # se vide une bonne fois.
     rec("5: l'assembleuse est servie de façon RÉPÉTÉE", servies >= 2,
         f"entrée vidée, puis servie sur {servies}/{FENETRES} fenêtre(s) de {TICKS} ticks "
-        f"— relevés {entrees}")
+        f"— relevés {entrees} | contenu final : {apres.get('contenu') or 'vide'}")
 
     # --- Rec 6 : et cela PRODUIT, sur la durée ---
     # La statistique de la force, et non l'inventaire de sortie : la sortie est vidée par

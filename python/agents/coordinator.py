@@ -1850,7 +1850,16 @@ class Coordinator:
         # tuiles : entre la pose et la première plaque, il faut extraire, transporter et
         # fondre. Une seule tentative concluait « toujours aucune source » sur une chaîne
         # qui démarrait — et l'agent renonçait définitivement à s'y brancher.
-        restants = list(besoins)
+        # LES LIAISONS COURTES D'ABORD. Mesuré : la belt du cuivre — quatre-vingts tuiles
+        # à travers la carte — était posée en premier et traversait la zone de l'usine ;
+        # il ne restait plus de passage pour relier deux assembleuses distantes de six
+        # tuiles, et l'on lisait « aucun tracé libre (85 tuiles déjà prises) ». Une ligne
+        # longue occupe beaucoup ; on lui laisse le terrain en dernier.
+        def _eloignement(nom: str) -> float:
+            s = self._source_de(nom)
+            return math.hypot(s[1] - cible[0], s[2] - cible[1]) if s else 1e9
+
+        restants = sorted(besoins, key=_eloignement)
         for passe in range(3):
             encore = []
             for nom in restants:
@@ -1905,9 +1914,24 @@ class Coordinator:
         source = site_finder.poteau_alimente_le_plus_proche(
             self.api, self.zone[0], self.zone[1])
         centre = (source[0], source[1]) if source else self.zone
+        # ON LAISSE LA PLACE AUX LIAISONS. Mesuré : l'assembleuse à engrenages était
+        # posée à six tuiles de celle de science, et la belt qui l'alimente en fer
+        # occupait aussitôt tout le passage entre les deux — « aucun tracé libre entre
+        # assembling-machine-1 et assembling-machine-1 ». Deux machines qui doivent être
+        # reliées par une belt, et alimentées chacune par une autre, ont besoin de plus
+        # que de leur propre encombrement.
+        # Un écart MINIMAL, pas maximal : porté à neuf tuiles, il éloignait tant
+        # l'assembleuse que sa propre liaison se coupait à son tour et que la chaîne de
+        # cuivre n'était plus bâtie du tout — 1/6 au lieu de 3/6. Les places se disputent
+        # dans les deux sens, et rien ne dit qu'un écart fixe soit la bonne réponse.
+        autres = [(float(e.get("x", 0.0)), float(e.get("y", 0.0)))
+                  for e in site_finder._entites_a(self.api, centre[0], centre[1], 24.0)
+                  if e.get("name") == "assembling-machine-1"]
         for dx in range(-8, 9, 2):
             for dy in range(-8, 9, 2):
                 x, y = float(int(centre[0] + dx)) + 0.5, float(int(centre[1] + dy)) + 0.5
+                if any(math.hypot(x - ax, y - ay) < 5.0 for ax, ay in autres):
+                    continue
                 if not site_finder.can_place(self.api, "assembling-machine-1", x, y):
                     continue
                 self.api.run_action(self.api.place_entity_at, "assembling-machine-1",
@@ -2110,11 +2134,31 @@ class Coordinator:
         # Le tracé CONTOURNE les belts existantes : `place_belt_line` retourne celles
         # qu'elle croise pour les aligner sur elle — geste juste quand on prolonge sa
         # propre ligne, désastreux quand on traverse celle d'un voisin.
+        # SEULEMENT LES BELTS. Une version a essayé d'éviter TOUT ce qui est bâti —
+        # poteaux et coffres compris, puisque `degager_tuile` ne les ôte pas. Mesuré :
+        # c'est pire (2/6 au lieu de 3/6). Trop de tuiles interdites ne laissent plus
+        # aucun L praticable, et l'on ne pose alors rien du tout là où l'on posait une
+        # ligne presque complète. Ce qu'il faut absolument éviter est la voie d'un AUTRE
+        # FLUX — la retourner casse ce qui marchait ; un poteau, lui, ne fait qu'un trou.
         occupees = {(float(e.get("x", 0.0)), float(e.get("y", 0.0)))
                     for e in site_finder._entites_a(
                         self.api, (sx + vers[0]) / 2, (sy + vers[1]) / 2,
                         max(16.0, distance))
                     if e.get("type") == "transport-belt"}
+
+        # ET L'EMPRISE DES DEUX MACHINES QU'ON RELIE. Mesuré : le tracé des engrenages
+        # passait par le CENTRE de l'assembleuse dont il partait — « tracé INTERROMPU en
+        # (-22,-64) », c'est-à-dire sur la machine elle-même. Aucune belt ne s'y pose,
+        # la ligne garde un trou dès sa première tuile, et plus aucun bras ne peut la
+        # charger. Interdire ces deux emprises-là suffit : les interdire TOUTES a été
+        # essayé et donne moins bien (plus aucun L praticable).
+        for cx, cy in ((sx, sy), (vers[0], vers[1])):
+            demi = self._demi_largeur(cx, cy)
+            pas = int(demi) + 1
+            for ex in range(-pas, pas + 1):
+                for ey in range(-pas, pas + 1):
+                    occupees.add((float(math.floor(cx + ex)) + 0.5,
+                                  float(math.floor(cy + ey)) + 0.5))
         # ON S'ÉCARTE AVANT DE DÉROULER. `can_place` refuse une pose SOUS l'avatar, et
         # l'agent se tient justement là : il vient de miner le minerai qui alimente cette
         # source. La première tuile de la belt manquait donc, et sans elle aucun bras ne
@@ -2126,8 +2170,13 @@ class Coordinator:
             self.api.run_action(self.api.walk_to, vers_src[0], vers_src[1] + 6.0,
                                 timeout=60.0)
 
+        # On CONNAÎT le tracé avant de poser : cela permet de dire ensuite quelles tuiles
+        # manquent, et non le seul mot « INTERROMPU ». Une ligne coupée ne transporte
+        # rien, et savoir OÙ elle est coupée est la moitié du diagnostic.
+        attendues, _ = site_finder.tracer_en_l(vers_src, vers_cible, occupees)
         tuiles, complete = site_finder.place_belt_line(
             self.api, vers_src, vers_cible, belt=belt, eviter=occupees)
+        trous = [t for t in attendues if t not in tuiles]
         if not tuiles:
             return False, (f"aucun tracé libre entre {nom_src}@({sx:.0f},{sy:.0f}) et "
                            f"{vers_nom} ({distance:.0f} tuiles) sans emprunter une belt "
@@ -2152,7 +2201,9 @@ class Coordinator:
         ok = charge is not None and decharge is not None and not sans_courant
         return ok, (f"{item} : {nom_src}@({sx:.0f},{sy:.0f}) -> {len(tuiles)} tuile(s) de "
                     f"belt -> {vers_nom} ({distance:.0f} tuiles"
-                    + ("" if complete else ", tracé INTERROMPU") + ")"
+                    + ("" if complete else
+                       f", tracé INTERROMPU en {', '.join(f'({t[0]:.0f},{t[1]:.0f})' for t in trous[:4])}"
+                       f"{' …' if len(trous) > 4 else ''}") + ")"
                     + ("" if charge is not None else " — SANS bras de chargement")
                     + ("" if decharge is not None else " — SANS bras de déchargement")
                     + (f" — bras SANS COURANT en {', '.join(sans_courant)}"
