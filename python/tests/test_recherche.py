@@ -174,6 +174,46 @@ def test_str_dit_quoi_faire_en_une_ligne() -> None:
     assert ok
 
 
+def test_une_recette_fermee_declenche_la_recherche_et_non_un_abandon() -> None:
+    """`fabriquer` ne doit plus s'arrêter sur « recette verrouillée » : il va la chercher.
+
+    Mesuré en jeu, les mains vides : l'agent constate que `small-electric-pole` est
+    fermée, lit l'arbre, mine son cuivre et son charbon, pose un four, fond dix plaques —
+    et `electronics` tombe, ouvrant du même coup `lab`, `inserter`, `copper-cable` et
+    `electronic-circuit`. Douze étapes, aucune écrite à la main.
+
+    On éprouve ici l'AIGUILLAGE hors ligne : une recette verrouillée part vers
+    `ouvrir_la_recette`, et une recette simplement infaisable n'y va pas — sinon l'agent
+    irait chercher une technologie pour un manque de minerai.
+    """
+    from agents.coordinator import Coordinator
+
+    coord = Coordinator.__new__(Coordinator)      # sans serveur : on teste l'aiguillage
+    coord.api = None                              # jamais appelée : la lecture est simulée
+    vus: list[str] = []
+    coord.ouvrir_la_recette = lambda r: (vus.append(r), (True, f"ouvert {r}"))[1]
+
+    def _fabriquer(motif: str):
+        import services.knowledge as k
+        import services.perception as p
+        vrai_plan, vrai_inv, vrai_rec = k.plan_production, p.inventory, p.recipe_of
+        k.plan_production = lambda *a, **kw: (_ for _ in ()).throw(ValueError(motif))
+        p.inventory = lambda api: {}
+        p.recipe_of = lambda api, x: None
+        try:
+            return Coordinator.fabriquer(coord, "small-electric-pole", 1)
+        finally:
+            k.plan_production, p.inventory, p.recipe_of = vrai_plan, vrai_inv, vrai_rec
+
+    verrou = _fabriquer("la recette est VERROUILLÉE et il faut d'abord la rechercher")
+    autre = _fabriquer("ni ressource, ni recette accessible")
+    ok = (verrou == (True, "ouvert small-electric-pole") and vus == ["small-electric-pole"]
+          and autre[0] is False and "ne peut pas être fabriqué" in autre[1])
+    rec("test_une_recette_fermee_declenche_la_recherche_et_non_un_abandon", ok,
+        f"verrouillée -> {verrou[1][:40]} ; autre motif -> {autre[1][:40]}")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_recette_fermee_se_relie_a_sa_technologie,
               test_la_premiere_marche_ne_coute_aucun_flacon,
@@ -181,7 +221,8 @@ def main() -> int:
               test_une_marche_qui_se_paie_est_distinguee,
               test_une_lecture_ratee_ne_rend_pas_l_agent_plus_bete,
               test_un_arbre_malforme_ne_fait_pas_tomber_la_lecture,
-              test_str_dit_quoi_faire_en_une_ligne):
+              test_str_dit_quoi_faire_en_une_ligne,
+              test_une_recette_fermee_declenche_la_recherche_et_non_un_abandon):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

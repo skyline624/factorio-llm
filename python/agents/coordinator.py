@@ -1432,6 +1432,10 @@ class Coordinator:
             steps = plan_production(ProductionGoal(item, combien), inv,
                                     lambda x: perception.recipe_of(self.api, x))
         except ValueError as e:
+            # Une recette FERMÉE n'est pas une impasse : quelque chose l'ouvre. On ne
+            # se contente donc plus de le constater — on va chercher la clé.
+            if "VERROUILL" in str(e).upper():
+                return self.ouvrir_la_recette(item)
             return False, f"{item} ne peut pas être fabriqué : {e}"
         if not steps:
             return False, f"{item} : rien à faire, l'inventaire en contient déjà assez"
@@ -1446,6 +1450,52 @@ class Coordinator:
         return gagne > 0, (f"{item} : {avant} -> {apres} ({gagne:+d}) en "
                            f"{len(steps)} étape(s) [{plan_summary(steps)[:70]}]"
                            + (f" — bloqué sur {str(rates[0])[:60]}" if rates else ""))
+
+    def ouvrir_la_recette(self, recette: str) -> tuple[bool, str]:
+        """Va chercher la technologie qui débloque `recette`, et la déclenche.
+
+        Le début de l'arbre de Factorio 2.0 ne se paie pas en flacons mais en GESTES :
+        `electronics` s'ouvre en fabriquant dix plaques de cuivre, et donne d'un coup
+        `copper-cable`, `electronic-circuit`, `lab`, `inserter` et `small-electric-pole`.
+        Un agent qui sait fondre peut donc ouvrir tout l'électrique de base sans posséder
+        ni laboratoire ni flacon — mesuré en jeu : douze plaques de cuivre fondues, et
+        les quatre recettes passent à `enabled`.
+
+        Le piège, payé une fois : un déclencheur compte ce qu'on FABRIQUE, jamais ce
+        qu'on possède. Avec trente plaques en poche, demander « fabrique-en dix » rend
+        « l'inventaire en contient déjà assez », rien n'est produit, et la technologie
+        reste fermée. `quantite_a_produire` vise donc le stock ACTUEL plus le compte du
+        déclencheur.
+
+        Quand la marche se paie en science, on le DIT au lieu de s'acharner : il faut
+        alors un laboratoire et des flacons, c'est-à-dire un autre chantier.
+        """
+        from services import recherche
+
+        arbre = recherche.lire(self.api)
+        marche = arbre.pour_recette(recette)
+        if marche is None:
+            return False, (f"{recette} est verrouillée et aucune technologie à portée "
+                           f"ne l'ouvre — il faut d'abord en chercher d'autres "
+                           f"({len(arbre.marches)} marche(s) disponible(s))")
+        if marche.declencheur is None or not marche.gratuite:
+            return False, (f"{recette} s'ouvre par « {marche.nom} », qui se paie en "
+                           f"science : {marche.unites} x "
+                           + " + ".join(f"{c} {n}" for n, c in marche.cout)
+                           + " — il faut un laboratoire alimenté, pas un craft")
+
+        cible, vise = recherche.quantite_a_produire(
+            marche, perception.inventory(self.api))
+        if not cible:
+            return False, (f"{recette} s'ouvre par « {marche.nom} », dont le "
+                           f"déclencheur ({marche.declencheur[0]}) n'est pas un objet "
+                           f"à fabriquer")
+
+        ok, detail = self.fabriquer(cible, vise)
+        acquise = recherche.lire(self.api).acquises
+        gagnee = marche.nom in acquise
+        return gagnee, (f"pour ouvrir {recette} : {marche} — {detail}"
+                        + ("" if gagnee else f" — « {marche.nom} » toujours pas acquise"))
 
     def _alimenter_la_chaine(self, ancre: tuple[float, float],
                              rayon: float = 8.0) -> int:
