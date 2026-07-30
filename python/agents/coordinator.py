@@ -2035,6 +2035,26 @@ class Coordinator:
         ecart_cible = self._demi_largeur(vers[0], vers[1]) + 1.5
         vers_src = ((sx + (ecart_src if vers[0] > sx else -ecart_src)), sy)
         vers_cible = ((vers[0] + (ecart_cible if sx > vers[0] else -ecart_cible)), vers[1])
+
+        # NE PAS DÉVERSER SUR LA VOIE D'UN AUTRE FLUX. Mesuré, et c'est la panne la plus
+        # retorse rencontrée : le bras de sortie des engrenages déposait sur une tuile
+        # déjà occupée par la belt qui AMÈNE le fer à cette même assembleuse. Les pièces
+        # descendaient, tournaient à l'ouest et rentraient d'où elles venaient — vingt-
+        # trois engrenages produits, zéro arrivé, et l'assembleuse en `full_output`
+        # pendant que la science manquait d'ingrédient. Une boucle fermée ne se voit
+        # nulle part : chaque entité prise séparément a l'air juste.
+        #
+        # On décale donc le départ perpendiculairement jusqu'à une voie libre.
+        perpendiculaire = (0.0, 1.0) if abs(vers[0] - sx) >= abs(vers[1] - sy) else (1.0, 0.0)
+        for pas in (0, 1, -1, 2, -2, 3, -3):
+            essai = (vers_src[0] + perpendiculaire[0] * pas,
+                     vers_src[1] + perpendiculaire[1] * pas)
+            occupee = any(e.get("name", "").endswith("transport-belt")
+                          or e.get("type") == "transport-belt"
+                          for e in site_finder._entites_a(self.api, essai[0], essai[1], 0.6))
+            if not occupee:
+                vers_src = essai
+                break
         tuiles, complete = site_finder.place_belt_line(
             self.api, vers_src, vers_cible, belt=belt)
         if not tuiles:

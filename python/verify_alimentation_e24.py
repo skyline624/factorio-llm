@@ -93,6 +93,7 @@ def main() -> int:
         return 0
 
     ok_alim, detail_alim = coord.alimenter_la_science()
+    cible_zone = deplacement.position(api)
 
     # --- Rec 1 : une source a été BÂTIE pour ce que l'agent ne produisait pas ---
     # Toutes ses chaînes étaient du fer ; le flacon réclame du cuivre. Le critère est la
@@ -136,18 +137,27 @@ def main() -> int:
     # dans la foulée de la pose, un bras tout juste raccordé se déclare encore sans
     # courant, et le constat accuse un défaut qui n'existe plus une seconde plus tard.
     api.run_action(api.wait, 120, timeout=60.0)
+    # ÊTRE RACCORDÉ N'EST PAS ÊTRE ALIMENTÉ. Ce constat s'appuyait sur
+    # `is_connected_to_electric_network()`, qui répond `true` dès qu'un poteau couvre la
+    # machine — même si le réseau est mort. Il était donc vert pendant que TOUS les bras
+    # étaient en `no_power`, centrale à l'arrêt, et l'on cherchait la panne du côté du
+    # convoyage. C'est la même confusion que `networkId` contre `connected`, d'un cran
+    # plus loin : on juge désormais sur le STATUT de la machine, seul témoin du courant
+    # qui circule vraiment.
     bras = str(rcon.query_lua(
         "local s = game.surfaces[1] local n, sans = 0, 0 "
         "for _, e in pairs(s.find_entities_filtered{type='inserter', force='player'}) do "
         "  local b = s.find_entities_filtered{name='transport-belt', "
         "position=e.position, radius=1.6} "
         "  if #b > 0 then n = n + 1 "
-        "    if not e.is_connected_to_electric_network() then sans = sans + 1 end end end "
+        "    if e.status == defines.entity_status.no_power "
+        "       or e.status == defines.entity_status.low_power "
+        "    then sans = sans + 1 end end end "
         "rcon.print(n .. '|' .. sans)")).strip()
     nb_bras, _, sans_courant = bras.partition("|")
-    rec("3: les bras du convoyage sont alimentés",
+    rec("3: les bras du convoyage ont vraiment du courant",
         nb_bras not in ("", "0") and sans_courant == "0",
-        f"{nb_bras} bras au contact d'une belt, {sans_courant} sans courant")
+        f"{nb_bras} bras au contact d'une belt, {sans_courant} en no_power/low_power")
 
     # --- SCÈNE : la source doit avoir DE QUOI produire ---
     # Le sujet est le transport, pas l'endurance d'une chaîne minière. On amorce donc les
@@ -163,7 +173,28 @@ def main() -> int:
         "    i.insert{name='copper-ore', count=50} "
         "    i.insert{name='iron-ore', count=50} end "
         "  n = n + 1 end rcon.print(n)")).strip()
-    print(f"       scène : {amorce} four(s) amorcé(s) en minerai et combustible", flush=True)
+    # LA CENTRALE AUSSI. Un boiler brûle son charbon en moins de deux minutes ; sur les
+    # neuf mille ticks que dure la mesure, il tombe à sec et TOUT s'arrête — bras,
+    # assembleuses, laboratoire. On lisait alors « les engrenages ne partent pas » et
+    # l'on accusait le convoyage, alors que le réseau ne produisait plus rien
+    # (`productionKW=0`, steam-engine à zéro). Le sujet de ce banc est le transport ; la
+    # tenue d'une centrale a le sien.
+    chaudieres = str(rcon.query_lua(
+        "local s = game.surfaces[1] local n = 0 "
+        "for _, e in pairs(s.find_entities_filtered{name='boiler'}) do "
+        "  local f = e.get_fuel_inventory() "
+        "  if f then f.insert{name='coal', count=100} n = n + 1 end end rcon.print(n)")).strip()
+    api.run_action(api.wait, 120, timeout=60.0)
+    reseau = api.get_power_state(cible_zone[0], cible_zone[1], 3.0) or {}
+    produit_kw = float(reseau.get("productionKW") or 0)
+    print(f"       scène : {amorce} four(s) et {chaudieres} chaudière(s) amorcé(s), "
+          f"réseau à {produit_kw:.0f} kW", flush=True)
+    if produit_kw <= 0:
+        print("[SKIP] SCENE NON MONTEE : le réseau ne produit rien, tout serait à "
+              "l'arrêt — ce banc éprouve le transport, pas la tenue d'une centrale.")
+        rcon.query_lua("game.speed = 1 rcon.print(1)")
+        rcon.close()
+        return 0
 
     avant = _science(rcon)
     rcon.query_lua(
