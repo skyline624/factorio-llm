@@ -158,6 +158,12 @@ def main(argv: list[str]) -> int:
             nids = int(argv[argv.index("--nids") + 1])
         except (IndexError, ValueError):
             nids = 4
+    # `--sans-dotation` est le JUGE DE PAIX de l'autonomie. Tant que l'inventaire est
+    # prérempli — vingt et un lots, plus le kit de `reset_character` qui contient jusqu'à
+    # une raffinerie — un agent peut paraître autonome en consommant un stock qu'un
+    # humain a posé. Les mains vides, il doit miner, fondre et fabriquer pour poser sa
+    # première machine, ou ne rien poser du tout.
+    sans_dotation = "--sans-dotation" in argv
 
     try:
         rcon = get_rcon("127.0.0.1", 27015, "factoriollm")
@@ -176,11 +182,28 @@ def main(argv: list[str]) -> int:
     api.generate_terrain(0.0, 0.0, min(rayon, 300.0))
     api.run_action(api.wait, 60, timeout=60.0)
     degage = _degager(rcon, rayon)
-    doses, refuses = _doter(rcon)
-    print(f"       carte rase : {efface} entité(s) du joueur effacée(s), "
-          f"{degage} obstacle(s) dégagé(s) sur {rayon:.0f} tuiles")
-    print(f"       dotation : {doses}/{len(DOTATION)} lots insérés"
-          + (f" | REFUSÉS : {', '.join(refuses)}" if refuses else ""))
+    if sans_dotation:
+        # Le kit de `reset_character` est un kit de DÉVELOPPEMENT : dix fours
+        # électriques, quatre assembleuses, un lab, une raffinerie. Le vider entièrement
+        # est le seul moyen d'éprouver ce que l'agent sait faire de ses mains.
+        vide = rcon.query_lua(
+            "local c = nil for _, e in pairs(game.surfaces[1]"
+            ".find_entities_filtered{name='character'}) do c = e end "
+            "if not c then rcon.print('pas de character') return end "
+            "local inv = c.get_inventory(defines.inventory.character_main) "
+            "local n = inv and inv.get_item_count() or 0 "
+            "if inv then inv.clear() end rcon.print(n)")
+        doses, refuses = 0, []
+        print(f"       carte rase : {efface} entité(s) du joueur effacée(s), "
+              f"{degage} obstacle(s) dégagé(s) sur {rayon:.0f} tuiles")
+        print(f"       SANS DOTATION : {str(vide).strip()} objet(s) retiré(s) — "
+              f"l'agent part les mains vides")
+    else:
+        doses, refuses = _doter(rcon)
+        print(f"       carte rase : {efface} entité(s) du joueur effacée(s), "
+              f"{degage} obstacle(s) dégagé(s) sur {rayon:.0f} tuiles")
+        print(f"       dotation : {doses}/{len(DOTATION)} lots insérés"
+              + (f" | REFUSÉS : {', '.join(refuses)}" if refuses else ""))
 
     # Le personnage est posé sur le gisement, comme le fait E8 : le runner prend sa
     # position pour zone quand il n'y a aucune machine.

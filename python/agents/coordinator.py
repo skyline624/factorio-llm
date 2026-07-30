@@ -177,6 +177,14 @@ class EtatUsine:
     # l'agent bâtissait sa centrale puis ne produisait RIEN, huit tours durant.
     # `None` = non renseigné : on retombe alors sur `machines`, comme avant.
     machines_production: Optional[int] = None
+    # Le palier des machines qu'on sait poser. En BURNER, une centrale ne sert à rien :
+    # foreuse, four et bras brûlent du charbon et se moquent du réseau. Bâtir l'énergie
+    # d'abord — ce que le curriculum impose depuis E8 — n'a de sens que pour l'électrique.
+    # `True` par défaut : c'est le comportement d'avant, celui d'un agent doté.
+    electrique: bool = True
+    # Ce que réclame une chaîne de production AU PALIER COURANT. `BESOINS` est une table
+    # par action, et ne peut pas savoir qu'un agent sans recherche pose du burner.
+    besoins_production: tuple = ()
     # Échecs consécutifs par (action, cible). Sans cette mémoire, une action impossible
     # est retentée indéfiniment : la boucle tourne sans avancer, ce qui ne se voit pas.
     echecs: dict = field(default_factory=dict)
@@ -450,12 +458,21 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
     # cela, `batir_energie` était retenté 1241 fois d'affilée — mesuré. Bâtir est
     # justement ce qui coûte le plus cher à recommencer pour rien.
     for action, condition, raison, prio in (
-            ("batir_energie", not etat.a_de_l_energie,
+            # Une centrale n'a de sens que si l'on pose des machines ÉLECTRIQUES. Mesuré :
+            # les mains vides, l'agent réclamait une centrale qu'il ne pouvait pas bâtir,
+            # trois tours durant, alors que sa chaîne burner n'en avait aucun besoin.
+            ("batir_energie", not etat.a_de_l_energie and etat.electrique,
              "aucun réseau alimenté : rien d'électrique ne fonctionnera avant",
              PRIORITE["batir_energie"]),
+            # « Du courant » n'est une condition que pour des machines électriques : une
+            # chaîne burner brûle du charbon et se moque du réseau. Mesuré les mains
+            # vides : l'agent restait à `rien` parce qu'il attendait une électricité dont
+            # sa première chaîne n'avait aucun besoin.
             ("batir_production",
-             etat.a_de_l_energie and _machines_qui_produisent(etat) == 0,
-             "du courant, mais aucune machine pour en profiter",
+             (etat.a_de_l_energie or not etat.electrique)
+             and _machines_qui_produisent(etat) == 0,
+             ("du courant, mais aucune machine pour en profiter" if etat.electrique
+              else "aucune machine : une chaîne burner n'attend pas le réseau"),
              PRIORITE["batir_production"]),
             # L'usine tourne, mais tient-elle son objectif ? Sans cette option, « 4
             # machines en état de marche » etait une raison de ne RIEN faire : mesuré,
@@ -495,8 +512,13 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
     a_faire: list[Decision] = []          # les fabrications que les manques appellent
     dejadits: set = set()                 # un item manquant ne se propose qu'une fois
     for o in options:
+        # Les besoins d'une CONSTRUCTION dépendent du palier : `BESOINS` est une table par
+        # action et ne peut pas savoir qu'un agent sans recherche pose du burner.
+        besoins = (etat.besoins_production
+                   if o.action in ("batir_production", "etendre_production")
+                   and etat.besoins_production else BESOINS.get(o.action, ()))
         manquants = [f"{n} ({inv.get(n, 0)}/{c})"
-                     for n, c in BESOINS.get(o.action, ()) if inv.get(n, 0) < c]
+                     for n, c in besoins if inv.get(n, 0) < c]
         if manquants:
             # La priorité d'ORIGINE, avant déclassement : c'est elle que la fabrication
             # hérite. Une pièce qui manque pour une réparation est plus urgente qu'une
@@ -706,6 +728,12 @@ class Coordinator:
         etat.echecs = dict(self._echecs)
         etat.debit, etat.objectif = self._mesurer_debit(), self.objectif_par_s
         etat.objectif_item = self.objectif_item
+        # Le palier conditionne DEUX choses : faut-il une centrale, et que faut-il avoir
+        # en poche pour bâtir une chaîne. Les mains vides et sans recherche, la réponse
+        # est « pas de centrale » et « trois machines burner ».
+        t = self.tiers_micro()
+        etat.electrique = t["nom"] == "électrique"
+        etat.besoins_production = ((t["drill"], 1), (t["furnace"], 1), (t["inserter"], 1))
         # Compté depuis la ZONE, indépendamment d'où se trouve le personnage : c'est ce
         # que l'attente d'une extension comparera, et deux comptages ne se comparent que
         # s'ils sont pris du même endroit. Toujours mesuré — et pas seulement sous
@@ -1303,6 +1331,35 @@ class Coordinator:
         return ok, (f"{machine}@{pose} fabrique « {item} » pour {cible.name} "
                     f"({bras}@{livraison[:2]}) — entrée : {detail}")
 
+    def tiers_micro(self) -> dict:
+        """Quelles machines poser : électriques si on peut, burner sinon.
+
+        `batir_production` réclamait `electric-mining-drill` et `electric-furnace` EN
+        DUR. Or, mesuré sur une carte neuve, ces recettes sont `enabled=false` : elles
+        demandent une recherche non faite. Sans dotation, l'agent ne pouvait donc rien
+        bâtir — il exigeait des machines qui n'existaient ni dans ses poches ni dans son
+        arbre technologique.
+
+        Le tout-burner est le début d'une partie de Factorio : foreuse à charbon, four de
+        pierre, bras à charbon. Aucune ne demande de recherche, toutes se fabriquent, et
+        le MicroPlanner sait déjà les placer (leur emprise est 2×2, contre 3×3 pour
+        l'électrique — une erreur d'une tuile ici fait tomber le minerai par terre).
+
+        On préfère l'électrique dès qu'il est POSSIBLE : soit en stock, soit fabricable.
+        Une chaîne burner mange du charbon et demande à être ravitaillée ; c'est un
+        départ, pas une fin.
+        """
+        inv = perception.inventory(self.api)
+        electrique = (inv.get("electric-mining-drill", 0) > 0
+                      or perception.recipe_of(self.api, "electric-mining-drill") is not None)
+        if electrique:
+            return {"drill": "electric-mining-drill", "inserter": "inserter",
+                    "furnace": "electric-furnace", "drill_size": 3, "furnace_size": 3,
+                    "nom": "électrique"}
+        return {"drill": "burner-mining-drill", "inserter": "burner-inserter",
+                "furnace": "stone-furnace", "drill_size": 2, "furnace_size": 2,
+                "nom": "burner"}
+
     def fabriquer(self, item: str, combien: int = 1) -> tuple[bool, str]:
         """Se procure `item` : miner, fondre, crafter — dans cet ordre s'il le faut.
 
@@ -1865,13 +1922,16 @@ class Coordinator:
         if not candidats:
             return False, f"aucun gisement de {self.ressource} exploitable"
         essais: list[str] = []
+        # Le palier est CHOISI, pas imposé : sans recherche ni dotation, l'électrique
+        # n'existe tout simplement pas (recettes `enabled=false`).
+        t = self.tiers_micro()
         for ancre in candidats[:6]:
             preparer(ancre[0], ancre[1])
             mp = plan_micro(MicroRequest(
                 patch=ResourcePatch(resource=self.ressource, tiles=[], bbox=(0, 0, 0, 0)),
-                facing=4, anchor=ancre, drill_tier="electric-mining-drill",
-                inserter_tier="inserter", furnace_tier="electric-furnace",
-                drill_size=3, furnace_size=3))
+                facing=4, anchor=ancre, drill_tier=t["drill"],
+                inserter_tier=t["inserter"], furnace_tier=t["furnace"],
+                drill_size=t["drill_size"], furnace_size=t["furnace_size"]))
             # `approach=True` : en production le mod refuse toute pose au-delà de
             # `build_distance` (« walk closer first », mesuré à 10 tuiles). Le foreur est
             # sur le gisement, donc à des dizaines de tuiles de la machine qu'on alimente
@@ -1883,7 +1943,7 @@ class Coordinator:
                 poteaux = site_finder.place_supply_poles(self.api, rap.placed, ancrage)
                 relies = self._alimenter_la_chaine(ancre)
                 vidange = self._evacuer_la_chaine(ancre)
-                return True, (f"chaîne posée ({len(rap.placed)} machines) sur "
+                return True, (f"chaîne {t['nom']} posée ({len(rap.placed)} machines) sur "
                               f"{self.ressource} en {ancre}, {len(poteaux)} poteau(x) "
                               f"de desserte, {relies} raccordement(s), {vidange}"
                               + (f" — {len(essais)} ancre(s) occupée(s) écartée(s)"

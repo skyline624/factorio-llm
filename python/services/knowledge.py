@@ -65,6 +65,10 @@ ITEM_PROD: dict[str, dict] = {
     # P2+ : electronic-circuit, copper-wire, etc.
 }
 
+# Ce qu'un four de pierre brûle. Cinq unités par fournée : de quoi tenir le temps de la
+# fusion sans immobiliser du charbon dont l'agent aura besoin ailleurs.
+COMBUSTIBLE_FOUR = "coal"
+
 
 # Lookup de recette injecté (DIP : le planificateur ne sait pas comment on
 # obtient la recette — c'est perception.recipe_of côté agent).
@@ -75,6 +79,17 @@ RecipeLookup = Callable[[str], Optional[list[tuple[str, int]]]]
 
 def _credit(inv: dict[str, int], item: str, count: int) -> None:
     inv[item] = inv.get(item, 0) + count
+
+
+def _debit(inv: dict[str, int], item: str, count: int) -> None:
+    """Retire d'un inventaire SIMULÉ ce qu'une étape va consommer.
+
+    Sans ce débit, la simulation croit garder ce qu'elle a déjà dépensé : mesuré en jeu,
+    l'agent planifiait trois plaques pour sa foreuse, les créditait, puis planifiait trois
+    engrenages en pensant les avoir encore — alors qu'ils sont faits DE ces plaques. Le
+    plan s'arrêtait sur « manque iron-plate: 3/6 » après avoir tout miné et tout fondu.
+    """
+    inv[item] = max(0, inv.get(item, 0) - count)
 
 
 def _smelt_ticks(ore_count: int) -> int:
@@ -148,12 +163,22 @@ def _plan(goal: ProductionGoal, sim_inv: dict[str, int],
         ore_need = missing * ratio
         # Produire le ore (récursif — typiquement mine).
         steps += _plan(ProductionGoal(ore, ore_need), sim_inv, recipe_lookup)
+        # LE COMBUSTIBLE FAIT PARTIE DU PLAN. Un four de pierre brûle : sans charbon il
+        # ne fond rien, et l'étape `move_items coal` supposait qu'on en avait déjà.
+        # Mesuré les mains vides : deux fours posés, `fuel=0`, trois minerais en attente
+        # dans l'un d'eux, et le craft suivant échouant sur « manque iron-plate: 0/6 ».
+        # Un plan qui consomme quelque chose doit dire d'où il vient.
+        steps += _plan(ProductionGoal(COMBUSTIBLE_FOUR, 5), sim_inv, recipe_lookup)
         # Smelter dans un four du kit posé près du character.
         steps.append(Step("place_furnace", {}))
         steps.append(Step("move_items", {"item": "coal", "to_entity": True, "count": 5}))
         steps.append(Step("move_items", {"item": ore, "to_entity": True, "count": ore_need}))
         steps.append(Step("wait", {"ticks": _smelt_ticks(ore_need)}))
         steps.append(Step("move_items", {"item": goal.item, "to_entity": False, "count": missing}))
+        # Le four a mangé le minerai et le charbon : la simulation doit le savoir, sinon
+        # la fournée suivante croit disposer d'un stock déjà brûlé.
+        _debit(sim_inv, ore, ore_need)
+        _debit(sim_inv, COMBUSTIBLE_FOUR, 5)
         _credit(sim_inv, goal.item, missing)
 
     elif mode == "craft":
@@ -162,10 +187,13 @@ def _plan(goal: ProductionGoal, sim_inv: dict[str, int],
             raise ValueError(f"aucune recette craftable pour {goal.item!r}")
         per = int(spec.get("per", 1))
         crafts = math.ceil(missing / per)
-        # Produire chaque ingrédient (récursif — arbitre selon l'inventaire).
+        # Produire chaque ingrédient (récursif — arbitre selon l'inventaire), PUIS le
+        # retirer de la simulation : le craft le consomme, et le suivant ne doit pas
+        # croire qu'il l'a encore.
         for ing_name, ing_amount in recipe:
-            steps += _plan(ProductionGoal(ing_name, ing_amount * crafts),
-                           sim_inv, recipe_lookup)
+            besoin = ing_amount * crafts
+            steps += _plan(ProductionGoal(ing_name, besoin), sim_inv, recipe_lookup)
+            _debit(sim_inv, ing_name, besoin)
         steps.append(Step("craft_item", {"item": goal.item, "count": crafts}))
         _credit(sim_inv, goal.item, crafts * per)
 

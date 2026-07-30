@@ -116,6 +116,34 @@ def test_une_recette_inaccessible_le_dit() -> None:
     assert ok
 
 
+def test_le_plan_va_chercher_le_combustible_du_four() -> None:
+    """Un four de pierre BRÛLE : sans charbon, il ne fond rien.
+
+    Mesuré les mains vides : le plan posait le four et faisait `move_items coal` en
+    supposant qu'on en avait. Résultat en jeu — deux fours à `fuel=0`, trois minerais en
+    attente dans l'un d'eux, et le craft suivant échouant sur « manque iron-plate: 0/6 ».
+    Un plan qui consomme quelque chose doit dire d'où il vient.
+    """
+    steps = plan_production(ProductionGoal("iron-plate", 2), {}, _lookup)
+    k = _kinds(steps)
+    mines = [s.args.get("name") for s in steps if s.kind == "mine_entity"]
+    ok = "coal" in mines and k.index("mine_entity") < k.index("place_furnace")
+    rec("test_le_plan_va_chercher_le_combustible_du_four", ok,
+        f"mine {mines} avant de poser le four")
+    assert ok
+
+
+def test_le_charbon_deja_en_poche_ne_se_remine_pas() -> None:
+    """L'inventaire arbitre aussi pour le combustible — sinon on mine pour rien."""
+    steps = plan_production(ProductionGoal("iron-plate", 2),
+                            {"coal": 50, "iron-ore": 10}, _lookup)
+    mines = [s.args.get("name") for s in steps if s.kind == "mine_entity"]
+    ok = mines == []
+    rec("test_le_charbon_deja_en_poche_ne_se_remine_pas", ok,
+        f"avec 50 charbons et 10 minerais : {len(mines)} minage(s)")
+    assert ok
+
+
 def test_les_ressources_restent_minees_et_les_plaques_fondues() -> None:
     """La table garde ce qui ne se déduit PAS d'une recette.
 
@@ -137,6 +165,8 @@ def main() -> int:
               test_le_bootstrap_complet_part_de_rien,
               test_ce_qu_on_possede_ne_se_refabrique_pas,
               test_une_recette_inaccessible_le_dit,
+              test_le_plan_va_chercher_le_combustible_du_four,
+              test_le_charbon_deja_en_poche_ne_se_remine_pas,
               test_les_ressources_restent_minees_et_les_plaques_fondues):
         t()
     print("\n" + "=" * 72)
