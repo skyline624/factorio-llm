@@ -57,6 +57,9 @@ remote.add_interface("fl_tools", {
   find_nearest = function(name) safe(function() return tools.find_nearest(name) end) end,
   describe = function(name) safe(function() return tools.describe(name) end) end,
   get_recipe = function(item) safe(function() return tools.get_recipe(item) end) end,
+  get_technologies = function(pretes)
+    safe(function() return tools.get_technologies(pretes ~= false) end)
+  end,
   production_stats = function() safe(function() return tools.production_stats() end) end,
   -- Validation LayoutPlanner (S0b) : synchrones, non destructives (sauf measure_entity).
   can_place_check = function(name, x, y, direction)

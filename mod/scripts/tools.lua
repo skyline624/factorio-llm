@@ -1148,4 +1148,71 @@ function M.measure_entity(name, x, y, direction)
   return json.encode(m)
 end
 
+-- get_technologies() : ce qui est acquis, ce qui est ouvert, et A QUEL PRIX.
+--
+-- L'agent butait sur des recettes verrouillees sans pouvoir dire pourquoi : il rendait
+-- « ni ressource, ni recette accessible », ce qui melange « je ne sais pas faire » et
+-- « ce n'est pas encore debloque ». Il faut donc exposer l'arbre.
+--
+-- Le prix n'est pas toujours en flacons. Dans Factorio 2.0, le debut de l'arbre est une
+-- chaine de DECLENCHEURS (`research_trigger`) : `electronics` s'ouvre en fabriquant dix
+-- plaques de cuivre, `automation-science-pack` en fabriquant un laboratoire. Une
+-- technologie peut donc etre a portee immediate d'un agent qui sait fondre, sans
+-- laboratoire ni flacon. Ne rendre que `research_unit_ingredients` afficherait « gratuit »
+-- pour ces technologies-la et laisserait l'agent attendre un cout qui ne vient jamais.
+--
+-- `pret` dit que TOUS les prerequis sont acquis -- c'est-a-dire recherchable MAINTENANT,
+-- la seule categorie sur laquelle une decision peut porter.
+function M.get_technologies(seulement_pretes)
+  local force = player_mod.get_ai_force()
+  local acquises, ouvertes = {}, {}
+  for _, t in pairs(force.technologies) do
+    if t.researched then
+      table.insert(acquises, t.name)
+    elseif t.enabled then
+      local pret = true
+      for _, p in pairs(t.prerequisites) do
+        if not p.researched then pret = false break end
+      end
+      if pret or not seulement_pretes then
+        local cout = {}
+        for _, u in pairs(t.research_unit_ingredients) do
+          table.insert(cout, {name = u.name, count = u.amount})
+        end
+        local row = {
+          name = t.name,
+          pret = pret,
+          unites = t.research_unit_count,
+          cout = cout,
+          debloque = {},
+        }
+        -- Le declencheur, quand il y en a un : type ("craft-item", "mine-entity", ...),
+        -- item ou entite vise, et combien. C'est ce qui rend la premiere marche
+        -- franchissable sans laboratoire.
+        local ok, tr = pcall(function() return t.prototype.research_trigger end)
+        if ok and tr then
+          local cible = nil
+          if tr.item then cible = (type(tr.item) == "table" and tr.item.name) or tr.item end
+          if not cible and tr.entity then cible = tr.entity end
+          if not cible and tr.fluid then cible = tr.fluid end
+          row.declencheur = {type = tostring(tr.type), cible = cible,
+                             count = tr.count or 1}
+        end
+        -- Ce que la technologie OUVRE : sans cela, l'agent sait qu'il peut chercher,
+        -- mais pas si cela lui sert a quelque chose.
+        local ok2, effets = pcall(function() return t.prototype.effects end)
+        if ok2 and effets then
+          for _, e in pairs(effets) do
+            if e.recipe then table.insert(row.debloque, e.recipe) end
+          end
+        end
+        table.insert(ouvertes, row)
+      end
+    end
+  end
+  return json.encode({acquises = acquises, ouvertes = ouvertes,
+                      en_cours = force.current_research and force.current_research.name or nil,
+                      progres = force.research_progress})
+end
+
 return M

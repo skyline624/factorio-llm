@@ -94,6 +94,16 @@ class ModApi:
         """Ingredients + enabled d'une recette (JSON homogene)."""
         return self._call("fl_tools", "get_recipe", item)
 
+    def get_technologies(self, seulement_pretes: bool = True) -> dict:
+        """L'arbre des technologies : acquises, ouvertes, leur cout ET leur declencheur.
+
+        Le debut de l'arbre 2.0 ne se paie pas en flacons mais en GESTES : `electronics`
+        s'ouvre en fabriquant dix plaques de cuivre, `automation-science-pack` en
+        fabriquant un laboratoire. Sans cette lecture, l'agent voyait une recette
+        verrouillee sans pouvoir dire ce qui l'ouvrirait.
+        """
+        return self._call("fl_tools", "get_technologies", seulement_pretes)
+
     def production_stats(self) -> dict:
         """Compteurs cumules de production/consommation de la force."""
         return self._call("fl_tools", "production_stats")
