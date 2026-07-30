@@ -363,6 +363,43 @@ def test_sous_objectif_il_etend_au_lieu_de_ne_rien_faire() -> None:
     assert ok
 
 
+def test_on_n_agrandit_pas_une_usine_qui_manque_de_courant() -> None:
+    """Étendre sous un réseau saturé arrête ce qui produisait.
+
+    Mesuré : le débit tenait 1.96 avec quatorze machines sur quatorze en marche, puis une
+    extension de plus faisait tomber le réseau entier — seize machines, ZÉRO en marche,
+    débit 0.51. On laisse l'énergie rattraper avant d'ajouter une bouche à nourrir ; la
+    panne `sans_courant` appelle de toute façon `renforcer_energie`, qui est prioritaire.
+    """
+    etat = _etat(machines=4)
+    etat.objectif, etat.debit, etat.satisfaction = 2.0, 0.5, 0.60
+    d = decide(etat)
+    ok = d.action != "etendre_production"
+    rec("test_on_n_agrandit_pas_une_usine_qui_manque_de_courant", ok,
+        f"{d.action} (satisfaction 0.60, débit 0.5 pour 2.0)")
+    assert ok
+
+
+def test_reseau_sain_on_etend_normalement() -> None:
+    """Le pendant : avec du courant en réserve, la règle ne bride pas la croissance."""
+    etat = _etat(machines=4)
+    etat.objectif, etat.debit, etat.satisfaction = 2.0, 0.5, 1.0
+    d = decide(etat)
+    ok = d.action == "etendre_production"
+    rec("test_reseau_sain_on_etend_normalement", ok, f"{d.action} (satisfaction 1.0)")
+    assert ok
+
+
+def test_satisfaction_non_mesuree_ne_bride_pas() -> None:
+    """`None` n'est pas « saturé » : sans mesure, on garde le comportement d'avant."""
+    etat = _etat(machines=4)
+    etat.objectif, etat.debit, etat.satisfaction = 2.0, 0.5, None
+    d = decide(etat)
+    ok = d.action == "etendre_production"
+    rec("test_satisfaction_non_mesuree_ne_bride_pas", ok, f"{d.action} (satisfaction None)")
+    assert ok
+
+
 def test_objectif_tenu_il_ne_fait_rien() -> None:
     """Et il s'arrête quand l'objectif est tenu : agrandir sans fin n'est pas un but."""
     etat = _etat(machines=4)

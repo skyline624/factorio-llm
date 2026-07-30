@@ -292,7 +292,11 @@ def main(argv: list[str]) -> int:
                   if d.get("debit") is not None]
         tour_debit, dernier = connus[-1] if connus else (None, None)
         atteint = dernier is not None and dernier >= objectif * 0.9
-        print(f"       objectif : {dernier} {'≥' if atteint else '<'} {objectif} "
+        # « >= » et non « ≥ » : la sortie standard de Windows est en cp1252 dès qu'elle
+        # est redirigée vers un fichier, et le signe mathématique n'y existe pas. Mesuré :
+        # une partie de trente minutes menée à son terme, puis perdue sur un
+        # UnicodeEncodeError au moment d'afficher son bilan.
+        print(f"       objectif : {dernier} {'>=' if atteint else '<'} {objectif} "
               f"iron-plate/s — {'TENU' if atteint else 'non tenu'}"
               + (f" (dernière mesure au tour {tour_debit})" if tour_debit else ""))
         if connus:

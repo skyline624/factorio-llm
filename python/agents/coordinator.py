@@ -77,6 +77,11 @@ FENETRE_DEBIT = 600
 # indéfiniment sur du bruit de mesure.
 MARGE_OBJECTIF = 0.9
 
+# En dessous de cette satisfaction du réseau, on cesse d'agrandir : le courant ne suit
+# déjà plus. `satisfaction` vaut 1.0 quand toutes les machines reçoivent ce qu'elles
+# demandent ; 0.95 laisse passer les creux normaux d'un boiler qui se recharge.
+SATISFACTION_MINI = 0.95
+
 # Au-delà de ce nombre d'interventions MANUELLES sur la même machine, on cesse de
 # dépanner et on automatise. Remplir un réservoir est une réparation ; le remplir
 # indéfiniment est l'aveu qu'il manque une chaîne d'approvisionnement. Le seuil vaut
@@ -149,6 +154,9 @@ class EtatUsine:
     debit: Optional[float] = None
     objectif: Optional[float] = None
     objectif_item: str = ""
+    # Ce que le réseau arrive à fournir, entre 0 et 1. `None` = pas mesuré, ce qui n'est
+    # pas « tout va bien » : on n'agrandit pas une usine sur une mesure absente.
+    satisfaction: Optional[float] = None
     # Échecs consécutifs par (action, cible). Sans cette mémoire, une action impossible
     # est retentée indéfiniment : la boucle tourne sans avancer, ce qui ne se voit pas.
     echecs: dict = field(default_factory=dict)
@@ -424,7 +432,15 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
             ("etendre_production",
              (etat.objectif is not None and etat.debit is not None
               and etat.machines > 0
-              and etat.debit < etat.objectif * MARGE_OBJECTIF),
+              and etat.debit < etat.objectif * MARGE_OBJECTIF
+              # Ne pas agrandir une usine que le courant ne suit déjà plus. Mesuré :
+              # le débit montait à 1.96 avec quatorze machines sur quatorze en marche,
+              # puis une extension de plus faisait tomber le réseau entier — seize
+              # machines, ZÉRO en marche, débit 0.51. Étendre sous un réseau saturé ne
+              # produit rien et arrête ce qui produisait ; la panne `sans_courant` qui
+              # s'ensuit appelle `renforcer_energie`, qui est prioritaire. On laisse donc
+              # l'énergie rattraper avant d'ajouter une bouche à nourrir.
+              and (etat.satisfaction is None or etat.satisfaction >= SATISFACTION_MINI)),
              (f"{etat.debit:.2f} {etat.objectif_item}/s produits pour "
               f"{etat.objectif:.2f} demandés : l'usine tient, elle ne suffit pas"
               if etat.debit is not None and etat.objectif is not None else ""),
@@ -628,6 +644,9 @@ class Coordinator:
                 if isinstance(ps, dict) and ps.get("networkId") is not None:
                     etat.reseau = ps.get("networkId")
                     etat.production_kw = float(ps.get("productionKW") or 0.0)
+                    sat = ps.get("satisfaction")
+                    etat.satisfaction = (float(sat) if isinstance(sat, (int, float))
+                                         and not isinstance(sat, bool) else None)
                     break
         etat.inventaire = perception.inventory(self.api)
         etat.ravitaillements = dict(self._ravitaillements)
@@ -1213,6 +1232,73 @@ class Coordinator:
         return ok, (f"{machine}@{pose} fabrique « {item} » pour {cible.name} "
                     f"({bras}@{livraison[:2]}) — entrée : {detail}")
 
+    def _alimenter_la_chaine(self, ancre: tuple[float, float],
+                             rayon: float = 8.0) -> int:
+        """Vérifie que CHAQUE machine fraîchement posée reçoit du courant, et la relie.
+
+        Une chaîne à moitié branchée ne produit rien et ne se voit pas : mesuré, le foreur
+        tournait pendant que son inserter et son four étaient `no_power`, si bien que le
+        minerai tombait par terre — `item-on-ground` au drop, foreur en
+        `waiting_for_space_in_destination`, et trois chaînes ajoutées pour zéro plaque de
+        plus. `place_supply_poles` avait pourtant posé ses poteaux : desservir n'est pas
+        alimenter, et personne ne le vérifiait au moment où c'était le moins cher à
+        corriger.
+
+        On le fait donc À LA POSE, quand on sait exactement ce qu'on vient de bâtir, au
+        lieu d'attendre que le diagnostic le redécouvre machine par machine.
+        """
+        r = self.api.inspect_at(ancre[0], ancre[1], rayon)
+        lignes = r.get("entities", []) if isinstance(r, dict) else []
+        relies = 0
+        for e in lignes:
+            if e.get("type") not in ("mining-drill", "furnace", "inserter",
+                                     "assembling-machine"):
+                continue
+            x, y = float(e.get("x", 0.0)), float(e.get("y", 0.0))
+            etat = self.api.get_power_state(x, y, 3.0) or {}
+            if etat.get("connected") is True:
+                continue
+            faux = Symptome(name=str(e.get("name")), x=x, y=y, cause="debranchee",
+                            gravite=2, detail="posée à l'instant, sans courant")
+            ok, _ = self.relier(faux)
+            relies += 1 if ok else 0
+        return relies
+
+    def _evacuer_la_chaine(self, ancre: tuple[float, float],
+                           rayon: float = 8.0) -> str:
+        """Pose le ramassage en sortie DÈS la construction, sans attendre le bouchon.
+
+        La bascule d'E21 attend deux vidages manuels par machine avant de bâtir un
+        ramassage. C'est le bon réflexe pour une machine qui se bouche par accident, et
+        c'est trop lent pour une usine qui grandit : mesuré sur une partie de 63 tours,
+        `evacuer` est revenu QUATORZE fois et `machine_pleine` a été conclue vingt fois,
+        pendant que le débit oscillait entre 1.1 et 2.4 au lieu de tenir. Chaque nouvelle
+        chaîne doit d'abord se boucher deux fois pour mériter son coffre.
+
+        Un four qu'on vient de poser finira par se remplir — ce n'est pas un incident,
+        c'est une certitude. On lui donne donc sa sortie tout de suite, au moment où l'on
+        sait exactement où il est et où la place est libre.
+        """
+        r = self.api.inspect_at(ancre[0], ancre[1], rayon)
+        lignes = r.get("entities", []) if isinstance(r, dict) else []
+        poses, deja = 0, 0
+        for e in lignes:
+            if e.get("type") not in ("furnace", "assembling-machine"):
+                continue
+            x, y = float(e.get("x", 0.0)), float(e.get("y", 0.0))
+            # Un coffre déjà à portée signifie que la sortie est servie : on ne double pas.
+            voisins = self.api.inspect_at(x, y, 4.0)
+            proches = voisins.get("entities", []) if isinstance(voisins, dict) else []
+            if any(v.get("name") == "wooden-chest" for v in proches):
+                deja += 1
+                continue
+            cible = Symptome(name=str(e.get("name")), x=x, y=y, cause="sortie_bloquee",
+                             gravite=1, detail="posée à l'instant, sortie non ramassée")
+            ok, _ = self.batir_evacuation(cible)
+            poses += 1 if ok else 0
+        return (f"{poses} ramassage(s) posé(s)"
+                + (f", {deja} déjà servi(s)" if deja else ""))
+
     def relier(self, cible, pole: str = "small-electric-pole") -> tuple[bool, str]:
         """Rattache une machine au réseau — en tirant une LIGNE si le réseau est loin.
 
@@ -1686,10 +1772,13 @@ class Coordinator:
             if rap.ok:
                 ancrage = self.dernier_poteau or ancre
                 poteaux = site_finder.place_supply_poles(self.api, rap.placed, ancrage)
+                relies = self._alimenter_la_chaine(ancre)
+                vidange = self._evacuer_la_chaine(ancre)
                 return True, (f"chaîne posée ({len(rap.placed)} machines) sur "
                               f"{self.ressource} en {ancre}, {len(poteaux)} poteau(x) "
-                              f"de desserte" + (f" — {len(essais)} ancre(s) occupée(s) "
-                                                f"écartée(s)" if essais else ""))
+                              f"de desserte, {relies} raccordement(s), {vidange}"
+                              + (f" — {len(essais)} ancre(s) occupée(s) écartée(s)"
+                                 if essais else ""))
             # Un manque d'INVENTAIRE ne se résoudra pas en changeant d'endroit : insister
             # ferait payer six plans pour le même refus.
             if rap.missing:
