@@ -363,6 +363,36 @@ def test_sous_objectif_il_etend_au_lieu_de_ne_rien_faire() -> None:
     assert ok
 
 
+def test_compter_machines_rend_moins_un_si_illisible() -> None:
+    """Zéro machine est un état PLAUSIBLE : le confondre avec une panne de mesure ferait
+    conclure qu'une extension a échoué alors qu'on n'a rien pu lire.
+
+    Même règle que `production_cumulee` : on distingue « il n'y en a pas » de « je ne
+    sais pas ». C'est la sixième fois dans ce chantier qu'un zéro se fait passer pour une
+    absence — le test est là pour que ce soit la dernière.
+    """
+    from services.perception import compter_machines
+
+    class _Rcon:
+        def __init__(self, r): self.r = r
+        def query_lua(self, code):
+            if isinstance(self.r, Exception):
+                raise self.r
+            return self.r
+
+    class _Api:
+        def __init__(self, r): self.rcon = _Rcon(r)
+
+    lisible = compter_machines(_Api("7"), 0.0, 0.0, 25.0)
+    vide = compter_machines(_Api("0"), 0.0, 0.0, 25.0)
+    illisible = compter_machines(_Api("pas un nombre"), 0.0, 0.0, 25.0)
+    mort = compter_machines(_Api(RuntimeError("rcon mort")), 0.0, 0.0, 25.0)
+    ok = lisible == 7 and vide == 0 and illisible == -1 and mort == -1
+    rec("test_compter_machines_rend_moins_un_si_illisible", ok,
+        f"lisible={lisible} zero={vide} illisible={illisible} rcon_mort={mort}")
+    assert ok
+
+
 def test_une_satisfaction_basse_ne_bloque_pas_la_croissance() -> None:
     """Ce test dit l'inverse de ce que j'avais d'abord écrit, et la mesure a tranché.
 

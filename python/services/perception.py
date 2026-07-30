@@ -110,7 +110,10 @@ def compter_machines(api: ModApi, x: float, y: float, rayon: float,
             f"area={{{{{x - rayon},{y - rayon}}},{{{x + rayon},{y + rayon}}}}}}} "
             f"rcon.print(n)")
         return int(str(brut).strip())
-    except (AttributeError, ValueError, TypeError):
+    except Exception:
+        # `Exception` et non un triplet choisi : un serveur qui tombe lève `RconError`,
+        # qui n'est ni une AttributeError ni une ValueError et traversait donc le filet.
+        # Une mesure impossible doit rendre -1, jamais interrompre l'observation.
         return -1
 
 
@@ -132,7 +135,9 @@ def production_cumulee(api: ModApi, item: str) -> int:
             "local s = game.forces.player.get_item_production_statistics(game.surfaces[1]) "
             f"rcon.print(s.get_input_count('{item}'))")
         return int(str(brut).strip())
-    except (AttributeError, ValueError, TypeError):
+    except Exception:
+        # Même raison qu'à `compter_machines` : `RconError` traversait un filet trop
+        # étroit, et une mesure de débit impossible faisait tomber tout le tour.
         return -1
 
 
