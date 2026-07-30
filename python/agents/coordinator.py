@@ -1846,12 +1846,25 @@ class Coordinator:
                 ok, detail = self.amener(s_nom, ou, "assembling-machine-1")
                 (faits if ok else manques).append(f"[pour {nom}] {detail}")
 
-        for nom in besoins:
-            if self._source_de(nom) is None:
-                manques.append(f"{nom} : toujours aucune source")
-                continue
-            ok, detail = self.amener(nom, cible, "assembling-machine-1")
-            (faits if ok else manques).append(detail)
+        # ON LAISSE LEUR CHANCE AUX CHAÎNES LOINTAINES. Celle du cuivre est à soixante-dix
+        # tuiles : entre la pose et la première plaque, il faut extraire, transporter et
+        # fondre. Une seule tentative concluait « toujours aucune source » sur une chaîne
+        # qui démarrait — et l'agent renonçait définitivement à s'y brancher.
+        restants = list(besoins)
+        for passe in range(3):
+            encore = []
+            for nom in restants:
+                if self._source_de(nom) is None:
+                    encore.append(nom)
+                    continue
+                ok, detail = self.amener(nom, cible, "assembling-machine-1")
+                (faits if ok else manques).append(detail)
+            restants = encore
+            if not restants or passe == 2:
+                break
+            self.api.run_action(self.api.wait, 1800, timeout=400.0)
+        for nom in restants:
+            manques.append(f"{nom} : aucune source après trois tentatives")
 
         return bool(faits) and not manques, (
             f"science alimentée : {' ; '.join(faits)}"
@@ -2086,6 +2099,17 @@ class Coordinator:
                         self.api, (sx + vers[0]) / 2, (sy + vers[1]) / 2,
                         max(16.0, distance))
                     if e.get("type") == "transport-belt"}
+        # ON S'ÉCARTE AVANT DE DÉROULER. `can_place` refuse une pose SOUS l'avatar, et
+        # l'agent se tient justement là : il vient de miner le minerai qui alimente cette
+        # source. La première tuile de la belt manquait donc, et sans elle aucun bras ne
+        # pouvait charger — « 79 tuiles posées, tracé INTERROMPU, SANS bras de
+        # chargement », pour deux trous sur de la terre ordinaire.
+        from services import deplacement
+        depuis = deplacement.position(self.api)
+        if math.hypot(depuis[0] - vers_src[0], depuis[1] - vers_src[1]) < 4.0:
+            self.api.run_action(self.api.walk_to, vers_src[0], vers_src[1] + 6.0,
+                                timeout=60.0)
+
         tuiles, complete = site_finder.place_belt_line(
             self.api, vers_src, vers_cible, belt=belt, eviter=occupees)
         if not tuiles:

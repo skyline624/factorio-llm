@@ -241,7 +241,9 @@ def main() -> int:
     actives = sum(1 for a, b in zip([cumul_depart] + cumuls, cumuls) if b > a)
 
     # --- Rec 4 : l'agent a monté la chaîne (constat de forme) ---
-    rec("4: la chaîne d'alimentation est montée", ok_alim, detail_alim[:115])
+    # Le détail est passé ENTIER : `rec` tronque l'affichage courant mais déroule les
+    # échecs. Le couper ici privait le bilan de ce qui manquait justement.
+    rec("4: la chaîne d'alimentation est montée", ok_alim, detail_alim)
 
     # --- Rec 5 : LE CONSTAT QUI TRANCHE — les ingrédients arrivent, et ILS REVIENNENT ---
     # Les quatre précédents peuvent être verts pendant que rien ne circule. Exiger
