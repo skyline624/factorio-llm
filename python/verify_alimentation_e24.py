@@ -2,23 +2,27 @@
 
 `automatiser_la_science` a monté le maillon aval — une assembleuse verse ses flacons
 dans le laboratoire. Mais elle tournait sur une provision déposée à la main : elle
-s'arrêtait dès qu'elle l'avait consommée, et il fallait revenir la remplir. Tant que
-c'est l'agent qui porte, rien ne tourne en son absence.
+s'arrêtait dès qu'elle l'avait consommée. Tant que c'est l'agent qui porte, rien ne
+tourne en son absence. Ce qui est éprouvé ici est l'amont : `alimenter_la_science` va
+chercher une machine qui PRODUIT chaque ingrédient et l'amène par bras + belt + bras.
 
-Ce qui est éprouvé ici est l'amont : l'agent va chercher une machine qui PRODUIT chaque
-ingrédient, en bâtit une s'il n'en existe pas, et l'amène par bras + belt + bras.
+**CE BANC POSE SA PROPRE SCÈNE**, et c'est le fruit d'une leçon coûteuse. Une première
+version demandait à l'agent de tout construire — centrale, chaîne de fer, chaîne de
+cuivre à soixante-treize tuiles, laboratoire, deux assembleuses, quatre-vingts tuiles de
+belt — puis mesurait le convoyage au bout de cette accumulation. Résultat : un verdict
+qui oscillait entre 2/6 et 5/6 sur le MÊME code, où l'on ne pouvait plus distinguer
+l'effet d'un correctif du bruit du système. Il ne mesurait pas le convoyage, il mesurait
+la somme de toutes les fragilités du projet.
 
-L'ordre des constats n'est pas indifférent. Les quatre premiers peuvent être verts
-pendant que rien ne circule — c'est exactement ce qui a été observé avant de trouver un
-bras de chargement sans courant, à soixante-dix tuiles de la centrale : belt déroulée,
-bras posés aux deux bouts, et pas un objet transporté. **Seul le constat 5 tranche.**
+Les autres bancs du projet ne font pas cela : `verify_doctor_e6` monte sa panne avant de
+juger le diagnostic, il ne demande pas d'abord de bâtir une usine. On fait pareil — deux
+sources pérennes posées À COURTE DISTANCE, alimentées par un coffre et un bras, et l'on
+n'éprouve que ce qu'on prétend éprouver.
 
-Une précaution de mise en scène, et elle est assumée : on garantit que la source A DE
-QUOI produire (minerai et combustible) avant d'éprouver le convoyage. Le sujet de ce
-banc est le TRANSPORT, pas l'endurance d'une chaîne minière ; une source à sec ferait
-échouer le test pour une raison étrangère à ce qu'il mesure — et se lirait comme un
-défaut du convoyage. C'est la leçon de la journée : un banc doit monter sa scène, et le
-dire quand il n'y arrive pas.
+Ce qui reste éprouvé, sans rien relâcher : les deux flux ne se rejoignent pas, la belt
+est chaînée, les bras ont du courant, la chaîne se monte, l'assembleuse est servie de
+façon répétée, et la production se poursuit sur six fenêtres. La CONSTRUCTION des chaînes
+minières, elle, a ses propres bancs (`verify_bootstrap_craft`, `verify_objectif_e22`).
 
 Lancement (serveur Factorio + mod requis) :
     cd python
@@ -41,16 +45,13 @@ RESULTS: list[tuple[str, bool, str]] = []
 def rec(name: str, ok: bool, detail: str) -> None:
     RESULTS.append((name, ok, detail))
     print(f"[{'OK  ' if ok else 'FAIL'}] {name:52s} {detail[:115]}", flush=True)
-    # UN ÉCHEC SE LIT EN ENTIER. Tronqué à cent quinze caractères, le motif s'arrêtait
-    # juste avant ce qui manquait — et l'on relançait un banc de vingt minutes pour
-    # apprendre ce que la première ligne aurait pu dire.
     if not ok and len(detail) > 115:
         for suite in range(115, len(detail), 115):
             print(f"       {detail[suite:suite + 115]}", flush=True)
 
 
 def _science(rcon) -> dict:
-    """L'assembleuse réglée sur le flacon : son entrée, sa sortie, son statut."""
+    """L'assembleuse réglée sur le flacon : entrée, sortie, position, contenu."""
     brut = str(rcon.query_lua(
         f"local s = game.surfaces[1] local out = '' "
         f"for _, e in pairs(s.find_entities_filtered{{name='assembling-machine-1'}}) do "
@@ -58,33 +59,48 @@ def _science(rcon) -> dict:
         f"  if ok and r and r.name == '{FLACON}' then "
         f"    local i = e.get_inventory(defines.inventory.assembling_machine_input) "
         f"    local o = e.get_inventory(defines.inventory.assembling_machine_output) "
+        f"    local d = {{}} "
+        f"    if i then for _, st in pairs(i.get_contents()) do "
+        f"      d[#d+1] = st.name .. 'x' .. st.count end end "
         f"    out = (i and i.get_item_count() or -1) .. '|' .. "
         f"(o and o.get_item_count() or -1) .. '|' .. e.position.x .. '|' .. e.position.y "
+        f".. '|' .. table.concat(d, ',') "
         f"  end end rcon.print(out)")).strip()
     m = brut.split("|")
-    if len(m) != 4:
+    if len(m) < 4:
         return {}
     try:
-        etat = {"entree": int(m[0]), "sortie": int(m[1]),
-                "x": float(m[2]), "y": float(m[3])}
+        return {"entree": int(m[0]), "sortie": int(m[1]),
+                "x": float(m[2]), "y": float(m[3]),
+                "contenu": m[4] if len(m) > 4 else ""}
     except ValueError:
         return {}
-    # QUELS ingrédients, et pas seulement combien. Un total de deux ne dit pas si la
-    # recette peut tourner : deux plaques de cuivre sans engrenage ne produisent rien, et
-    # c'est précisément ce qui arrivait — l'entrée servie en continu, la production à
-    # l'arrêt faute du second ingrédient.
-    detail = str(rcon.query_lua(
-        f"local s = game.surfaces[1] local out = '' "
-        f"for _, e in pairs(s.find_entities_filtered{{name='assembling-machine-1'}}) do "
-        f"  local ok, r = pcall(function() return e.get_recipe() end) "
-        f"  if ok and r and r.name == '{FLACON}' then "
-        f"    local i = e.get_inventory(defines.inventory.assembling_machine_input) "
-        f"    if i then local d = {{}} "
-        f"      for _, st in pairs(i.get_contents()) do "
-        f"        d[#d+1] = st.name .. 'x' .. st.count end "
-        f"      out = table.concat(d, ',') end end end rcon.print(out)")).strip()
-    etat["contenu"] = detail
-    return etat
+
+
+def _poser_source(rcon, item: str, minerai: str, x: float, y: float) -> str:
+    """Une source PÉRENNE, posée par le banc : coffre -> bras -> four.
+
+    Pérenne au sens de l'agent : une machine qu'un bras remplit tout seul. Un four qu'on
+    garnit à la main ferait illusion le temps d'une fournée, puis tarirait — et le banc
+    mesurerait alors l'endurance d'une chaîne minière au lieu du convoyage.
+    """
+    return str(rcon.query_lua(
+        f"local s = game.surfaces[1] local f = game.forces.player "
+        f"for _, e in pairs(s.find_entities_filtered{{area={{{{{x - 4},{y - 4}}},"
+        f"{{{x + 4},{y + 4}}}}}, force='player'}}) do e.destroy() end "
+        f"local four = s.create_entity{{name='electric-furnace', position={{{x},{y}}}, "
+        f"force=f}} "
+        f"local coffre = s.create_entity{{name='wooden-chest', position={{{x + 3},{y}}}, "
+        f"force=f}} "
+        f"local bras = s.create_entity{{name='inserter', position={{{x + 1.5},{y}}}, "
+        f"force=f, direction=defines.direction.west}} "
+        f"local pole = s.create_entity{{name='small-electric-pole', "
+        f"position={{{x - 2.5},{y + 2.5}}}, force=f}} "
+        f"if not (four and coffre and bras) then rcon.print('echec') return end "
+        f"coffre.get_inventory(defines.inventory.chest).insert{{name='{minerai}', "
+        f"count=2000}} "
+        f"rcon.print(string.format('%s@(%.0f,%.0f) servi par un bras depuis un coffre', "
+        f"'{item}', four.position.x, four.position.y))")).strip()
 
 
 def main() -> int:
@@ -102,11 +118,35 @@ def main() -> int:
 
     api.set_test_mode(True)
     rcon.query_lua("game.speed = 30 rcon.print(1)")
-    coord = Coordinator(api, zone=deplacement.position(api), rayon=25.0)
+    zone = deplacement.position(api)
+    coord = Coordinator(api, zone=zone, rayon=25.0)
 
-    # L'énergie d'abord : une assembleuse sans courant a une recette et ne fait rien.
+    # --- SCÈNE : l'énergie, puis DEUX SOURCES pérennes à courte distance ---
     for _ in range(2):
         coord.tick()
+    cuivre = _poser_source(rcon, "copper-plate", "copper-ore", zone[0] - 14, zone[1] - 6)
+    fer = _poser_source(rcon, "iron-plate", "iron-ore", zone[0] + 14, zone[1] - 6)
+    # Les fours sont électriques : ils doivent être reliés comme le reste.
+    for dx in (-14, 14):
+        coord.brancher("electric-furnace", zone[0] + dx, zone[1] - 6)
+        coord.brancher("inserter", zone[0] + dx + 1.5, zone[1] - 6)
+    # Les chaudières sont regarnies : un boiler brûle son charbon en moins de deux
+    # minutes, et sur les neuf mille ticks de la mesure tout s'arrêterait.
+    rcon.query_lua(
+        "local s = game.surfaces[1] "
+        "for _, e in pairs(s.find_entities_filtered{name='boiler'}) do "
+        "  local f = e.get_fuel_inventory() if f then f.insert{name='coal', count=200} end end "
+        "rcon.print('ok')")
+    api.run_action(api.wait, 600, timeout=180.0)
+    print(f"       scène : {cuivre} | {fer}", flush=True)
+
+    reseau = api.get_power_state(zone[0], zone[1], 6.0) or {}
+    if float(reseau.get("productionKW") or 0) <= 0:
+        print("[SKIP] SCENE NON MONTEE : le réseau ne produit rien — ce banc éprouve le "
+              "transport, pas la tenue d'une centrale.")
+        rcon.close()
+        return 0
+
     ok_auto, detail_auto = coord.automatiser_la_science()
     if not ok_auto:
         print(f"[SKIP] la science n'a pas pu être automatisée ({detail_auto[:90]}) — "
@@ -115,68 +155,17 @@ def main() -> int:
         return 0
 
     ok_alim, detail_alim = coord.alimenter_la_science()
-    # Le réseau se mesure à L'USINE, pas là où le personnage se trouve : il vient
-    # peut-être de marcher soixante-dix tuiles pour miner du cuivre, et l'on lirait
-    # « 0 kW » sur un coin de carte sans le moindre poteau — puis « SCENE NON MONTEE »
-    # sur une centrale qui tourne.
-    ou_science = _science(rcon)
-    cible_zone = (ou_science.get("x", coord.zone[0]), ou_science.get("y", coord.zone[1]))
 
-    # LA SCÈNE SE MONTE AVANT TOUT CONSTAT, et non au milieu. Placée après les premiers
-    # constats, elle les faisait échouer pour une raison qui ne les regardait pas : un
-    # four qui vient d'être posé n'a pas encore de recette — il n'a rien fondu — et reste
-    # donc invisible comme « source », si bien que le constat 1 concluait « rien ne
-    # produit de copper-plate » sur une chaîne pourtant bâtie.
-    # COMBUSTIBLE SEULEMENT, jamais de minerai. Une première version insérait du
-    # copper-ore dans TOUS les fours : le four de fer se mettait alors à produire du
-    # cuivre, et le constat 1 — « une source de cuivre a été bâtie » — passait pour une
-    # raison qui n'avait rien à voir avec l'agent. Un banc qui fournit lui-même ce qu'il
-    # prétend mesurer ne mesure rien. Le minerai doit venir de la foreuse ; seul le
-    # combustible, que rien n'apporte encore automatiquement, est donné.
-    amorce = str(rcon.query_lua(
-        "local s = game.surfaces[1] local n = 0 "
-        "for _, e in pairs(s.find_entities_filtered{type='furnace', force='player'}) do "
-        "  local f = e.get_fuel_inventory() "
-        "  if f then f.insert{name='coal', count=30} n = n + 1 end end rcon.print(n)")).strip()
-    # LA CENTRALE AUSSI. Un boiler brûle son charbon en moins de deux minutes ; sur les
-    # neuf mille ticks que dure la mesure, il tombe à sec et TOUT s'arrête — bras,
-    # assembleuses, laboratoire. On lisait alors « les engrenages ne partent pas » et
-    # l'on accusait le convoyage, alors que le réseau ne produisait plus rien
-    # (`productionKW=0`, steam-engine à zéro). Le sujet de ce banc est le transport ; la
-    # tenue d'une centrale a le sien.
-    chaudieres = str(rcon.query_lua(
-        "local s = game.surfaces[1] local n = 0 "
-        "for _, e in pairs(s.find_entities_filtered{name='boiler'}) do "
-        "  local f = e.get_fuel_inventory() "
-        "  if f then f.insert{name='coal', count=100} n = n + 1 end end rcon.print(n)")).strip()
-    # Le temps que les fours prennent leur recette et que le réseau reparte.
-    api.run_action(api.wait, 300, timeout=120.0)
-    reseau = api.get_power_state(cible_zone[0], cible_zone[1], 3.0) or {}
-    produit_kw = float(reseau.get("productionKW") or 0)
-    print(f"       scène : {amorce} four(s) et {chaudieres} chaudière(s) amorcé(s), "
-          f"réseau à {produit_kw:.0f} kW", flush=True)
-    if produit_kw <= 0:
-        print("[SKIP] SCENE NON MONTEE : le réseau ne produit rien, tout serait à "
-              "l'arrêt — ce banc éprouve le transport, pas la tenue d'une centrale.")
-        rcon.query_lua("game.speed = 1 rcon.print(1)")
-        rcon.close()
-        return 0
+    # --- Rec 1 : les deux sources sont RECONNUES ---
+    # L'agent doit voir ce qui produit, et ne retenir que ce qui est réellement alimenté :
+    # un four garni à la main ferait illusion une fournée puis tarirait.
+    src_cu = coord._source_de("copper-plate")
+    src_fe = coord._source_de("iron-plate")
+    rec("1: les deux sources pérennes sont reconnues",
+        src_cu is not None and src_fe is not None,
+        f"cuivre -> {src_cu[0] if src_cu else 'AUCUNE'} ; fer -> {src_fe[0] if src_fe else 'AUCUNE'}")
 
-    # --- Rec 1 : une source a été BÂTIE pour ce que l'agent ne produisait pas ---
-    # Toutes ses chaînes étaient du fer ; le flacon réclame du cuivre. Le critère est la
-    # SOURCE — une machine qui produit la plaque —, et non le `mining_target` d'une
-    # foreuse : une foreuse dont le minerai vient de s'épuiser rend `nil` et ferait
-    # échouer le constat alors que la chaîne a bien été bâtie.
-    source_cuivre = coord._source_de("copper-plate")
-    rec("1: une source est bâtie pour un ingrédient jamais produit",
-        source_cuivre is not None,
-        (f"{source_cuivre[0]}@({source_cuivre[1]:.0f},{source_cuivre[2]:.0f}) produit du "
-         f"copper-plate — toutes les chaînes précédentes étaient du fer")
-        if source_cuivre else "rien ne produit de copper-plate")
-
-    # --- Rec 2 : la belt est posée ET orientée vers l'aval ---
-    # Une seule tuile à l'envers arrête le flux sans que rien ne le signale à la pose.
-    # On vérifie donc que chaque segment pointe vers le suivant.
+    # --- Rec 2 : la belt est posée ET chaînée ---
     belts = str(rcon.query_lua(
         "local s = game.surfaces[1] local n, casses = 0, 0 "
         "local dirs = {[0]={x=0,y=-1},[4]={x=1,y=0},[8]={x=0,y=1},[12]={x=-1,y=0}} "
@@ -194,23 +183,8 @@ def main() -> int:
     rec("2: la belt est posée et chaînée", total not in ("", "0") and isoles == "0",
         f"{total} tuile(s) de belt, {isoles} isolée(s) (ni amont ni aval)")
 
-    # --- Rec 3 : les bras du CONVOYAGE ont du courant ---
-    # Un bras électrique posé loin de la centrale se pose sans erreur et ne transporte
-    # rien. Mesuré : `courant=false, energie=0` à soixante-dix tuiles.
-    #
-    # Deux précautions, apprises ici même. On ne compte que les bras qui bordent une
-    # belt — ce sont ceux du convoyage, les autres relèvent des chaînes de production et
-    # ont leur propre banc. Et l'on mesure APRÈS avoir laissé le jeu prendre acte : lu
-    # dans la foulée de la pose, un bras tout juste raccordé se déclare encore sans
-    # courant, et le constat accuse un défaut qui n'existe plus une seconde plus tard.
-    api.run_action(api.wait, 120, timeout=60.0)
-    # ÊTRE RACCORDÉ N'EST PAS ÊTRE ALIMENTÉ. Ce constat s'appuyait sur
-    # `is_connected_to_electric_network()`, qui répond `true` dès qu'un poteau couvre la
-    # machine — même si le réseau est mort. Il était donc vert pendant que TOUS les bras
-    # étaient en `no_power`, centrale à l'arrêt, et l'on cherchait la panne du côté du
-    # convoyage. C'est la même confusion que `networkId` contre `connected`, d'un cran
-    # plus loin : on juge désormais sur le STATUT de la machine, seul témoin du courant
-    # qui circule vraiment.
+    # --- Rec 3 : les bras du convoyage ont VRAIMENT du courant ---
+    # Être raccordé n'est pas être alimenté : on juge sur le STATUT.
     bras = str(rcon.query_lua(
         "local s = game.surfaces[1] local n, sans = 0, 0 "
         "for _, e in pairs(s.find_entities_filtered{type='inserter', force='player'}) do "
@@ -226,30 +200,12 @@ def main() -> int:
         nb_bras not in ("", "0") and sans_courant == "0",
         f"{nb_bras} bras au contact d'une belt, {sans_courant} en no_power/low_power")
 
-    avant = _science(rcon)
-    rcon.query_lua(
-        f"local s = game.surfaces[1] "
-        f"for _, e in pairs(s.find_entities_filtered{{name='assembling-machine-1'}}) do "
-        f"  local ok, r = pcall(function() return e.get_recipe() end) "
-        f"  if ok and r and r.name == '{FLACON}' then "
-        f"    e.get_inventory(defines.inventory.assembling_machine_input).clear() "
-        f"    e.get_inventory(defines.inventory.assembling_machine_output).clear() "
-        f"  end end rcon.print('vide')")
+    # --- Rec 4 : la chaîne est montée ---
+    rec("4: la chaîne d'alimentation est montée", ok_alim, detail_alim)
 
-    # ON ÉCHANTILLONNE, on ne prend pas une photo. Un instantané de l'entrée sous-estime
-    # tout : l'assembleuse consomme au fur et à mesure, si bien qu'on peut la trouver
-    # vide alors qu'elle est servie en continu. Et un seul relevé ne distingue pas un
-    # FLUX d'un sursaut — les objets déjà sur la belt au moment du montage arrivent une
-    # fois, puis plus rien. Ce que ce banc doit prouver est que la boucle ne s'arrête
-    # pas ; il faut donc la regarder plusieurs fois.
+    # --- Mesure du FLUX sur six fenêtres ---
     FENETRES, TICKS = 6, 1500
-    cumul_depart = perception.production_cumulee(api, FLACON)
 
-    # LA CONSOMMATION, ET NON LE STOCK. Un instantané de l'entrée ne distingue pas « rien
-    # n'arrive » de « tout est consommé aussitôt » — et c'est le second qui s'est produit :
-    # entrée vide à chaque relevé, pendant que la production, elle, montait. Compter ce
-    # que l'usine CONSOMME est plus juste et plus strict : on exige que les DEUX
-    # ingrédients soient consommés, ce qu'un stock résiduel ne peut pas simuler.
     def _consommes() -> dict:
         brut = str(rcon.query_lua(
             "local f = game.forces.player local s = game.surfaces[1] "
@@ -262,7 +218,17 @@ def main() -> int:
         except (ValueError, IndexError):
             return {"copper-plate": -1, "iron-gear-wheel": -1}
 
+    cumul_depart = perception.production_cumulee(api, FLACON)
     conso_depart = _consommes()
+    rcon.query_lua(
+        f"local s = game.surfaces[1] "
+        f"for _, e in pairs(s.find_entities_filtered{{name='assembling-machine-1'}}) do "
+        f"  local ok, r = pcall(function() return e.get_recipe() end) "
+        f"  if ok and r and r.name == '{FLACON}' then "
+        f"    e.get_inventory(defines.inventory.assembling_machine_input).clear() "
+        f"    e.get_inventory(defines.inventory.assembling_machine_output).clear() "
+        f"  end end rcon.print('vide')")
+
     entrees, cumuls, consos = [], [], []
     for _ in range(FENETRES):
         api.run_action(api.wait, TICKS, timeout=300.0)
@@ -272,39 +238,26 @@ def main() -> int:
         consos.append(_consommes())
     apres = _science(rcon)
 
-    # Une fenêtre compte comme SERVIE si l'un des ingrédients y a été consommé ou s'y
-    # trouve en attente : les deux signes disent que la belt a livré.
-    servies = 0
-    precedent = conso_depart
+    # Une fenêtre est SERVIE si un ingrédient y a été consommé ou s'y trouve en attente :
+    # les deux signes disent que la belt a livré. Le seul stock ne suffit pas — une
+    # assembleuse qui consomme aussitôt paraîtrait vide alors qu'elle est bien servie.
+    servies, precedent = 0, conso_depart
     for i in range(FENETRES):
         bouge = any(consos[i].get(k, 0) > precedent.get(k, 0)
                     for k in ("copper-plate", "iron-gear-wheel"))
         if bouge or entrees[i] > 0:
             servies += 1
         precedent = consos[i]
+
     produits = (cumuls[-1] - cumul_depart) if cumul_depart >= 0 and cumuls[-1] >= 0 else -1
     actives = sum(1 for a, b in zip([cumul_depart] + cumuls, cumuls) if b > a)
 
-    # --- Rec 4 : l'agent a monté la chaîne (constat de forme) ---
-    # Le détail est passé ENTIER : `rec` tronque l'affichage courant mais déroule les
-    # échecs. Le couper ici privait le bilan de ce qui manquait justement.
-    rec("4: la chaîne d'alimentation est montée", ok_alim, detail_alim)
-
-    # --- Rec 5 : LE CONSTAT QUI TRANCHE — les ingrédients arrivent, et ILS REVIENNENT ---
-    # Les quatre précédents peuvent être verts pendant que rien ne circule. Exiger
-    # plusieurs fenêtres servies distingue une belt qui alimente d'un stock résiduel qui
-    # se vide une bonne fois.
     rec("5: l'assembleuse est servie de façon RÉPÉTÉE", servies >= 2,
-        f"entrée vidée, puis servie sur {servies}/{FENETRES} fenêtre(s) de {TICKS} ticks "
-        f"— relevés {entrees}, consommé "
-        f"{consos[-1]['copper-plate'] - conso_depart['copper-plate']} cuivre et "
+        f"servie sur {servies}/{FENETRES} fenêtre(s) de {TICKS} ticks — relevés {entrees}, "
+        f"consommé {consos[-1]['copper-plate'] - conso_depart['copper-plate']} cuivre et "
         f"{consos[-1]['iron-gear-wheel'] - conso_depart['iron-gear-wheel']} engrenage(s)"
         f" | contenu final : {apres.get('contenu') or 'vide'}")
 
-    # --- Rec 6 : et cela PRODUIT, sur la durée ---
-    # La statistique de la force, et non l'inventaire de sortie : la sortie est vidée par
-    # le bras vers le laboratoire, si bien qu'on lirait « rien produit » au moment même
-    # où la chaîne devient autonome.
     rec("6: la production de flacons se poursuit", produits >= 3 and actives >= 2,
         f"{produits} flacon(s) produit(s) sur {FENETRES} fenêtre(s), dont {actives} "
         f"avec progression — cumul {cumul_depart} -> {cumuls[-1]}")
