@@ -80,8 +80,13 @@ def test_le_bootstrap_complet_part_de_rien() -> None:
     """
     steps = plan_production(ProductionGoal("burner-mining-drill", 1), {}, _lookup)
     k = _kinds(steps)
+    # Deux crafts suffisent, et c'est un GAIN : le four de fusion repris sert de
+    # composant à la foreuse burner, qui en réclame justement un. Cinq pierres
+    # économisées, et un four de moins abandonné à sec sur le terrain.
     ok = ("mine_entity" in k and "place_furnace" in k and "wait" in k
-          and k.count("craft_item") >= 3 and k[-1] == "craft_item")
+          and k.count("craft_item") >= 2 and k[-1] == "craft_item"
+          and any(s.kind == "mine_entity" and s.args.get("name") == "stone-furnace"
+                  for s in steps))
     rec("test_le_bootstrap_complet_part_de_rien", ok,
         f"{len(steps)} étapes, {k.count('craft_item')} craft(s), {k.count('mine_entity')} minage(s)")
     assert ok
@@ -137,7 +142,10 @@ def test_le_charbon_deja_en_poche_ne_se_remine_pas() -> None:
     """L'inventaire arbitre aussi pour le combustible — sinon on mine pour rien."""
     steps = plan_production(ProductionGoal("iron-plate", 2),
                             {"coal": 50, "iron-ore": 10}, _lookup)
-    mines = [s.args.get("name") for s in steps if s.kind == "mine_entity"]
+    # Les RESSOURCES seulement : la reprise du four de fusion est aussi un `mine_entity`,
+    # et c'est un rangement, pas un approvisionnement.
+    mines = [s.args.get("name") for s in steps if s.kind == "mine_entity"
+             and s.args.get("name") in ("iron-ore", "coal", "stone", "copper-ore")]
     ok = mines == []
     rec("test_le_charbon_deja_en_poche_ne_se_remine_pas", ok,
         f"avec 50 charbons et 10 minerais : {len(mines)} minage(s)")

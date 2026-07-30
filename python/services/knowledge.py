@@ -175,6 +175,15 @@ def _plan(goal: ProductionGoal, sim_inv: dict[str, int],
         steps.append(Step("move_items", {"item": ore, "to_entity": True, "count": ore_need}))
         steps.append(Step("wait", {"ticks": _smelt_ticks(ore_need)}))
         steps.append(Step("move_items", {"item": goal.item, "to_entity": False, "count": missing}))
+        # ON REPREND LE FOUR. Un four de fusion posé à la main n'est pas une usine : laissé
+        # sur place, il tombe à sec et devient une « machine en panne » que le diagnostic
+        # signale, que la boucle veut réparer — priorité 3 — et qui monopolise l'agent au
+        # lieu de le laisser bâtir. Mesuré : quatre tours d'`approvisionner` sur des fours
+        # de fusion abandonnés, pendant que les trois machines de la chaîne attendaient
+        # dans les poches. Le reprendre évite le déchet ET rend la pierre pour la fournée
+        # suivante.
+        steps.append(Step("mine_entity", {"name": "stone-furnace", "count": 1}))
+        _credit(sim_inv, "stone-furnace", 1)
         # Le four a mangé le minerai et le charbon : la simulation doit le savoir, sinon
         # la fournée suivante croit disposer d'un stock déjà brûlé.
         _debit(sim_inv, ore, ore_need)

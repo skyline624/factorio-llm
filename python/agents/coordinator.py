@@ -185,6 +185,12 @@ class EtatUsine:
     # Ce que réclame une chaîne de production AU PALIER COURANT. `BESOINS` est une table
     # par action, et ne peut pas savoir qu'un agent sans recherche pose du burner.
     besoins_production: tuple = ()
+    # Les FOREUSES, et elles seules. Une chaîne de production commence par une foreuse ;
+    # un four posé à la main pour fondre trois plaques n'est pas une usine. Mesuré : les
+    # fours de fusion du bootstrap comptaient comme machines de production, si bien que
+    # `batir_production` ne se déclenchait jamais — l'agent tenait ses trois machines en
+    # poche sans les poser. `None` = non renseigné, on retombe sur le compte général.
+    foreuses: Optional[int] = None
     # Échecs consécutifs par (action, cible). Sans cette mémoire, une action impossible
     # est retentée indéfiniment : la boucle tourne sans avancer, ce qui ne se voit pas.
     echecs: dict = field(default_factory=dict)
@@ -326,6 +332,21 @@ def _machines_qui_produisent(etat: EtatUsine) -> int:
     """
     return (etat.machines_production if etat.machines_production is not None
             else etat.machines)
+
+
+def _foreuses(etat: EtatUsine) -> int:
+    """Combien de FOREUSES tournent — le seul compte qui dise s'il existe une chaîne.
+
+    Un four posé à la main pour fondre trois plaques n'est pas une usine. Mesuré pendant
+    le bootstrap : les deux fours de fusion faisaient croire à quatre machines de
+    production, et `batir_production` — qui exige zéro machine — ne se déclenchait
+    jamais. L'agent avait fabriqué sa foreuse, son four et son bras, et les gardait en
+    poche faute de savoir qu'il n'avait encore rien bâti.
+
+    Non renseigné, on retombe sur le compte général : les états construits à la main dans
+    les tests gardent leur sens.
+    """
+    return etat.foreuses if etat.foreuses is not None else _machines_qui_produisent(etat)
 
 
 def figer_pendant(api, actif: bool, fonction, *args):
@@ -470,7 +491,7 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
             # sa première chaîne n'avait aucun besoin.
             ("batir_production",
              (etat.a_de_l_energie or not etat.electrique)
-             and _machines_qui_produisent(etat) == 0,
+             and _foreuses(etat) == 0,
              ("du courant, mais aucune machine pour en profiter" if etat.electrique
               else "aucune machine : une chaîne burner n'attend pas le réseau"),
              PRIORITE["batir_production"]),
@@ -734,6 +755,13 @@ class Coordinator:
         t = self.tiers_micro()
         etat.electrique = t["nom"] == "électrique"
         etat.besoins_production = ((t["drill"], 1), (t["furnace"], 1), (t["inserter"], 1))
+        if not etat.electrique:
+            # Une chaîne burner BRÛLE : foreuse, four et bras réclament chacun leur
+            # amorce, et l'executor refuse la pose sans elle. Mesuré : « chaîne non posée,
+            # il manque : {'coal': 7} » alors que les trois machines étaient en poche.
+            # Le compter parmi les besoins fait que le manque appelle un minage, au lieu
+            # de laisser la construction échouer trois fois puis s'abandonner.
+            etat.besoins_production += ((COMBUSTIBLE, self.AMORCE_CHAINE_BURNER),)
         # Compté depuis la ZONE, indépendamment d'où se trouve le personnage : c'est ce
         # que l'attente d'une extension comparera, et deux comptages ne se comparent que
         # s'ils sont pris du même endroit. Toujours mesuré — et pas seulement sous
@@ -743,6 +771,12 @@ class Coordinator:
         if n >= 0:
             self._machines_posees = n
             etat.machines_production = n
+        # Les foreuses à part : c'est ce compte, et non le général, qui dit s'il existe
+        # une chaîne de production ou seulement des fours de fusion posés à la main.
+        f = perception.compter_machines(self.api, self.zone[0], self.zone[1], self.rayon,
+                                        types=("mining-drill",))
+        if f >= 0:
+            etat.foreuses = f
         # La menace est évaluée à CHAQUE tour : elle change sans qu'on y touche, alors
         # que l'usine ne change que quand on agit.
         etat.menace = evaluer(self.api.scan_threats(self.zone[0], self.zone[1], 300.0),
@@ -1089,6 +1123,10 @@ class Coordinator:
     # plutôt que masquée par un « chaîne bâtie » qui laisserait croire l'affaire close.
     AMORCE = 50
     AMORCE_BRAS = 5
+    # Ce qu'une chaîne tout-burner réclame en charbon pour démarrer : trois machines qui
+    # brûlent, plus la marge que l'executor exige au pré-vol. Mesuré, il manquait 7
+    # unités avec 8 en poche — 20 laisse de quoi poser sans revenir miner aussitôt.
+    AMORCE_CHAINE_BURNER = 20
 
     def choisir_gisement(self, resource: str, depuis: tuple[float, float],
                          portee_max: float = 60.0):
