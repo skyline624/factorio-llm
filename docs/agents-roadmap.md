@@ -143,10 +143,21 @@ power). Les satellites n'apparaissent qu'aux étapes à arbitrage indépendant
 FactoryBuilder se construit par paliers de complexité croissante. Chaque palier
 est un test intégrable (headless + physique).
 
+**État au 30/07/2026 — P1 et P2 sont ACQUIS et mesurés.** L'agent part d'une carte
+vierge, bâtit sa centrale et sa chaîne, répare neuf causes diagnostiquées, vise un débit
+et le tient : sur une partie de 30 min, 68 relevés sur 131 au-dessus de 2.0 iron-plate/s
+(pointe 3.09), 24 machines, 4 180 plaques produites. Reproductible via
+`preparer_reference.py` puis `run_partie_longue.py --depuis-reference --objectif 2.0`.
+
+La limite atteinte est celle de **P6** et l'agent la nomme lui-même : *« aucun gisement de
+coal à moins de 60 tuiles : c'est un problème de train, pas de belt »*. Les centrales se
+posant au bord de l'eau, leur ravitaillement en charbon dépasse la portée d'une belt —
+c'est ce qui arrête l'usine en fin de partie, et non un défaut du raisonnement.
+
 | Palier | Objectif FactoryBuilder | Compétences d'exécution mobilisées | Extension mod (fl_ops/fl_tools) |
 |---|---|---|---|
-| **P1** | fer brut → plaques → gears (chaîne pilotée par analyse de recette) | mining + smelting + craft | **rien** (socle 25/25) |
-| **P2** | automatiser le flux foreuse→four→assembler (belts+inserters) | logistics | **oui** : place belt lines + inserter config |
+| **P1** ✅ | fer brut → plaques → gears (chaîne pilotée par analyse de recette) | mining + smelting + craft | **rien** (socle 25/25) |
+| **P2** ✅ | automatiser le flux foreuse→four→assembler (belts+inserters) | logistics | **oui** : place belt lines + inserter config |
 | **P3** | usine red science autonome (gears+inserters+science→labs) | assembly + logistics | **oui** : set_recipe sur assemblers + lab feed |
 | **P4** | main bus + multi-recettes (green science) | logistics (splitters/underground) | (suite logistics) |
 | **P5** | usine blue science | refinery/cracking → délègue à `Refiner` | **oui** : fluid handling complet |
