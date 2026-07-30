@@ -189,17 +189,39 @@ def main() -> int:
 
     # --- 2 : on retire un poteau de desserte -> DÉBRANCHÉE ---
     if desserte:
-        # Retirer TOUS les poteaux de desserte : en enlever un seul laisse souvent la
-        # machine couverte par le voisin, et le diagnostic a raison de ne rien signaler.
-        for px, py in desserte:
-            api.run_action(api.remove_entity_at, px, py, "small-electric-pole",
-                           timeout=20.0)
+        # Retirer TOUS les poteaux qui couvrent les machines, et pas seulement ceux que
+        # ce script a posés. Mesuré : la ligne de transmission et les poteaux du layout
+        # suffisent à garder les trois machines alimentées, si bien qu'on retirait la
+        # desserte, qu'aucune machine ne tombait, et qu'on accusait le diagnostic de ne
+        # pas voir une panne qui n'avait jamais eu lieu.
+        for p in rap2.placed:
+            restants = str(rcon.query_lua(
+                f"local s = game.surfaces[1] local n = 0 "
+                f"for _, e in pairs(s.find_entities_filtered{{type='electric-pole', "
+                f"area={{{{{p.x - 6.5},{p.y - 6.5}}},{{{p.x + 6.5},{p.y + 6.5}}}}}}}) do "
+                f"e.destroy() n = n + 1 end rcon.print(n)")).strip()
+            del restants
         api.run_action(api.wait, 180, timeout=60.0)
+
+        # La panne est-elle VRAIMENT en place ? Sans ce contrôle, un test qui échoue à
+        # casser la chaîne se lit comme un diagnostic défaillant — et l'on corrige le
+        # mauvais fichier. C'est le protocole du chantier E6 : casser d'une manière
+        # connue, PUIS vérifier que le diagnostic la nomme.
+        sans_reseau = int(str(rcon.query_lua(
+            f"local s = game.surfaces[1] local n = 0 "
+            f"for _, e in pairs(s.find_entities_filtered{{force='player', "
+            f"area={{{{{ancre[0] - 25},{ancre[1] - 25}}},{{{ancre[0] + 25},{ancre[1] + 25}}}}}}}) do "
+            f"if e.prototype and e.prototype.electric_energy_source_prototype "
+            f"and not e.is_connected_to_electric_network() then n = n + 1 end end "
+            f"rcon.print(n)")).strip() or 0)
+
         d1 = diagnose_zone(api, ancre[0], ancre[1], 25.0)
         debranchees = [s for s in d1.causes if s.cause == "debranchee"]
         rec("e6-2 : poteaux retirés -> machines diagnostiquées DÉBRANCHÉES",
-            bool(debranchees),
-            f"{d1.resume()} | causes={[s.cause for s in d1.causes]}")
+            bool(debranchees) if sans_reseau else False,
+            (f"{d1.resume()} | causes={[s.cause for s in d1.causes]}" if sans_reseau
+             else f"SCENE NON MONTEE : aucune machine débranchée après retrait des "
+                  f"poteaux — le diagnostic n'est pas en cause"))
         for px, py in desserte:      # on remet pour la panne suivante
             api.run_action(api.place_entity_at, "small-electric-pole", px, py, "north",
                            None, timeout=20.0)

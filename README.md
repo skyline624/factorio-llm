@@ -13,8 +13,16 @@ Inspire de `ai-player-v3` (Python+Lua, 3 tiers, LLM stupide) et `airi-factorio`
 L'agent part d'une carte vierge, batit sa centrale et sa chaine de production,
 repare ce qui tombe en panne, etend son usine sous objectif de debit, et TIENT cet
 objectif : mesure sur 30 minutes de jeu, 35 relevés de debit sur 61 au-dessus de
-2.0 iron-plate/s (pointe 3.12). 286 tests unitaires, une trentaine de scripts de
+2.0 iron-plate/s (pointe 3.12). 300 tests unitaires, une trentaine de scripts de
 verification en jeu.
+
+Il n'a pas besoin qu'on lui remplisse les poches. Depuis un inventaire VIDE, il mine
+la pierre et le fer, fond ses plaques, forge ses engrenages, assemble sa foreuse, son
+four et son bras, va chercher son charbon a 215 tuiles — en generant le terrain devant
+lui et en marchant par bonds, faute de quoi le pathfinding ne planifie pas — puis pose
+sa chaine et recommence (`verify_bootstrap_craft.py`, 7/7, deux chaines baties a partir
+de rien). Les recettes ELECTRIQUES etant verrouillees sur une carte neuve, ce palier
+est le tout-burner : ni poteau ni machine electrique avant d'avoir de quoi chercher.
 
 - **mod/** : mod Lua — interfaces RCON `fl_tools` (observation) et `fl_ops`
   (action async via task_manager), personnage IA headless.
@@ -35,8 +43,13 @@ retombe sur la decision deterministe.
 ```
 cd python
 python preparer_reference.py [--rayon N] [--nids N]   # fige un etat de depart
+python preparer_reference.py --sans-dotation          # ... les poches VIDES
 python run_partie_longue.py 30 --vitesse 10 --ombre --depuis-reference --objectif 2.0
+python verify_tout.py [--rapide]                      # toutes les verifications en jeu
 ```
+
+`--sans-dotation` est le juge de paix de l'autonomie : tant que l'inventaire est
+prerempli, un agent peut paraitre autonome en consommant un stock qu'un humain a pose.
 
 `--depuis-reference` restaure la save figee : sans etat de depart identique, deux
 parties ne se comparent pas. Le monde est fige pendant que le modele reflechit,

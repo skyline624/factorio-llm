@@ -154,6 +154,20 @@ coal à moins de 60 tuiles : c'est un problème de train, pas de belt »*. Les c
 posant au bord de l'eau, leur ravitaillement en charbon dépasse la portée d'une belt —
 c'est ce qui arrête l'usine en fin de partie, et non un défaut du raisonnement.
 
+**Le socle de P1 ne dépend plus d'une dotation (30/07/2026).** Les paliers ci-dessus
+étaient mesurés avec un inventaire prérempli par `preparer_reference.py` : l'agent
+consommait un stock posé par un humain, et « autonome » restait un mot creux. Depuis un
+inventaire VIDE, il mine, fond, forge et assemble ses trois machines burner, va chercher
+son charbon à 215 tuiles, puis bâtit sa chaîne et recommence — `verify_bootstrap_craft.py`,
+7/7, deux chaînes posées à partir de rien.
+
+Ce que ce chantier a mis au jour et qui conditionne **P3** : sur une carte neuve, les
+recettes électriques sont `enabled=false` — `small-electric-pole`, `inserter`,
+`electric-mining-drill`, `copper-cable`, `electronic-circuit`, `lab`,
+`automation-science-pack`. **Il n'y a donc pas de centrale à bâtir ni de poteau à poser
+avant d'avoir de quoi chercher**, et la recherche est le préalable de P3, non son contenu.
+Le palier atteignable sans laboratoire est le tout-burner.
+
 | Palier | Objectif FactoryBuilder | Compétences d'exécution mobilisées | Extension mod (fl_ops/fl_tools) |
 |---|---|---|---|
 | **P1** ✅ | fer brut → plaques → gears (chaîne pilotée par analyse de recette) | mining + smelting + craft | **rien** (socle 25/25) |
