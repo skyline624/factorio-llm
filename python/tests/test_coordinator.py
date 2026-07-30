@@ -363,6 +363,36 @@ def test_sous_objectif_il_etend_au_lieu_de_ne_rien_faire() -> None:
     assert ok
 
 
+def test_une_centrale_ne_compte_pas_pour_une_usine() -> None:
+    """Sinon l'agent croit produire dès qu'il a du courant, et ne bâtit jamais rien.
+
+    Régression réelle, trouvée par la batterie de vérifications : depuis que le
+    diagnostic embrasse les centrales — elles se posent au bord de l'eau, hors de la
+    zone —, `machines` n'était plus jamais nul après `batir_energie`, et la condition de
+    `batir_production` (zéro machine) ne pouvait plus être vraie. Mesuré en jeu :
+    centrale bâtie au tour 1, puis huit tours de `rien` et d'`evacuer` sur une carte sans
+    la moindre foreuse.
+    """
+    etat = EtatUsine(machines=2, diagnostic=diagnose([]), reseau=7, production_kw=900.0,
+                     inventaire=dict(INVENTAIRE))
+    etat.machines_production = 0            # deux organes de centrale, aucune usine
+    d = decide(etat)
+    ok = d.action == "batir_production"
+    rec("test_une_centrale_ne_compte_pas_pour_une_usine", ok,
+        f"{d.action} (2 machines vues, 0 qui produit)")
+    assert ok
+
+
+def test_sans_comptage_dedie_le_comportement_est_inchange() -> None:
+    """`machines_production` non renseigné retombe sur `machines` — back-compat."""
+    etat = EtatUsine(machines=3, diagnostic=diagnose([]), reseau=7, production_kw=900.0,
+                     inventaire=dict(INVENTAIRE))
+    d = decide(etat)
+    ok = d.action == "rien" and etat.machines_production is None
+    rec("test_sans_comptage_dedie_le_comportement_est_inchange", ok, f"{d.action}")
+    assert ok
+
+
 def test_compter_machines_rend_moins_un_si_illisible() -> None:
     """Zéro machine est un état PLAUSIBLE : le confondre avec une panne de mesure ferait
     conclure qu'une extension a échoué alors qu'on n'a rien pu lire.

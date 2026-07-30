@@ -121,25 +121,33 @@ def main() -> int:
     zone = (float(pos.get("x", 0.0)), float(pos.get("y", 0.0)))
     coord = Coordinator(api, zone=zone, rayon=25.0)
 
-    # --- l'agent bâtit son usine (il retente, comme la vraie boucle) ---
-    drill, tours = None, 0
-    while drill is None and tours < 8:
+    # --- l'agent bâtit son usine, et on attend qu'elle PRODUISE ---
+    # Le critère n'est pas « une foreuse est posée » : une chaîne fraîchement bâtie sort
+    # souvent débranchée ou sa sortie n'est pas encore ramassée, et l'agent le répare au
+    # tour suivant. Mesurer sans lui laisser ces tours-là, c'est éprouver la vitesse de
+    # la pose au lieu du sujet du test — le gisement épuisé.
+    depart = _produites(rcon)
+    drill, produit, tours = None, False, 0
+    while not produit and tours < 14:
         tours += 1
         d, agi, _ = coord.tick()
-        api.run_action(api.wait, 240, timeout=90.0)
+        api.run_action(api.wait, 300, timeout=120.0)
         ins = api.inspect_at(zone[0], zone[1], 25.0)
         lignes = ins.get("entities", []) if isinstance(ins, dict) else []
         drill = next((e for e in lignes if "mining-drill" in str(e.get("name"))), None)
+        produit = drill is not None and _produites(rcon) > depart
         print(f"       tour {tours} : {d.action} agi={agi} — "
-              f"foreuse {'trouvée' if drill else 'pas encore'}")
-    if drill is None:
-        print(f"[SKIP] aucune foreuse bâtie en {tours} tours (E8 suppose la construction).")
+              f"foreuse {'trouvée' if drill else 'pas encore'}"
+              f"{', et ça produit' if produit else ''}")
+    if drill is None or not produit:
+        print(f"[SKIP] l'usine ne produit pas après {tours} tours — ce test suppose la "
+              f"chaîne acquise (E8/E19b), il ne l'éprouve pas.")
+        print(f"       journal : {coord.journal[-1][:110] if coord.journal else ''}")
         rcon.close()
         return 0
     dx, dy, dn = float(drill["x"]), float(drill["y"]), str(drill["name"])
 
     # --- 1 : l'usine produit ---
-    api.run_action(api.wait, 600, timeout=180.0)
     avant = _produites(rcon)
     api.run_action(api.wait, 600, timeout=180.0)
     pendant = _produites(rcon)
@@ -181,17 +189,25 @@ def main() -> int:
         f"{d.action} agi={agi} — {coord.journal[-1][-95:] if coord.journal else ''}")
 
     # --- 5 : une foreuse EXTRAIT à nouveau ---
-    api.run_action(api.wait, 600, timeout=180.0)
-    ins = api.inspect_at(zone[0], zone[1], 25.0)
-    lignes = ins.get("entities", []) if isinstance(ins, dict) else []
-    drills = [e for e in lignes if "mining-drill" in str(e.get("name"))]
-    statuts = [str(e.get("status")) for e in drills]
+    # On laisse la boucle METTRE EN SERVICE ce qu'elle vient de poser : une chaîne neuve
+    # sort souvent débranchée, ou sa sortie n'est pas encore ramassée, et l'agent le
+    # répare au tour suivant. Ce test porte sur le redéploiement d'une foreuse à sec, pas
+    # sur le délai de mise en route — mesurer trop tôt, c'est éprouver autre chose.
+    p1, statuts, drills = _produites(rcon), [], []
+    for _ in range(6):
+        coord.tick()
+        api.run_action(api.wait, 300, timeout=120.0)
+        ins = api.inspect_at(zone[0], zone[1], 25.0)
+        lignes = ins.get("entities", []) if isinstance(ins, dict) else []
+        drills = [e for e in lignes if "mining-drill" in str(e.get("name"))]
+        statuts = [str(e.get("status")) for e in drills]
+        if any(s in ("working", "normal") for s in statuts):
+            break
     rec("e21b-5 : une foreuse extrait à nouveau",
         any(s in ("working", "normal") for s in statuts),
         f"{len(drills)} foreuse(s) : {statuts}")
 
     # --- 6 : et la production repart ---
-    p1 = _produites(rcon)
     api.run_action(api.wait, 900, timeout=240.0)
     p2 = _produites(rcon)
     rec("e21b-6 : la production repart", p2 > p1,

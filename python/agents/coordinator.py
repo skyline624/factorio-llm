@@ -166,6 +166,13 @@ class EtatUsine:
     # Ce que le réseau arrive à fournir, entre 0 et 1. `None` = pas mesuré, ce qui n'est
     # pas « tout va bien » : on n'agrandit pas une usine sur une mesure absente.
     satisfaction: Optional[float] = None
+    # Les machines qui PRODUISENT, à l'exclusion des organes d'énergie. Depuis que le
+    # diagnostic embrasse les centrales (elles se posent au bord de l'eau, hors de la
+    # zone), `machines` n'est plus jamais nul après `batir_energie` — et la condition de
+    # `batir_production`, qui exige zéro machine, ne pouvait plus être vraie. Mesuré :
+    # l'agent bâtissait sa centrale puis ne produisait RIEN, huit tours durant.
+    # `None` = non renseigné : on retombe alors sur `machines`, comme avant.
+    machines_production: Optional[int] = None
     # Échecs consécutifs par (action, cible). Sans cette mémoire, une action impossible
     # est retentée indéfiniment : la boucle tourne sans avancer, ce qui ne se voit pas.
     echecs: dict = field(default_factory=dict)
@@ -291,6 +298,22 @@ class Arbitre(Protocol):
     """
 
     def __call__(self, etat: "EtatUsine", options: list["Decision"]) -> int: ...
+
+
+def _machines_qui_produisent(etat: EtatUsine) -> int:
+    """Combien de machines PRODUISENT, à l'exclusion des centrales.
+
+    Une centrale n'est pas une usine : compter le boiler et le moteur à vapeur parmi les
+    machines faisait croire à l'agent qu'il avait déjà de quoi produire, et
+    `batir_production` — qui exige zéro machine — n'était plus jamais proposé. Mesuré
+    après l'ajout des centrales au diagnostic : centrale bâtie au tour 1, puis huit tours
+    de `rien` et d'`evacuer` sur une carte sans la moindre foreuse.
+
+    `machines_production` non renseigné rend `machines` : les états construits à la main
+    dans les tests gardent ainsi leur sens.
+    """
+    return (etat.machines_production if etat.machines_production is not None
+            else etat.machines)
 
 
 def figer_pendant(api, actif: bool, fonction, *args):
@@ -426,7 +449,8 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
             ("batir_energie", not etat.a_de_l_energie,
              "aucun réseau alimenté : rien d'électrique ne fonctionnera avant",
              PRIORITE["batir_energie"]),
-            ("batir_production", etat.a_de_l_energie and etat.machines == 0,
+            ("batir_production",
+             etat.a_de_l_energie and _machines_qui_produisent(etat) == 0,
              "du courant, mais aucune machine pour en profiter",
              PRIORITE["batir_production"]),
             # L'usine tourne, mais tient-elle son objectif ? Sans cette option, « 4
@@ -659,12 +683,13 @@ class Coordinator:
         etat.objectif_item = self.objectif_item
         # Compté depuis la ZONE, indépendamment d'où se trouve le personnage : c'est ce
         # que l'attente d'une extension comparera, et deux comptages ne se comparent que
-        # s'ils sont pris du même endroit.
-        if self.objectif_par_s is not None:
-            n = perception.compter_machines(self.api, self.zone[0], self.zone[1],
-                                            self.rayon)
-            if n >= 0:
-                self._machines_posees = n
+        # s'ils sont pris du même endroit. Toujours mesuré — et pas seulement sous
+        # objectif : c'est aussi ce qui dit s'il existe la moindre machine de production,
+        # donc s'il faut en bâtir une.
+        n = perception.compter_machines(self.api, self.zone[0], self.zone[1], self.rayon)
+        if n >= 0:
+            self._machines_posees = n
+            etat.machines_production = n
         # La menace est évaluée à CHAQUE tour : elle change sans qu'on y touche, alors
         # que l'usine ne change que quand on agit.
         etat.menace = evaluer(self.api.scan_threats(self.zone[0], self.zone[1], 300.0),
