@@ -1830,9 +1830,12 @@ class Coordinator:
             elif isinstance(ou, tuple):
                 intermediaires.append((nom, ou))
 
-        # On laisse les sources DÉMARRER : le temps qu'un four reçoive son minerai et
-        # prenne sa recette, il devient repérable.
-        self.api.run_action(self.api.wait, 180, timeout=60.0)
+        # On laisse les sources DÉMARRER, et il en faut plus qu'on ne croit : une chaîne
+        # fraîchement posée doit extraire, transporter et fondre avant que son four ait
+        # une recette — donc avant d'être repérable comme source. Mesuré avec 180 ticks :
+        # « rien ne produit iron-plate à portée » sur une chaîne de fer bâtie deux tours
+        # plus tôt, qui n'avait simplement pas encore sorti sa première plaque.
+        self.api.run_action(self.api.wait, 900, timeout=300.0)
 
         faits = []
         # Les sources intermédiaires d'abord : une assembleuse à engrenages qui n'a pas
@@ -1962,7 +1965,7 @@ class Coordinator:
         chaîne qui tourne ne s'arrête pas. Un four est retenu sur ce qu'il a en sortie,
         une assembleuse sur la recette qu'on lui a donnée.
         """
-        brut = self.api.rcon.query_lua(
+        lua = (
             f"local s = game.surfaces[1] local best, bd = nil, 1e18 "
             f"for _, e in pairs(s.find_entities_filtered{{force='player', "
             f"area={{{{{self.zone[0] - loin},{self.zone[1] - loin}}},"
@@ -1976,18 +1979,49 @@ class Coordinator:
             f"    local out = e.get_output_inventory() "
             f"    if out and out.get_item_count('{item}') > 0 then produit = true end "
             f"  end "
+            # UNE SOURCE DOIT ÊTRE ALIMENTÉE. Sans ce filtre, le premier four venu fait
+            # illusion : le plan de fusion en pose un pour une fournée, le remplit à la
+            # main, et il garde des plaques en sortie. `_source_de` le désignait alors
+            # comme source de cuivre, l'agent renonçait à bâtir la vraie chaîne, et
+            # l'alimentation tarissait dès la fournée consommée — « rien ne produit de
+            # copper-plate » sur une carte qui portait pourtant un four plein.
+            # Est pérenne ce qu'une FOREUSE ou un BRAS remplit tout seul.
+            f"  if produit then "
+            f"    local bb = e.bounding_box local servie = false "
+            f"    for _, m in pairs(s.find_entities_filtered{{position=e.position, "
+            f"radius=4, type={{'inserter', 'mining-drill'}}}}) do "
+            f"      local p = m.drop_position "
+            f"      if p and p.x >= bb.left_top.x - 0.1 and p.x <= bb.right_bottom.x + 0.1 "
+            f"         and p.y >= bb.left_top.y - 0.1 and p.y <= bb.right_bottom.y + 0.1 "
+            f"      then servie = true end end "
+            f"    produit = servie end "
             f"  if produit then "
             f"    local d = (e.position.x - {self.zone[0]})^2 + (e.position.y - {self.zone[1]})^2 "
             f"    if d < bd then bd = d best = e end end end "
             f"if best then rcon.print(best.name .. ',' .. best.position.x .. ',' "
             f".. best.position.y) else rcon.print('') end")
-        morceaux = str(brut).strip().split(",")
-        if len(morceaux) != 3:
-            return None
         try:
-            return (morceaux[0], float(morceaux[1]), float(morceaux[2]))
-        except ValueError:
+            brut = self.api.rcon.query_lua(lua)
+        except Exception:
             return None
+        # UNE RÉPONSE ILLISIBLE N'EST PAS UNE ABSENCE. Mesuré : le premier appel rendait
+        # None, et rejouer LA MÊME requête dans la foulée rendait
+        # « electric-furnace,-15.5,-75.5 » — la réponse arrivait décalée. On concluait
+        # donc « rien ne produit iron-plate à portée » sur un four qui fondait, et l'agent
+        # renonçait à alimenter sa chaîne. Deux tentatives valent mieux qu'un faux vide.
+        for tentative in range(2):
+            morceaux = str(brut).strip().split(",")
+            if len(morceaux) == 3:
+                try:
+                    return (morceaux[0], float(morceaux[1]), float(morceaux[2]))
+                except ValueError:
+                    return None
+            if tentative == 0:
+                try:
+                    brut = self.api.rcon.query_lua(lua)
+                except Exception:
+                    return None
+        return None
 
     def amener(self, item: str, vers: tuple[float, float], vers_nom: str,
                belt: str = "transport-belt") -> tuple[bool, str]:
@@ -2044,25 +2078,29 @@ class Coordinator:
         # pendant que la science manquait d'ingrédient. Une boucle fermée ne se voit
         # nulle part : chaque entité prise séparément a l'air juste.
         #
-        # On décale donc le départ perpendiculairement jusqu'à une voie libre.
-        perpendiculaire = (0.0, 1.0) if abs(vers[0] - sx) >= abs(vers[1] - sy) else (1.0, 0.0)
-        for pas in (0, 1, -1, 2, -2, 3, -3):
-            essai = (vers_src[0] + perpendiculaire[0] * pas,
-                     vers_src[1] + perpendiculaire[1] * pas)
-            occupee = any(e.get("name", "").endswith("transport-belt")
-                          or e.get("type") == "transport-belt"
-                          for e in site_finder._entites_a(self.api, essai[0], essai[1], 0.6))
-            if not occupee:
-                vers_src = essai
-                break
+        # Le tracé CONTOURNE les belts existantes : `place_belt_line` retourne celles
+        # qu'elle croise pour les aligner sur elle — geste juste quand on prolonge sa
+        # propre ligne, désastreux quand on traverse celle d'un voisin.
+        occupees = {(float(e.get("x", 0.0)), float(e.get("y", 0.0)))
+                    for e in site_finder._entites_a(
+                        self.api, (sx + vers[0]) / 2, (sy + vers[1]) / 2,
+                        max(16.0, distance))
+                    if e.get("type") == "transport-belt"}
         tuiles, complete = site_finder.place_belt_line(
-            self.api, vers_src, vers_cible, belt=belt)
+            self.api, vers_src, vers_cible, belt=belt, eviter=occupees)
         if not tuiles:
-            return False, (f"aucune belt posée entre {nom_src}@({sx:.0f},{sy:.0f}) et "
-                           f"{vers_nom} ({distance:.0f} tuiles)")
+            return False, (f"aucun tracé libre entre {nom_src}@({sx:.0f},{sy:.0f}) et "
+                           f"{vers_nom} ({distance:.0f} tuiles) sans emprunter une belt "
+                           f"existante ({len(occupees)} tuile(s) déjà prises)")
 
+        # `cible_pos` : on exige LA tuile, pas « une belt ». Sans cela le bras de
+        # chargement déposait volontiers sur la belt d'un autre flux — même nom, même
+        # type, et les pièces repartaient chez le voisin.
         charge = site_finder.place_inserter_vers(
-            self.api, tuiles[0], (sx, sy), belt, nom="inserter", source_types=(nom_src,))
+            self.api, tuiles[0], (sx, sy), belt, nom="inserter", source_types=(nom_src,),
+            cible_pos=tuiles[0])
+        # Pas de `cible_pos` ici : la cible est une machine large, dont le dépôt tombe
+        # sur un bord et non sur le centre. Son NOM suffit à la distinguer.
         decharge = site_finder.place_inserter_vers(
             self.api, vers, tuiles[-1], vers_nom, nom="inserter", source_types=(belt,))
         # Les bras sont ÉLECTRIQUES, et celui du bout de la belt est aussi loin que la

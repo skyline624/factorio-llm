@@ -969,6 +969,14 @@ end
 -- ===== Etat WAITING =====
 
 local function state_waiting(params)
+  -- Une attente pose SON horizon : demander 7700 ticks et se faire couper a 6000 par le
+  -- garde-fou general rendait « timeout » sur une attente qui se deroulait exactement
+  -- comme demande. Mesure : une fournee de trente-cinq minerais de cuivre reclame 7700
+  -- ticks, et le plan de fusion echouait donc systematiquement sur les grosses
+  -- quantites -- sans que rien ne distingue ce cas d'une vraie panne.
+  if not params.max_ticks then
+    params.max_ticks = (params.remaining_ticks or 0) + 600
+  end
   params.remaining_ticks = params.remaining_ticks - 1
   if params.remaining_ticks <= 0 then
     M._complete("wait", true)

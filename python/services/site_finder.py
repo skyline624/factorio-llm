@@ -136,9 +136,69 @@ def place_pole_line(api, depart: tuple[float, float], arrivee: tuple[float, floa
     return poses, False
 
 
+def tracer_en_l(depart: tuple[float, float], arrivee: tuple[float, float],
+                eviter: Optional[set] = None, garde: int = 200
+                ) -> tuple[list[tuple[float, float]], bool]:
+    """Le chemin d'une belt, en L, en CONTOURNANT les tuiles d'un autre flux.
+
+    Fonction pure : aucun accès au jeu, donc éprouvable hors ligne — et c'est voulu, car
+    le défaut qu'elle corrige était invisible entité par entité.
+
+    UNE BELT NE TRAVERSE PAS LA LIGNE D'UN AUTRE. `place_belt_line` retourne les belts
+    déjà présentes sur son tracé pour les aligner sur elle : excellent quand on prolonge
+    SA propre ligne, désastreux quand on croise celle d'un voisin. Mesuré en jeu : la
+    sortie des engrenages a croisé la belt qui amenait le fer, l'a retournée, et les
+    pièces sont reparties vers l'assembleuse dont elles venaient — vingt-trois engrenages
+    produits, zéro arrivé. Chaque entité, prise séparément, avait l'air juste.
+
+    Deux formes de L sont essayées (horizontal d'abord, puis vertical d'abord), et à
+    défaut on décale le coude. Rend (tuiles, propre) où `propre` dit qu'aucune tuile
+    interdite n'est empruntée — l'appelant peut alors refuser plutôt que de casser un
+    flux existant.
+    """
+    interdites = eviter or set()
+    x0, y0 = math.floor(depart[0]) + 0.5, math.floor(depart[1]) + 0.5
+    x1, y1 = math.floor(arrivee[0]) + 0.5, math.floor(arrivee[1]) + 0.5
+
+    def _chemin(coude_x: float, coude_y: float) -> list[tuple[float, float]]:
+        out: list[tuple[float, float]] = []
+        x, y = x0, y0
+        while abs(x - coude_x) > 1e-6 and len(out) < garde:
+            out.append((x, y))
+            x += 1.0 if coude_x > x else -1.0
+        while abs(y - coude_y) > 1e-6 and len(out) < garde:
+            out.append((x, y))
+            y += 1.0 if coude_y > y else -1.0
+        while abs(x - x1) > 1e-6 and len(out) < garde:
+            out.append((x, y))
+            x += 1.0 if x1 > x else -1.0
+        while abs(y - y1) > 1e-6 and len(out) < garde:
+            out.append((x, y))
+            y += 1.0 if y1 > y else -1.0
+        return out
+
+    candidats = [_chemin(x1, y0), _chemin(x0, y1)]
+    # Coudes décalés, dans les QUATRE directions : une ligne qui barre tout un axe ne se
+    # contourne que par au-delà de son extrémité. Mesuré par le test unitaire — un
+    # barrage vertical complet entre le départ et l'arrivée n'était franchi par aucune
+    # des deux formes de L, ni par un coude décalé sur le seul axe de départ.
+    for pas in (1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6):
+        candidats.append(_chemin(x1, y0 + pas))
+        candidats.append(_chemin(x0 + pas, y1))
+        candidats.append(_chemin(x0, y1 + pas))
+        candidats.append(_chemin(x1 + pas, y0))
+    for chemin in candidats:
+        if chemin and not any(t in interdites for t in chemin):
+            return chemin, True
+    # Aucun tracé propre : on rend le plus court, et l'appelant décide.
+    plus_court = min((c for c in candidats if c), key=len, default=[])
+    return plus_court, not any(t in interdites for t in plus_court)
+
+
 def place_belt_line(api, depart: tuple[float, float], arrivee: tuple[float, float],
                     belt: str = "transport-belt", timeout: float = 20.0,
-                    garde: int = 200, portee: float = 0.0
+                    garde: int = 200, portee: float = 0.0,
+                    eviter: Optional[set] = None
                     ) -> tuple[list[tuple[float, float]], bool]:
     """Pose une belt de `depart` vers `arrivee`, en L, chaque segment ORIENTÉ vers l'aval.
 
@@ -151,16 +211,12 @@ def place_belt_line(api, depart: tuple[float, float], arrivee: tuple[float, floa
     machine, et prévisible — un chemin optimal serait plus court mais impossible à
     déboguer à l'œil dans le jeu.
     """
-    x0, y0 = math.floor(depart[0]) + 0.5, math.floor(depart[1]) + 0.5
     x1, y1 = math.floor(arrivee[0]) + 0.5, math.floor(arrivee[1]) + 0.5
-    tuiles: list[tuple[float, float]] = []
-    x, y = x0, y0
-    while abs(x - x1) > 1e-6 and len(tuiles) < garde:
-        tuiles.append((x, y))
-        x += 1.0 if x1 > x else -1.0
-    while abs(y - y1) > 1e-6 and len(tuiles) < garde:
-        tuiles.append((x, y))
-        y += 1.0 if y1 > y else -1.0
+    tuiles, propre = tracer_en_l(depart, arrivee, eviter, garde)
+    if not propre:
+        # Emprunter la voie d'un autre flux revient à le détourner (on retourne ses
+        # tuiles plus bas). Mieux vaut ne rien poser que casser ce qui marchait.
+        return [], False
 
     poses: list[tuple[float, float]] = []
     # `portee` > 0 : le personnage SUIT la belt au lieu de la dérouler sur place.
@@ -352,7 +408,8 @@ def place_inserter_vers(api, cible: tuple[float, float], source: tuple[float, fl
                         cible_nom: str, nom: str = "inserter",
                         source_types: tuple[str, ...] = ("transport-belt",),
                         essais: int = 24, timeout: float = 20.0,
-                        journal: Optional[list] = None
+                        journal: Optional[list] = None,
+                        cible_pos: Optional[tuple[float, float]] = None
                         ) -> Optional[tuple[float, float, str]]:
     """Pose un inserter qui prend RÉELLEMENT sur la source et dépose RÉELLEMENT dans la cible.
 
@@ -400,6 +457,22 @@ def place_inserter_vers(api, cible: tuple[float, float], source: tuple[float, fl
                         for e in _entites_a(api, ins["pickupX"], ins["pickupY"]))
             depose = any(e.get("name") == cible_nom
                          for e in _entites_a(api, ins["dropX"], ins["dropY"]))
+            # LE NOM NE SUFFIT PAS QUAND IL Y A PLUSIEURS CIBLES DU MÊME NOM. Mesuré :
+            # le bras de sortie des engrenages déposait sur une `transport-belt` — la
+            # bonne réponse à la question posée — mais c'était celle d'un AUTRE flux,
+            # celui qui amenait le fer à cette même assembleuse. Les pièces repartaient
+            # d'où elles venaient : vingt-trois produites, zéro arrivée, et rien dans la
+            # pose qui le signale. Quand l'appelant sait sur QUELLE tuile déposer, il le
+            # dit, et l'on exige cette tuile-là.
+            #
+            # On compare des DISTANCES, pas des arrondis : un bras dépose à environ 1.3
+            # tuile de son centre, sur un point qui n'est pas celui d'une tuile. Et le
+            # test ne vaut que pour une cible d'UNE tuile (une belt) : sur une machine
+            # 3x3 le dépôt tombe sur un bord, à plus d'une tuile du centre, et exiger le
+            # centre refuserait toutes les poses — mesuré, 2/6 au lieu de 5/6.
+            if depose and cible_pos is not None:
+                depose = (abs(ins["dropX"] - cible_pos[0]) < 0.9
+                          and abs(ins["dropY"] - cible_pos[1]) < 0.9)
             if journal is not None:
                 journal.append(f"({ix},{iy}) {d} prend={prend} depose={depose}")
             if prend and depose:
