@@ -1618,6 +1618,162 @@ class Coordinator:
                          + (f" — {r.get('detail')}" if isinstance(r, dict) else "")
                          + ("" if acquise else " — TOUJOURS PAS acquise"))
 
+    def automatiser_la_science(self, flacon: str = "automation-science-pack",
+                               provision: int = 50) -> tuple[bool, str]:
+        """Fait couler la science toute seule : une assembleuse verse dans le laboratoire.
+
+        Jusqu'ici chaque recherche coûtait une campagne : l'agent fabriquait ses flacons
+        à la main, les portait au laboratoire, et recommençait à la suivante. Tant que
+        c'est lui qui les porte, la recherche s'arrête dès qu'il regarde ailleurs — ce
+        n'est pas une usine, c'est une corvée.
+
+        On monte donc le maillon qui manque : une assembleuse réglée sur le flacon, un
+        bras qui la vide dans le laboratoire, et de quoi tenir. Les ingrédients sont
+        déposés en provision dans l'assembleuse ; ce qui suit — les alimenter par une
+        chaîne plutôt qu'à la main — est le chantier d'après, et il ne change rien à
+        celui-ci : ce qu'on éprouve ici est que le laboratoire reçoit des flacons que
+        PERSONNE ne lui a portés.
+        """
+        from services import site_finder
+
+        # 1. Savoir faire le FLACON avant de vouloir l'automatiser. Sans cette recette,
+        # `set_recipe` passe sans erreur sur une assembleuse qui ne produira jamais rien,
+        # et le chargement des ingrédients ne trouve aucune recette à lire : mesuré,
+        # « assembleuse réglée sur automation-science-pack, chargée de rien » — tout
+        # était posé, relié, alimenté, et l'entrée restait à zéro.
+        if perception.recipe_of(self.api, flacon) is None:
+            ok, detail = self.ouvrir_la_recette(flacon)
+            if not ok:
+                return False, f"le flacon {flacon} n'est pas fabricable : {detail}"
+
+        # 2. L'assembleuse doit l'être aussi : c'est `automation` qui l'ouvre, et
+        # `chercher` sait la payer. On ne suppose pas, on va la chercher.
+        inv = perception.inventory(self.api)
+        machine = "assembling-machine-1"
+        if not inv.get(machine, 0) and perception.recipe_of(self.api, machine) is None:
+            ok, detail = self.ouvrir_la_recette(machine)
+            if not ok:
+                return False, f"pas d'assembleuse possible : {detail}"
+
+        # 2. On cherche un COUPLE de places alignées, et non une place puis l'autre.
+        #
+        # Poser le laboratoire d'abord le mettait au plus près du courant, donc au milieu
+        # de ce qui est déjà bâti : aucune des quatre places axiales voisines n'était
+        # libre, et l'assembleuse n'avait plus où aller. Le repli diagonal essayé ensuite
+        # était pire — deux machines en diagonale ne se font pas face, et aucun bras ne
+        # peut les relier : « réglée sur automation-science-pack, mais aucun bras ne
+        # relie ». Une place libre qui ne peut pas être servie n'est pas une place.
+        #
+        # AXIAL, donc, et cherché à deux : deux 3x3 espacés de quatre tuiles laissent
+        # exactement la tuile du bras entre elles.
+        if not perception.inventory(self.api).get(machine, 0):
+            ok, detail = self.fabriquer(machine, 1)
+            if not ok:
+                return False, f"assembleuse non fabriquée : {detail}"
+
+        source = site_finder.poteau_alimente_le_plus_proche(
+            self.api, self.zone[0], self.zone[1])
+        centre = (source[0], source[1]) if source else self.zone
+
+        def _libre(nom: str, x: float, y: float) -> bool:
+            return bool(site_finder.can_place(self.api, nom, x, y))
+
+        def _pose_ici(nom: str, x: float, y: float) -> bool:
+            deja = any(e.get("name") == nom
+                       for e in site_finder._entites_a(self.api, x, y, 1.5))
+            if deja:
+                return True
+            r = self.api.run_action(self.api.place_entity_at, nom, x, y, "north",
+                                    None, timeout=20.0)
+            return ((isinstance(r, dict) and r.get("ok") is True)
+                    or any(e.get("name") == nom
+                           for e in site_finder._entites_a(self.api, x, y, 1.5)))
+
+        couple = None
+        for rayon in (0, 4, 8, 12):
+            for ax in range(-rayon, rayon + 1, 4):
+                for ay in range(-rayon, rayon + 1, 4):
+                    ax_, ay_ = float(int(centre[0] + ax)) + 0.5, float(int(centre[1] + ay)) + 0.5
+                    if not _libre(machine, ax_, ay_):
+                        continue
+                    for dx, dy in ((4, 0), (-4, 0), (0, 4), (0, -4)):
+                        lx, ly = ax_ + dx, ay_ + dy
+                        proche_lab = [e for e in site_finder._entites_a(self.api, lx, ly, 1.5)
+                                      if e.get("name") == "lab"]
+                        if proche_lab or _libre("lab", lx, ly):
+                            couple = ((ax_, ay_), (lx, ly))
+                            break
+                    if couple:
+                        break
+                if couple:
+                    break
+            if couple:
+                break
+        if couple is None:
+            return False, ("aucun couple de places alignées pour une assembleuse et un "
+                           "laboratoire près du réseau — le terrain est trop encombré")
+
+        pose, labo = couple
+        if not perception.inventory(self.api).get("lab", 0) and not any(
+                e.get("name") == "lab"
+                for e in site_finder._entites_a(self.api, labo[0], labo[1], 1.5)):
+            ok, detail = self.fabriquer("lab", 1)
+            if not ok:
+                return False, f"laboratoire non fabriqué : {detail}"
+        if not _pose_ici("lab", labo[0], labo[1]):
+            return False, f"laboratoire non posé en ({labo[0]:.0f},{labo[1]:.0f})"
+        if not _pose_ici(machine, pose[0], pose[1]):
+            return False, f"assembleuse non posée en ({pose[0]:.0f},{pose[1]:.0f})"
+
+        # Les deux sont électriques : sans courant, l'une a une recette et l'autre des
+        # flacons, et rien ne bouge.
+        for nom, (x, y) in ((("lab"), labo), ((machine), pose)):
+            etat = self.api.get_power_state(x, y, 1.5) or {}
+            if etat.get("connected") is not True:
+                self.relier(Symptome(name=nom, x=x, y=y, cause="debranchee",
+                                     gravite=1, detail="posée à l'instant"))
+        detail_labo = f"laboratoire en ({labo[0]:.0f},{labo[1]:.0f})"
+
+        # 3. La recette, sans quoi l'assembleuse est un meuble.
+        self.api.run_action(self.api.set_recipe_at, pose[0], pose[1], flacon,
+                            timeout=20.0)
+
+        # 5. De quoi tenir. Les ingrédients viennent du plan, donc du minerai si besoin.
+        recette = perception.recipe_of(self.api, flacon) or []
+        charges = []
+        for ing in recette:
+            nom = ing[0] if isinstance(ing, (tuple, list)) else str(ing)
+            par_flacon = ing[1] if isinstance(ing, (tuple, list)) and len(ing) > 1 else 1
+            besoin = par_flacon * provision
+            if perception.inventory(self.api).get(nom, 0) < besoin:
+                self.fabriquer(nom, besoin)
+            combien = min(perception.inventory(self.api).get(nom, 0), besoin)
+            if combien > 0:
+                self.api.run_action(self.api.move_items_at, nom, machine,
+                                    pose[0], pose[1], combien, True, timeout=20.0)
+                charges.append(f"{combien} {nom}")
+
+        # 6. Le bras qui verse dans le laboratoire. On ne DÉDUIT pas son sens : la pose
+        # lit `pickup`/`drop` réels et tourne jusqu'à ce que les deux tombent où il faut.
+        bras = ("inserter" if perception.inventory(self.api).get("inserter", 0)
+                or perception.recipe_of(self.api, "inserter") is not None
+                else "burner-inserter")
+        if not perception.inventory(self.api).get(bras, 0):
+            self.fabriquer(bras, 1)
+        pont = site_finder.place_inserter_vers(
+            self.api, labo, pose, "lab", nom=bras, source_types=(machine,))
+        if pont is None:
+            return False, (f"assembleuse en ({pose[0]:.0f},{pose[1]:.0f}) réglée sur "
+                           f"{flacon}, mais aucun bras ne relie au laboratoire")
+        if bras == "burner-inserter":
+            self.api.run_action(self.api.move_items_at, "coal", bras, pont[0], pont[1],
+                                self.AMORCE_BRAS, True, timeout=20.0)
+
+        return True, (f"assembleuse ({pose[0]:.0f},{pose[1]:.0f}) réglée sur {flacon}, "
+                      f"chargée de {', '.join(charges) or 'rien'}, "
+                      f"{bras}@({pont[0]:.0f},{pont[1]:.0f}) verse dans le laboratoire "
+                      f"({labo[0]:.0f},{labo[1]:.0f})")
+
     def _alimenter_la_chaine(self, ancre: tuple[float, float],
                              rayon: float = 8.0) -> int:
         """Vérifie que CHAQUE machine fraîchement posée reçoit du courant, et la relie.

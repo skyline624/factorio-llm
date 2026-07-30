@@ -144,6 +144,34 @@ def main() -> int:
         f"{len(ouvre5) - len(manquantes)}/{len(ouvre5)} ouverte(s) : {', '.join(ouvre5)}"
         + (f" — encore fermée(s) : {', '.join(manquantes)}" if manquantes else ""))
 
+    # --- Rec 8 : la science est AUTOMATISÉE ---
+    # Tant que c'est l'agent qui porte les flacons, la recherche s'arrête dès qu'il
+    # regarde ailleurs : ce n'est pas une usine, c'est une corvée. On monte le maillon
+    # qui manque — une assembleuse réglée sur le flacon, un bras qui la vide dans le
+    # laboratoire.
+    ok8, detail8 = coord.automatiser_la_science()
+    rec("8: la science est automatisée (assembleuse -> laboratoire)", ok8, detail8[:110])
+
+    # --- Rec 9 : le laboratoire reçoit ce que PERSONNE ne lui a porté ---
+    api.run_action(api.wait, 600, timeout=120.0)
+    etat = str(rcon.query_lua(
+        "local s = game.surfaces[1] local asm, lab = -1, -1 "
+        "for _, e in pairs(s.find_entities_filtered{name='assembling-machine-1'}) do "
+        "local i = e.get_inventory(defines.inventory.assembling_machine_input) "
+        "asm = i and i.get_item_count() or -1 end "
+        "for _, e in pairs(s.find_entities_filtered{name='lab'}) do "
+        "local i = e.get_inventory(defines.inventory.lab_input) "
+        "local n = i and i.get_item_count() or -1 if n > lab then lab = n end end "
+        "rcon.print(asm .. '|' .. lab)")).strip()
+    entree, _, flacons = etat.partition("|")
+    try:
+        arrives = int(flacons)
+    except ValueError:
+        arrives = -1
+    rec("9: le laboratoire reçoit des flacons sans qu'on les porte", arrives > 0,
+        f"{arrives} flacon(s) arrivé(s) tout seuls, {entree} ingrédient(s) en attente "
+        f"dans l'assembleuse")
+
     rcon.query_lua("game.speed = 1 rcon.print(1)")
     rcon.close()
 
