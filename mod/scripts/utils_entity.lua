@@ -203,4 +203,28 @@ function M.covered_by_drill(surface, force, pos, radius)
   return nil
 end
 
+-- nearest_free_entity(surface, force, from, ents, radius) : la plus proche qui ne soit
+-- PAS sous une foreuse. Rend (entite, combien_de_couvertes).
+--
+-- Miner a la main sous sa propre foreuse est refuse -- a raison : ce serait lui voler
+-- son gisement. Mais on choisissait la tuile la PLUS PROCHE puis on renoncait si elle
+-- etait couverte, alors qu'il suffisait d'en prendre une autre. Mesure en jeu, les
+-- poches vides : l'agent pose sa chaine sur le fer, veut ensuite miner de quoi
+-- fabriquer sa machine suivante, et echoue sur « minerai sous foreuse » -- bloque par
+-- son propre ouvrage, au bord d'un gisement dont l'immense majorite des tuiles etait
+-- libre. Une seule chaine posee au lieu de deux.
+function M.nearest_free_entity(surface, force, from, ents, radius)
+  local best, bd, couvertes = nil, math.huge, 0
+  for _, e in ipairs(ents) do
+    if M.covered_by_drill(surface, force, e.position, radius or 6) then
+      couvertes = couvertes + 1
+    else
+      local dx, dy = e.position.x - from.x, e.position.y - from.y
+      local d = dx * dx + dy * dy
+      if d < bd then bd = d best = e end
+    end
+  end
+  return best, couvertes
+end
+
 return M

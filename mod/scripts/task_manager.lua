@@ -461,10 +461,13 @@ local function state_mining(char, params)
       return
     end
     params.stall_ticks = 0
-    local target = utils_entity.get_nearest_entity(char.position, ents)
-    if not target then return end
-    if utils_entity.covered_by_drill(char.surface, char.force, target.position, 6) then
-      M._complete("minerai sous foreuse", false)
+    -- La plus proche LIBRE, et non la plus proche tout court : sinon une foreuse posee
+    -- sur le bord du gisement suffit a bloquer un minage manuel que rien n'empechait.
+    local target, couvertes = utils_entity.nearest_free_entity(
+      char.surface, char.force, char.position, ents, 6)
+    if not target then
+      M._complete("minerai sous foreuse (" .. couvertes .. " tuile(s) couverte(s), "
+                  .. "aucune libre a portee)", false)
       return
     end
     local inv = player_mod.get_ai_inventory()
@@ -499,10 +502,11 @@ local function state_mining(char, params)
   if not target_pos then
     local ents = utils_entity.find_target_entities(char.surface, char.position, MINING_REACH, params.entity_name)
     if #ents == 0 then return end -- stall grandit
-    local target = utils_entity.get_nearest_entity(char.position, ents)
-    if not target then return end
-    if utils_entity.covered_by_drill(char.surface, char.force, target.position, 6) then
-      M._complete("minerai sous foreuse", false)
+    local target, couvertes = utils_entity.nearest_free_entity(
+      char.surface, char.force, char.position, ents, 6)
+    if not target then
+      M._complete("minerai sous foreuse (" .. couvertes .. " tuile(s) couverte(s), "
+                  .. "aucune libre a portee)", false)
       return
     end
     target_pos = target.position
