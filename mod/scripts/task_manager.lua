@@ -981,18 +981,46 @@ local function check_can_craft(inv, item_name, count)
 end
 
 -- Simulation du craft (test) : retrait des ingredients + insertion des produits.
+-- Simule un craft en mode test : consomme les ingredients, insere le produit, ET
+-- DECLARE LES FLUX.
+--
+-- Les flux ne sont pas un detail comptable. Un craft reel consomme et PRODUIT, et cette
+-- production est ce que le jeu observe : dans Factorio 2.0 les premieres technologies
+-- se debloquent sur un `research_trigger` de type `craft-item`. Sans declaration, le
+-- mode test deplace des objets d'une case a l'autre sans que rien ne l'ait jamais
+-- « fabrique » -- le banc headless ment alors sur l'effet d'un craft.
+--
+-- Mesure qui a mis la puce a l'oreille : `electronics` (declencheur : dix plaques de
+-- cuivre) tombait en headless quand les plaques sortaient d'un FOUR -- une production
+-- reelle, comptee -- mais `automation-science-pack` (declencheur : un laboratoire) ne
+-- tombait pas sur un craft simule. Ce n'etait pas le jeu qui exigeait un joueur : c'est
+-- notre simulation qui etait incomplete.
 local function simulate_craft(params)
   local force = game.forces.player
   local recipe = force.recipes[params.entity_name]
   if not recipe then return end
   local inv = player_mod.get_ai_inventory()
   if not inv then return end
+
+  local stats = nil
+  local ok_stats = pcall(function()
+    local char = player_mod.get_ai_entity()
+    local surface = (char and char.surface) or game.surfaces[1]
+    stats = force.get_item_production_statistics(surface)
+  end)
+
   for _, ing in ipairs(recipe.ingredients) do
     if ing.type ~= "fluid" then
-      inv.remove({name = ing.name, count = ing.amount * params.count})
+      local pris = ing.amount * params.count
+      inv.remove({name = ing.name, count = pris})
+      if ok_stats and stats then pcall(function() stats.on_flow(ing.name, -pris) end) end
     end
   end
-  inv.insert({name = params.entity_name, count = params.count * params.per})
+  local produits = params.count * params.per
+  inv.insert({name = params.entity_name, count = produits})
+  if ok_stats and stats then
+    pcall(function() stats.on_flow(params.entity_name, produits) end)
+  end
 end
 
 local function state_crafting(char, params)
