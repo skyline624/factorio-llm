@@ -91,6 +91,18 @@ def main() -> int:
 
     # La menace doit exister AVANT qu'on prétende l'éprouver.
     semes = _semer_des_nids(api, rcon, zone[0], zone[1] - 280.0)
+
+    # Des nids ne suffisent pas : ce qui les réveille est la POLLUTION, et une carte
+    # fraîchement restaurée en compte à peine. Mesuré, le test partait en SKIP sur
+    # « 4 nids semés, mais pollution 7 < 10 : rien ne les déclenche encore » — une
+    # menace bien présente mais endormie, donc rien à éprouver. On pollue donc la zone
+    # comme le ferait une usine qui tourne, ce qui est exactement la cause que le jeu
+    # attend. Sans cela, on mesurerait un garde-fou sur une carte sans danger et le
+    # chiffre serait flatteur.
+    rcon.query_lua(f"game.surfaces[1].pollute({{{zone[0]},{zone[1]}}}, 400) "
+                   f"rcon.print('ok')")
+    api.run_action(api.wait, 120, timeout=60.0)
+
     coord = Coordinator(api, zone=zone, rayon=25.0)
     etat = coord.observer()
     menace = etat.menace
