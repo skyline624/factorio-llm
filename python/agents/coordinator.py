@@ -1774,6 +1774,261 @@ class Coordinator:
                       f"{bras}@({pont[0]:.0f},{pont[1]:.0f}) verse dans le laboratoire "
                       f"({labo[0]:.0f},{labo[1]:.0f})")
 
+    def alimenter_la_science(self, flacon: str = "automation-science-pack"
+                             ) -> tuple[bool, str]:
+        """Branche l'assembleuse de science sur ce qui PRODUIT ses ingrédients.
+
+        `automatiser_la_science` a monté le maillon aval — l'assembleuse verse dans le
+        laboratoire. Il reste l'amont : elle tourne sur une provision déposée à la main,
+        donc elle s'arrête dès qu'elle l'a consommée. Ce qui suit ferme la boucle.
+
+        Pour chaque ingrédient, on cherche une machine qui le produit ; s'il n'y en a
+        pas, on bâtit ce qu'il faut — une chaîne sur le minerai pour une plaque, une
+        assembleuse dédiée pour une pièce intermédiaire — puis on l'amène.
+        """
+        from services import site_finder
+
+        assembleuses = [e for e in site_finder._entites_a(
+            self.api, self.zone[0], self.zone[1], self.rayon)
+            if e.get("name") == "assembling-machine-1"]
+        cible = None
+        for e in assembleuses:
+            x, y = float(e.get("x", 0.0)), float(e.get("y", 0.0))
+            rec = str(self.api.rcon.query_lua(
+                f"local s = game.surfaces[1] local n = '' "
+                f"for _, m in pairs(s.find_entities_filtered{{name='assembling-machine-1', "
+                f"area={{{{{x - 0.6},{y - 0.6}}},{{{x + 0.6},{y + 0.6}}}}}}}) do "
+                f"local ok, r = pcall(function() return m.get_recipe() end) "
+                f"if ok and r then n = r.name end end rcon.print(n)")).strip()
+            if rec == flacon:
+                cible = (x, y)
+                break
+        if cible is None:
+            return False, (f"aucune assembleuse réglée sur {flacon} — il faut d'abord "
+                           f"automatiser la science")
+
+        recette = perception.recipe_of(self.api, flacon) or []
+        faits, manques = [], []
+        for ing in recette:
+            nom = ing[0] if isinstance(ing, (tuple, list)) else str(ing)
+
+            # Pas de source ? On en fabrique une, plutôt que de constater le manque.
+            if self._source_de(nom) is None:
+                bati = self._batir_la_source_de(nom)
+                if not bati:
+                    manques.append(f"{nom} (rien ne le produit et rien n'a pu être bâti)")
+                    continue
+
+            ok, detail = self.amener(nom, cible, "assembling-machine-1")
+            (faits if ok else manques).append(detail)
+
+        return bool(faits) and not manques, (
+            f"science alimentée : {' ; '.join(faits)}"
+            + (f" — MANQUE : {' ; '.join(manques)}" if manques else ""))
+
+    def _batir_la_source_de(self, item: str) -> bool:
+        """Fait apparaître de quoi produire `item` : une chaîne, ou une assembleuse.
+
+        Une plaque se fond au bout d'une chaîne sur son minerai ; une pièce se fabrique
+        dans une assembleuse qu'on règle et qu'on branche. Les deux montages existent
+        déjà, il ne manquait que d'en choisir un.
+        """
+        from services import site_finder
+
+        minerai = {"copper-plate": "copper-ore", "iron-plate": "iron-ore",
+                   "stone-brick": "stone"}.get(item)
+        if minerai is not None:
+            precedente = self.ressource
+            try:
+                self.ressource = minerai
+                ok, _ = self.agir(Decision(action="batir_production",
+                                           raison=f"il faut du {item} pour la science"))
+            finally:
+                self.ressource = precedente
+            return bool(ok)
+
+        # Une pièce intermédiaire : une assembleuse de plus, réglée sur elle.
+        if perception.recipe_of(self.api, item) is None:
+            return False
+        if not perception.inventory(self.api).get("assembling-machine-1", 0):
+            fait, _ = self.fabriquer("assembling-machine-1", 1)
+            if not fait:
+                return False
+        source = site_finder.poteau_alimente_le_plus_proche(
+            self.api, self.zone[0], self.zone[1])
+        centre = (source[0], source[1]) if source else self.zone
+        for dx in range(-8, 9, 2):
+            for dy in range(-8, 9, 2):
+                x, y = float(int(centre[0] + dx)) + 0.5, float(int(centre[1] + dy)) + 0.5
+                if not site_finder.can_place(self.api, "assembling-machine-1", x, y):
+                    continue
+                self.api.run_action(self.api.place_entity_at, "assembling-machine-1",
+                                    x, y, "north", None, timeout=20.0)
+                if not any(e.get("name") == "assembling-machine-1"
+                           for e in site_finder._entites_a(self.api, x, y, 1.5)):
+                    continue
+                self.api.run_action(self.api.set_recipe_at, x, y, item, timeout=20.0)
+                etat = self.api.get_power_state(x, y, 1.5) or {}
+                if etat.get("connected") is not True:
+                    self.relier(Symptome(name="assembling-machine-1", x=x, y=y,
+                                         cause="debranchee", gravite=1,
+                                         detail="assembleuse posée à l'instant"))
+                # Elle-même doit être alimentée : ses ingrédients viennent d'ailleurs.
+                for sous in (perception.recipe_of(self.api, item) or []):
+                    s_nom = sous[0] if isinstance(sous, (tuple, list)) else str(sous)
+                    if self._source_de(s_nom) is not None:
+                        self.amener(s_nom, (x, y), "assembling-machine-1")
+                return True
+        return False
+
+    def brancher(self, nom: str, x: float, y: float) -> bool:
+        """Donne du courant à ce qu'on vient de poser. Rend True si le courant est là.
+
+        Quatrième fois que ce geste manquait, et à chaque fois la panne s'est présentée
+        autrement : une chaîne bâtie hors couverture, un bras d'évacuation posé sans
+        courant que la boucle rediagnostiquait au tour suivant, un laboratoire qui
+        consommait ses flacons sans rien chercher, et enfin un bras de chargement à
+        soixante-dix tuiles de la centrale — belt déroulée, bras posés, et pas un seul
+        objet transporté. Rien à la pose ne le signale : l'entité est là, elle a l'air
+        juste, et elle ne fait rien.
+
+        La règle, désormais écrite une fois : CE QU'ON POSE, ON L'ALIMENTE.
+        """
+        etat = self.api.get_power_state(x, y, 1.2) or {}
+        if etat.get("connected") is True:
+            return True
+        self.relier(Symptome(name=nom, x=x, y=y, cause="debranchee", gravite=1,
+                             detail="posée à l'instant"))
+        apres = self.api.get_power_state(x, y, 1.2) or {}
+        return apres.get("connected") is True
+
+    def _demi_largeur(self, x: float, y: float, defaut: float = 1.5) -> float:
+        """La demi-largeur RÉELLE de la machine posée là — sa bounding box, pas son nom.
+
+        Deviner coûte cher : un bras n'atteint qu'une tuile, si bien qu'une belt posée
+        d'une demi-tuile trop loin ne se charge jamais, et rien à la pose ne le signale.
+        """
+        brut = self.api.rcon.query_lua(
+            f"local s = game.surfaces[1] local w = 0 "
+            f"for _, e in pairs(s.find_entities_filtered{{force='player', "
+            f"area={{{{{x - 0.4},{y - 0.4}}},{{{x + 0.4},{y + 0.4}}}}}}}) do "
+            f"  if e.type ~= 'character' then "
+            f"    local bb = e.bounding_box "
+            f"    local d = math.max(bb.right_bottom.x - bb.left_top.x, "
+            f"bb.right_bottom.y - bb.left_top.y) / 2 "
+            f"    if d > w then w = d end end end rcon.print(w)")
+        try:
+            mesure = float(str(brut).strip())
+        except ValueError:
+            return defaut
+        return mesure if mesure > 0 else defaut
+
+    def _source_de(self, item: str, loin: float = 120.0
+                   ) -> Optional[tuple[str, float, float]]:
+        """Une machine qui PRODUIT `item`, la plus proche. Ou None.
+
+        On cherche ce qui fabrique, pas ce qui contient : un coffre plein se vide, une
+        chaîne qui tourne ne s'arrête pas. Un four est retenu sur ce qu'il a en sortie,
+        une assembleuse sur la recette qu'on lui a donnée.
+        """
+        brut = self.api.rcon.query_lua(
+            f"local s = game.surfaces[1] local best, bd = nil, 1e18 "
+            f"for _, e in pairs(s.find_entities_filtered{{force='player', "
+            f"area={{{{{self.zone[0] - loin},{self.zone[1] - loin}}},"
+            f"{{{self.zone[0] + loin},{self.zone[1] + loin}}}}}}}) do "
+            f"  local produit = false "
+            f"  if e.type == 'furnace' or e.type == 'assembling-machine' then "
+            f"    local ok, rec = pcall(function() return e.get_recipe() end) "
+            f"    if ok and rec then "
+            f"      for _, p in pairs(rec.products) do "
+            f"        if p.name == '{item}' then produit = true end end end "
+            f"    local out = e.get_output_inventory() "
+            f"    if out and out.get_item_count('{item}') > 0 then produit = true end "
+            f"  end "
+            f"  if produit then "
+            f"    local d = (e.position.x - {self.zone[0]})^2 + (e.position.y - {self.zone[1]})^2 "
+            f"    if d < bd then bd = d best = e end end end "
+            f"if best then rcon.print(best.name .. ',' .. best.position.x .. ',' "
+            f".. best.position.y) else rcon.print('') end")
+        morceaux = str(brut).strip().split(",")
+        if len(morceaux) != 3:
+            return None
+        try:
+            return (morceaux[0], float(morceaux[1]), float(morceaux[2]))
+        except ValueError:
+            return None
+
+    def amener(self, item: str, vers: tuple[float, float], vers_nom: str,
+               belt: str = "transport-belt") -> tuple[bool, str]:
+        """Fait venir `item` jusqu'à la machine en `vers` : bras, belt, bras.
+
+        C'est ce qui sépare une usine d'une corvée. L'assembleuse de science tournait sur
+        une provision déposée à la main : elle s'arrêtait dès qu'elle l'avait consommée,
+        et il fallait revenir la remplir. Tant que c'est l'agent qui porte, rien ne tourne
+        en son absence.
+
+        Le montage réutilise ce qui est éprouvé : `place_inserter_vers` pose les bras en
+        LISANT leur pickup et leur drop réels (un bras mal orienté se pose sans erreur et
+        ne transporte rien), et `place_belt_line` oriente chaque segment vers l'aval (une
+        seule tuile mal tournée arrête le flux sans que rien ne le signale).
+        """
+        from services import site_finder
+
+        source = self._source_de(item)
+        if source is None:
+            return False, f"rien ne produit {item} à portée — il faut d'abord en bâtir la chaîne"
+        nom_src, sx, sy = source
+        distance = math.hypot(sx - vers[0], sy - vers[1])
+
+        # Assez près pour un simple bras : inutile de dérouler une belt sur trois tuiles.
+        if distance <= 4.5:
+            pont = site_finder.place_inserter_vers(
+                self.api, vers, (sx, sy), vers_nom, nom="inserter",
+                source_types=(nom_src,))
+            if pont is None:
+                return False, (f"{nom_src} est à {distance:.0f} tuiles de {vers_nom}, "
+                               f"mais aucun bras ne peut les relier")
+            alimente = self.brancher("inserter", pont[0], pont[1])
+            return alimente, (f"{item} : {nom_src}@({sx:.0f},{sy:.0f}) verse directement "
+                              f"dans {vers_nom} ({distance:.0f} tuiles)"
+                              + ("" if alimente else " — MAIS le bras est sans courant"))
+
+        # Sinon : bras -> belt -> bras. L'écart se CALCULE sur la machine, il ne se
+        # devine pas : un four de pierre fait 2x2 (bord à 1), une assembleuse 3x3 (bord à
+        # 1.5). Un écart fixe convient donc à l'une et pas à l'autre — mesuré deux fois,
+        # d'abord « SANS bras de déchargement » avec deux tuiles (la belt touchait
+        # l'assembleuse), puis « SANS bras de chargement » avec trois (la belt était à
+        # deux tuiles et demie du four, hors de portée d'un bras qui n'en atteint qu'une).
+        # Il faut le bord, plus la tuile du bras, plus le demi-pas de la belt.
+        ecart_src = self._demi_largeur(sx, sy) + 1.5
+        ecart_cible = self._demi_largeur(vers[0], vers[1]) + 1.5
+        vers_src = ((sx + (ecart_src if vers[0] > sx else -ecart_src)), sy)
+        vers_cible = ((vers[0] + (ecart_cible if sx > vers[0] else -ecart_cible)), vers[1])
+        tuiles, complete = site_finder.place_belt_line(
+            self.api, vers_src, vers_cible, belt=belt)
+        if not tuiles:
+            return False, (f"aucune belt posée entre {nom_src}@({sx:.0f},{sy:.0f}) et "
+                           f"{vers_nom} ({distance:.0f} tuiles)")
+
+        charge = site_finder.place_inserter_vers(
+            self.api, tuiles[0], (sx, sy), belt, nom="inserter", source_types=(nom_src,))
+        decharge = site_finder.place_inserter_vers(
+            self.api, vers, tuiles[-1], vers_nom, nom="inserter", source_types=(belt,))
+        # Les bras sont ÉLECTRIQUES, et celui du bout de la belt est aussi loin que la
+        # source : soixante-dix tuiles de la centrale, donc hors de toute couverture.
+        # Mesuré — belt déroulée, bras posés aux deux bouts, et pas un objet transporté.
+        sans_courant = [f"({p[0]:.0f},{p[1]:.0f})"
+                        for p in (charge, decharge) if p is not None
+                        and not self.brancher("inserter", p[0], p[1])]
+        ok = charge is not None and decharge is not None and not sans_courant
+        return ok, (f"{item} : {nom_src}@({sx:.0f},{sy:.0f}) -> {len(tuiles)} tuile(s) de "
+                    f"belt -> {vers_nom} ({distance:.0f} tuiles"
+                    + ("" if complete else ", tracé INTERROMPU") + ")"
+                    + ("" if charge is not None else " — SANS bras de chargement")
+                    + ("" if decharge is not None else " — SANS bras de déchargement")
+                    + (f" — bras SANS COURANT en {', '.join(sans_courant)}"
+                       if sans_courant else ""))
+
     def _alimenter_la_chaine(self, ancre: tuple[float, float],
                              rayon: float = 8.0) -> int:
         """Vérifie que CHAQUE machine fraîchement posée reçoit du courant, et la relie.
