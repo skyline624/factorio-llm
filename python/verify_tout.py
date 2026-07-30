@@ -41,6 +41,7 @@ COMPORTEMENT = [
     ("verify_evacuation_e21.py", "une sortie bouchée finit par recevoir un ramassage"),
     ("verify_defense_e21.py", "une défense qui ne mène à rien cède la place"),
     ("verify_objectif_e22.py", "l'agent mesure son débit et étend sous objectif"),
+    ("verify_recherche_e24.py", "l'agent débloque ce qu'il ne savait pas encore faire"),
     # En DERNIER : c'est le seul qui fige une carte sans dotation. Il la rend garnie
     # avant de sortir, mais le placer en fin de liste évite que ce rétablissement soit
     # le seul rempart entre lui et les autres.

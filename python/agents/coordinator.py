@@ -1497,6 +1497,119 @@ class Coordinator:
         return gagnee, (f"pour ouvrir {recette} : {marche} — {detail}"
                         + ("" if gagnee else f" — « {marche.nom} » toujours pas acquise"))
 
+    def poser_le_laboratoire(self) -> tuple[Optional[tuple[float, float]], str]:
+        """Trouve un laboratoire en service, ou en pose un et le branche.
+
+        Un laboratoire est ÉLECTRIQUE : posé hors de toute couverture, il consomme des
+        flacons sans jamais chercher, et la recherche paraîtrait simplement lente. On le
+        relie donc à la pose — même règle que pour les chaînes et les bras d'évacuation,
+        apprise trois fois : ce qu'on pose, on l'alimente.
+        """
+        from services import site_finder
+
+        deja = [e for e in site_finder._entites_a(self.api, self.zone[0], self.zone[1],
+                                                  self.rayon)
+                if e.get("name") == "lab"]
+        if deja:
+            x, y = float(deja[0].get("x", 0.0)), float(deja[0].get("y", 0.0))
+            return (x, y), f"laboratoire déjà en place en ({x:.0f},{y:.0f})"
+
+        inv = perception.inventory(self.api)
+        if not inv.get("lab", 0):
+            ok, detail = self.fabriquer("lab", 1)
+            if not ok:
+                return None, f"aucun laboratoire, et impossible d'en fabriquer un : {detail}"
+
+        # On cherche autour d'un poteau ALIMENTÉ : poser d'abord et brancher ensuite
+        # oblige à tirer une ligne, alors qu'il suffit de se poser là où le courant est.
+        source = site_finder.poteau_alimente_le_plus_proche(
+            self.api, self.zone[0], self.zone[1])
+        centre = (source[0], source[1]) if source else self.zone
+        for dx in range(-6, 7, 2):
+            for dy in range(-6, 7, 2):
+                x = float(int(centre[0] + dx)) + 0.5
+                y = float(int(centre[1] + dy)) + 0.5
+                if not site_finder.can_place(self.api, "lab", x, y):
+                    continue
+                r = self.api.run_action(self.api.place_entity_at, "lab", x, y,
+                                        "north", None, timeout=20.0)
+                pose = any(e.get("name") == "lab"
+                           for e in site_finder._entites_a(self.api, x, y, 1.5))
+                if (isinstance(r, dict) and r.get("ok")) or pose:
+                    etat = self.api.get_power_state(x, y, 1.5) or {}
+                    if etat.get("connected") is not True:
+                        self.relier(Symptome(name="lab", x=x, y=y, cause="debranchee",
+                                             gravite=1, detail="laboratoire posé à l'instant"))
+                    apres = self.api.get_power_state(x, y, 1.5) or {}
+                    return (x, y), (f"laboratoire posé en ({x:.0f},{y:.0f})"
+                                    + ("" if apres.get("connected") is True
+                                       else " — MAIS toujours sans courant"))
+        return None, "aucune place libre pour un laboratoire près du réseau"
+
+    def chercher(self, techno: str) -> tuple[bool, str]:
+        """Obtient une technologie : par le geste qui la déclenche, ou en la payant.
+
+        Deux régimes, et les confondre fait perdre la partie de deux façons opposées :
+        s'acharner sur la file de recherche pour une technologie qui attend un craft, ou
+        attendre un craft pour une technologie qui réclame vingt flacons dans un
+        laboratoire.
+
+        Le paiement est décomposé jusqu'au minerai par `fabriquer` : un flacon vaut une
+        plaque de cuivre et un engrenage, donc vingt flacons valent vingt cuivres et
+        quarante fers, que l'agent va miner et fondre s'il ne les a pas.
+        """
+        from services import recherche
+
+        arbre = recherche.lire(self.api)
+        if techno in arbre.acquises:
+            return True, f"« {techno} » est déjà acquise"
+        marche = next((m for m in arbre.marches if m.nom == techno), None)
+        if marche is None:
+            return False, (f"« {techno} » n'est pas à portée : soit elle est déjà "
+                           f"acquise, soit il lui manque des prérequis")
+
+        # Régime 1 : un geste suffit.
+        if marche.declencheur is not None and marche.gratuite:
+            cible, vise = recherche.quantite_a_produire(
+                marche, perception.inventory(self.api))
+            if cible:
+                ok, detail = self.fabriquer(cible, vise)
+                acquise = techno in recherche.lire(self.api).acquises
+                return acquise, f"{marche} — {detail}"
+
+        # Régime 2 : il faut payer. On fabrique les flacons AVANT de poser quoi que ce
+        # soit : inutile de bâtir un laboratoire qu'on ne pourra pas alimenter.
+        inv = perception.inventory(self.api)
+        manques = []
+        for nom, par_unite in marche.cout:
+            besoin = par_unite * marche.unites
+            if inv.get(nom, 0) < besoin:
+                ok, detail = self.fabriquer(nom, inv.get(nom, 0) + besoin - inv.get(nom, 0))
+                if not ok:
+                    manques.append(f"{nom} ({inv.get(nom, 0)}/{besoin}) : {detail[:60]}")
+        if manques:
+            return False, f"« {techno} » non payée — {' ; '.join(manques)}"
+
+        ou, detail_lab = self.poser_le_laboratoire()
+        if ou is None:
+            return False, f"« {techno} » : {detail_lab}"
+
+        # Les flacons vont DANS le laboratoire : les garder en poche ne cherche rien.
+        inv = perception.inventory(self.api)
+        charges = []
+        for nom, par_unite in marche.cout:
+            combien = min(inv.get(nom, 0), par_unite * marche.unites)
+            if combien > 0:
+                self.api.run_action(self.api.move_items_at, nom, "lab", ou[0], ou[1],
+                                    combien, True, timeout=20.0)
+                charges.append(f"{combien} {nom}")
+
+        r = self.api.run_action(self.api.research_technology, techno, timeout=180.0)
+        acquise = techno in recherche.lire(self.api).acquises
+        return acquise, (f"{marche} — {detail_lab}, chargé de {', '.join(charges) or 'rien'}"
+                         + (f" — {r.get('detail')}" if isinstance(r, dict) else "")
+                         + ("" if acquise else " — TOUJOURS PAS acquise"))
+
     def _alimenter_la_chaine(self, ancre: tuple[float, float],
                              rayon: float = 8.0) -> int:
         """Vérifie que CHAQUE machine fraîchement posée reçoit du courant, et la relie.

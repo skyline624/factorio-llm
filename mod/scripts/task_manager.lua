@@ -1087,7 +1087,13 @@ local function state_researching(params)
       return
     end
     params.started = true
-    log("[fl] recherche lancee: " .. params.technology_name)
+    -- L'horizon est celui de la TECHNOLOGIE : nombre d'unites x duree d'une unite, avec
+    -- une marge (le laboratoire s'arrete quand il manque de courant ou de flacons). Sans
+    -- cela, le garde-fou par defaut tue une recherche qui se deroulait normalement.
+    local total = (tech.research_unit_count or 1) * (tech.research_unit_energy or 900)
+    params.max_ticks = math.floor(total * 1.5) + 600
+    log("[fl] recherche lancee: " .. params.technology_name
+        .. " (horizon " .. params.max_ticks .. " ticks)")
     return
   end
   local tech = force.technologies[params.technology_name]
@@ -1106,9 +1112,18 @@ end
 function M.tick()
   if not storage.fl.tasks then return end
 
-  -- Garde-fou global.
+  -- Garde-fou global. Une tache peut demander un horizon PLUS LONG que le defaut, et
+  -- une seule le fait : la recherche. `logistics` reclame 20 unites de 900 ticks, soit
+  -- 18 000 ticks -- trois fois le garde-fou. Mesure : le laboratoire cherchait
+  -- normalement (statut working, 8 flacons deja consommes sur 20) et la tache etait
+  -- tuee a 40 % avec un laconique « timeout », ce qui envoie soupconner l'energie ou
+  -- l'approvisionnement alors que tout marchait. Allonger le defaut pour autant serait
+  -- payer toutes les autres actions au prix de la plus lente.
   if storage.fl.current and storage.fl.current_started_tick then
-    if game.tick - storage.fl.current_started_tick > MAX_TASK_TICKS then
+    -- `storage.fl.current` EST la table de parametres (elle porte `.type`) : l'horizon
+    -- pose par la tache s'y lit directement.
+    local limite = storage.fl.current.max_ticks or MAX_TASK_TICKS
+    if game.tick - storage.fl.current_started_tick > limite then
       stop_walking()
       M._complete("timeout", false)
       return
