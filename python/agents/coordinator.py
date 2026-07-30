@@ -587,6 +587,9 @@ class Coordinator:
         # GRANDE, et l'attente est construite après l'action, donc trop tard pour observer
         # l'avant.
         self._machines_vues = 0
+        # Le même comptage, mais pris depuis la ZONE et limité aux machines qui
+        # PRODUISENT — c'est la seule grandeur qu'une extension doit faire monter.
+        self._machines_posees = 0
         # D'où part la chaîne qui alimente chaque machine : la tuile de sortie du foreur.
         # Sans ce point de départ, on ne peut pas SUIVRE le flux, et donc pas vérifier
         # qu'une chaîne bâtie transporte réellement quelque chose.
@@ -656,6 +659,14 @@ class Coordinator:
         etat.debit, etat.objectif = self._mesurer_debit(), self.objectif_par_s
         etat.objectif_item = self.objectif_item
         self._machines_vues = etat.machines
+        # Compté depuis la ZONE, indépendamment d'où se trouve le personnage : c'est ce
+        # que l'attente d'une extension comparera, et deux comptages ne se comparent que
+        # s'ils sont pris du même endroit.
+        if self.objectif_par_s is not None:
+            n = perception.compter_machines(self.api, self.zone[0], self.zone[1],
+                                            self.rayon)
+            if n >= 0:
+                self._machines_posees = n
         # La menace est évaluée à CHAQUE tour : elle change sans qu'on y touche, alors
         # que l'usine ne change que quand on agit.
         etat.menace = evaluer(self.api.scan_threats(self.zone[0], self.zone[1], 300.0),
@@ -748,11 +759,16 @@ class Coordinator:
             # il monte de lui-même avec le temps, une extension ratée passerait donc pour
             # une réussite. On compare au bâti vu à l'observation — l'attente étant
             # construite après l'action, c'est le seul « avant » disponible.
-            vues = self._machines_vues
+            #
+            # Le comptage part de la ZONE et non du personnage : `scan_area` est centré
+            # sur lui, et l'exécution vient de le téléporter près du chantier. Mesuré,
+            # l'attente échouait à chaque extension pourtant réussie — un écart et une
+            # enquête pour rien à chaque tour.
+            vues = self._machines_posees
             return Attente(
-                f"l'usine compte plus de {vues} machine(s)",
-                lambda api: diagnose_zone(api, self.zone[0], self.zone[1],
-                                          self.rayon).machines,
+                f"l'usine compte plus de {vues} machine(s) de production",
+                lambda api: perception.compter_machines(api, self.zone[0], self.zone[1],
+                                                        self.rayon),
                 lambda n: isinstance(n, int) and n > vues,
                 delai_ticks=180)
 

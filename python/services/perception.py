@@ -88,6 +88,32 @@ def centrales(api: ModApi,
     return [e for e in lignes if e.get("type") in types]
 
 
+def compter_machines(api: ModApi, x: float, y: float, rayon: float,
+                     types: tuple[str, ...] = ("mining-drill", "furnace",
+                                               "assembling-machine")) -> int:
+    """Combien de machines de production autour d'un POINT. -1 si la lecture échoue.
+
+    `scan_area` est centré sur le PERSONNAGE, et l'exécution d'une construction le
+    téléporte près du chantier : deux comptages successifs se prennent donc depuis des
+    endroits différents et ne se comparent pas. Mesuré — l'attente d'une extension
+    (« l'usine compte plus de N machines ») échouait à CHAQUE fois alors que les
+    extensions réussissaient, produisant un écart et une enquête pour rien à chaque tour.
+
+    On compte donc depuis un point fixe, celui de la zone. Les organes passifs (poteaux,
+    coffres, belts) sont exclus : ils gonflent le total sans rien produire.
+    """
+    noms = ",".join(f"'{t}'" for t in types)
+    try:
+        brut = api.rcon.query_lua(
+            f"local s = game.surfaces[1] "
+            f"local n = #s.find_entities_filtered{{force='player', type={{{noms}}}, "
+            f"area={{{{{x - rayon},{y - rayon}}},{{{x + rayon},{y + rayon}}}}}}} "
+            f"rcon.print(n)")
+        return int(str(brut).strip())
+    except (AttributeError, ValueError, TypeError):
+        return -1
+
+
 def production_cumulee(api: ModApi, item: str) -> int:
     """Combien d'unités de `item` l'usine a produites depuis le début. -1 si illisible.
 
