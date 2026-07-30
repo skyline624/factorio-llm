@@ -196,9 +196,73 @@ def tracer_en_l(depart: tuple[float, float], arrivee: tuple[float, float],
     for chemin in candidats:
         if chemin and not any(t in interdites for t in chemin):
             return chemin, True
-    # Aucun tracé propre : on rend le plus court, et l'appelant décide.
+    # AUCUN L NE PASSE : on contourne. Le L reste préféré — prévisible, débogable à
+    # l'œil — mais il ne sait tourner qu'une fois, et cela ne suffit pas dans un
+    # corridor déjà emprunté. Plutôt que de rendre un tracé qui traverse ce qu'il ne
+    # devrait pas, on cherche un vrai chemin.
+    contour, trouve = tracer_chemin(depart, arrivee, interdites, garde * 3)
+    if trouve and contour:
+        return contour, True
     plus_court = min((c for c in candidats if c), key=len, default=[])
     return plus_court, not any(t in interdites for t in plus_court)
+
+
+def tracer_chemin(depart: tuple[float, float], arrivee: tuple[float, float],
+                  eviter: Optional[set] = None, garde: int = 600
+                  ) -> tuple[list[tuple[float, float]], bool]:
+    """Le chemin le plus court qui CONTOURNE, quand aucun L ne passe.
+
+    Un trajet en L est prévisible et se débogue à l'œil — c'est pourquoi il reste le
+    premier essayé. Mais il ne sait que tourner une fois : dans un corridor où passent
+    déjà d'autres flux et leurs bras, il se coupe ou ne trouve rien. Mesuré : trois
+    inserters sur l'axe du cuivre, et selon qu'on les déclarait franchissables ou non,
+    une ligne en morceaux ou « aucun tracé libre » sur quatorze tuiles.
+
+    Un parcours en largeur, lui, contourne. Il est PUR — aucun accès au jeu — donc
+    éprouvable hors ligne, ce qui compte pour une décision aussi discrète : un chemin qui
+    passe par une tuile de trop ne se voit nulle part, sinon par un flux qui s'arrête.
+
+    Rend (tuiles, trouvé). La liste EXCLUT l'arrivée, comme `tracer_en_l`, pour que
+    l'appelant garde la même convention.
+    """
+    from collections import deque
+
+    interdites = eviter or set()
+    d0 = (math.floor(depart[0]) + 0.5, math.floor(depart[1]) + 0.5)
+    d1 = (math.floor(arrivee[0]) + 0.5, math.floor(arrivee[1]) + 0.5)
+    if d0 == d1:
+        return [], True
+
+    # On borne l'exploration à la boîte des deux points, élargie : sans cela le parcours
+    # partirait à l'infini quand l'arrivée est enfermée.
+    marge = 14.0
+    x_min, x_max = min(d0[0], d1[0]) - marge, max(d0[0], d1[0]) + marge
+    y_min, y_max = min(d0[1], d1[1]) - marge, max(d0[1], d1[1]) + marge
+
+    file = deque([d0])
+    venu = {d0: None}
+    while file and len(venu) < garde:
+        ici = file.popleft()
+        if ici == d1:
+            break
+        for dx, dy in ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)):
+            suivant = (ici[0] + dx, ici[1] + dy)
+            if suivant in venu or suivant in interdites:
+                continue
+            if not (x_min <= suivant[0] <= x_max and y_min <= suivant[1] <= y_max):
+                continue
+            venu[suivant] = ici
+            file.append(suivant)
+    if d1 not in venu:
+        return [], False
+
+    chemin = []
+    noeud = d1
+    while noeud is not None:
+        chemin.append(noeud)
+        noeud = venu[noeud]
+    chemin.reverse()
+    return chemin[:-1], True          # sans l'arrivée : même convention que le L
 
 
 def _enjamber(api, tuiles: list, i: int, direction: str, belt: str,

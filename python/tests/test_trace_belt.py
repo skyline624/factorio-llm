@@ -105,12 +105,54 @@ def test_sans_interdiction_le_trace_est_celui_d_avant() -> None:
     assert ok
 
 
+def test_le_contournement_passe_la_ou_aucun_L_ne_passe() -> None:
+    """Quand tous les L sont barrés, un vrai chemin contourne.
+
+    C'est le défaut mesuré en jeu : trois inserters sur l'axe du cuivre. Déclarés
+    franchissables, la ligne se coupait ; déclarés infranchissables, plus aucun L ne
+    passait et l'on ne posait rien du tout. Un trajet qui ne sait tourner qu'une fois ne
+    suffit pas dans un corridor déjà emprunté.
+    """
+    from services.site_finder import tracer_chemin
+    # Un mur vertical complet, avec une seule ouverture très au nord : aucun L simple
+    # ne peut l'emprunter, un contournement oui.
+    mur = {(2.5, y + 0.5) for y in range(-6, 6) if y != -6}
+    tuiles, propre = tracer_en_l((0.5, 0.5), (4.5, 0.5), eviter=mur)
+    direct, trouve = tracer_chemin((0.5, 0.5), (4.5, 0.5), eviter=mur)
+    contigu = all(abs(a[0] - b[0]) + abs(a[1] - b[1]) == 1.0
+                  for a, b in zip(direct, direct[1:]))
+    ok = (propre and tuiles and not any(t in mur for t in tuiles)
+          and trouve and contigu and not any(t in direct for t in mur))
+    rec("test_le_contournement_passe_la_ou_aucun_L_ne_passe", ok,
+        f"mur de {len(mur)} tuiles -> {len(tuiles)} tuile(s) par tracer_en_l "
+        f"(propre={propre}), {len(direct)} par le contournement (contiguës={contigu})")
+    assert ok
+
+
+def test_le_contournement_declare_l_impossible() -> None:
+    """Encerclé, il rend `False` au lieu d'un chemin qui traverse.
+
+    Un tracé qui passe par une tuile de trop ne se voit nulle part — sinon par un flux
+    qui s'arrête sans rien signaler. Mieux vaut refuser que livrer une ligne fausse.
+    """
+    from services.site_finder import tracer_chemin
+    cage = {(x + 0.5, y + 0.5) for x in range(-2, 3) for y in range(-2, 3)
+            if (x, y) != (0, 0)}
+    tuiles, trouve = tracer_chemin((0.5, 0.5), (6.5, 6.5), eviter=cage)
+    ok = not trouve and not tuiles
+    rec("test_le_contournement_declare_l_impossible", ok,
+        f"depart encerclé -> trouvé={trouve}, {len(tuiles)} tuile(s)")
+    assert ok
+
+
 def main() -> int:
     for t in (test_le_trace_relie_le_depart_a_l_arrivee,
               test_le_trace_contourne_la_ligne_d_un_autre_flux,
               test_le_trace_bascule_quand_le_premier_L_est_barre,
               test_un_trace_impossible_se_declare,
-              test_sans_interdiction_le_trace_est_celui_d_avant):
+              test_sans_interdiction_le_trace_est_celui_d_avant,
+              test_le_contournement_passe_la_ou_aucun_L_ne_passe,
+              test_le_contournement_declare_l_impossible):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

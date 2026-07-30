@@ -2285,13 +2285,15 @@ class Coordinator:
                      # (-18,-62) », trois poteaux sur l'axe du cuivre, et une ligne en
                      # morceaux qui ne transportait rien. Une tuile qu'on ne peut ni
                      # occuper ni libérer doit être contournée à la planification.
-                     # SEULEMENT LES MACHINES. Y ajouter les poteaux, coffres et bras a
-                     # été essayé : le trajet devient impossible (« aucun tracé libre »
-                     # sur quatorze tuiles), même en élargissant l'éventail des coudes.
-                     # Une machine est un mur ; le reste ne coupe qu'une tuile, et mieux
-                     # vaut une ligne avec un trou à réparer qu'aucune ligne du tout.
+                     # TOUT CE QUI OCCUPE DURABLEMENT UNE TUILE. Y compris les poteaux,
+                     # coffres et bras : `degager_tuile` n'ôte que ce que la nature a mis
+                     # là, jamais nos ouvrages. Les déclarer franchissables coupait la
+                     # ligne ; les déclarer infranchissables ne laissait aucun L. C'est
+                     # `tracer_en_l` qui tranche désormais — il CONTOURNE quand aucun L
+                     # ne passe, au lieu de renoncer.
                      if e.get("type") in ("furnace", "assembling-machine", "lab",
-                                          "mining-drill", "boiler", "generator")]
+                                          "mining-drill", "boiler", "generator",
+                                          "electric-pole", "container", "inserter")]
         for cx, cy in [(sx, sy), (vers[0], vers[1])] + obstacles:
             demi = self._demi_largeur(cx, cy)
             # L'EMPRISE, PAS LA PÉRIPHÉRIE. Interdire une tuile de plus tout autour
@@ -2336,8 +2338,15 @@ class Coordinator:
         # de belt à chaque bout pour y accrocher les bras ; les compter comme « déjà
         # prises » interdisait au tracé de partir de son propre départ — « aucun tracé
         # libre » partout, et cinq tuiles isolées en tout et pour tout.
-        occupees.discard(vers_src)
-        occupees.discard(vers_cible)
+        # NI SES EXTRÉMITÉS, NI LEURS ABORDS IMMÉDIATS. Une fois machines, poteaux,
+        # coffres et bras déclarés infranchissables, la tuile d'arrivée se retrouve
+        # ENCERCLÉE — le chemin ne peut plus y accéder, et l'on rend « aucun tracé libre »
+        # alors qu'un contournement existe à une tuile près. On rouvre donc le voisinage
+        # des deux bouts : c'est par là que la ligne doit entrer et sortir.
+        for bout in (vers_src, vers_cible):
+            occupees.discard(bout)
+            for dx_v, dy_v in ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)):
+                occupees.discard((bout[0] + dx_v, bout[1] + dy_v))
 
         # ON TRACE JUSQU'À LA TUILE D'ARRIVÉE INCLUSE. `tracer_en_l` s'arrête avant sa
         # destination ; en visant `vers_cible`, la ligne s'interrompait donc une tuile

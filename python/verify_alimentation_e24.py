@@ -306,6 +306,9 @@ def main() -> int:
     rec("4: la chaîne d'alimentation est montée", ok_alim, detail_alim)
 
     # --- Mesure du FLUX sur six fenêtres ---
+    # Fenêtres de 1500 ticks : allongées à 3000, elles ne captent pas mieux un flux qui
+    # s'épuise après sa première salve — mesuré, le même total de trois cuivres et trois
+    # engrenages, concentré sur une seule fenêtre dans les deux cas.
     FENETRES, TICKS = 6, 1500
 
     def _consommes() -> dict:
