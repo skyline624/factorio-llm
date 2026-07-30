@@ -156,9 +156,49 @@ def main() -> int:
     # l'agent se servait ensuite comme source — à quatorze tuiles de la nôtre, hors de
     # la scène que ce banc contrôle, et parfois sans courant. Deux sources concurrentes
     # rendaient le résultat imprévisible : on ne savait plus laquelle était mesurée.
-    coord.tick()
-    cuivre = _poser_source(rcon, api, "copper-plate", "copper-ore", zone[0] - 14, zone[1] - 6)
-    fer = _poser_source(rcon, api, "iron-plate", "iron-ore", zone[0] + 14, zone[1] - 6)
+    # ON JOUE DES TOURS JUSQU'À CE QUE L'ÉNERGIE SOIT LÀ, sans aller plus loin. Un seul
+    # tour ne bâtit pas toujours la centrale — l'agent décide, et son premier choix n'est
+    # pas garanti ; mesuré, un passage sans le moindre boiler sur la carte, donc « SCENE
+    # NON MONTEE » alors que le banc n'avait simplement pas laissé le temps de bâtir. On
+    # s'arrête dès que le réseau produit, pour ne pas laisser naître une chaîne
+    # concurrente qui brouillerait la mesure.
+    for _ in range(4):
+        etat_r = api.get_power_state(zone[0], zone[1], 8.0) or {}
+        if float(etat_r.get("productionKW") or 0) > 0:
+            break
+        coord.tick()
+        rcon.query_lua(
+            "local s = game.surfaces[1] "
+            "for _, e in pairs(s.find_entities_filtered{name='boiler'}) do "
+            "  local f = e.get_fuel_inventory() if f then f.insert{name='coal', count=200} end end "
+            "rcon.print('ok')")
+        api.run_action(api.wait, 180, timeout=90.0)
+
+    # LA CENTRALE EST GARNIE TOUT DE SUITE. Un boiler brûle son charbon en moins de deux
+    # minutes ; garni plus tard, le réseau est déjà à zéro quand l'agent pose son
+    # laboratoire et son assembleuse, et tout ce qui suit se monte sans courant.
+    rcon.query_lua(
+        "local s = game.surfaces[1] "
+        "for _, e in pairs(s.find_entities_filtered{name='boiler'}) do "
+        "  local f = e.get_fuel_inventory() if f then f.insert{name='coal', count=200} end end "
+        "rcon.print('ok')")
+    # LES SOURCES SONT ALIGNÉES SUR L'ASSEMBLEUSE, et posées APRÈS elle. Placées d'avance
+    # « quelque part », leurs trajets devenaient des L dont le coude contournait la tuile
+    # d'arrivée et coupait le flux — trois belts isolées, et le cuivre qui s'arrêtait à
+    # deux tuiles de son but. Sur un même axe, le trajet est une LIGNE DROITE : il n'y a
+    # plus de coude, donc plus de contournement possible. Un banc de convoyage doit
+    # éprouver le convoyage, pas la capacité d'un tracé en L à se faufiler.
+    ok_auto, detail_auto = coord.automatiser_la_science()
+    if not ok_auto:
+        print(f"[SKIP] la science n'a pas pu être automatisée ({detail_auto[:90]}) — "
+              f"ce banc suppose ce maillon acquis, il ne l'éprouve pas.")
+        rcon.close()
+        return 0
+    ou_asm = _science(rcon)
+    axe_y = ou_asm.get("y", zone[1] - 6)
+    axe_x = ou_asm.get("x", zone[0])
+    cuivre = _poser_source(rcon, api, "copper-plate", "copper-ore", axe_x - 14, axe_y)
+    fer = _poser_source(rcon, api, "iron-plate", "iron-ore", axe_x + 14, axe_y)
 
     # ET ON TIRE LE COURANT JUSQU'À ELLES. Un four électrique sans courant ne fond rien,
     # n'a donc jamais de recette, et reste invisible comme source : mesuré, les deux
@@ -169,32 +209,31 @@ def main() -> int:
     from services import site_finder
     depart = site_finder.poteau_alimente_le_plus_proche(api, zone[0], zone[1])
     for dx in (-14, 14):
-        cible_p = (zone[0] + dx - 2.5, zone[1] - 6 + 2.5)
+        cible_p = (axe_x + dx - 2.5, axe_y + 2.5)
         if depart is not None:
             site_finder.place_pole_line(api, (depart[0], depart[1]), cible_p)
-        coord.brancher("electric-furnace", zone[0] + dx, zone[1] - 6)
-        coord.brancher("inserter", zone[0] + dx + 1.5, zone[1] - 6)
+        coord.brancher("electric-furnace", axe_x + dx, axe_y)
+        coord.brancher("inserter", axe_x + dx + 1.5, axe_y)
     # Les chaudières sont regarnies : un boiler brûle son charbon en moins de deux
     # minutes, et sur les neuf mille ticks de la mesure tout s'arrêterait.
-    rcon.query_lua(
-        "local s = game.surfaces[1] "
-        "for _, e in pairs(s.find_entities_filtered{name='boiler'}) do "
-        "  local f = e.get_fuel_inventory() if f then f.insert{name='coal', count=200} end end "
-        "rcon.print('ok')")
     api.run_action(api.wait, 600, timeout=180.0)
     print(f"       scène : {cuivre} | {fer}", flush=True)
 
-    reseau = api.get_power_state(zone[0], zone[1], 6.0) or {}
+    # ON REGARNIT JUSTE AVANT DE JUGER. Deux cents charbons brûlent en quelques minutes
+    # de jeu, et le montage de la scène en consomme autant : la centrale, garnie au
+    # départ, était déjà retombée à zéro au moment du contrôle — « SCENE NON MONTEE » sur
+    # une usine qui venait de tourner. Le combustible se donne au dernier moment.
+    rcon.query_lua(
+        "local s = game.surfaces[1] "
+        "for _, e in pairs(s.find_entities_filtered{name='boiler'}) do "
+        "  local f = e.get_fuel_inventory() if f then f.insert{name='coal', count=500} end end "
+        "rcon.print('ok')")
+    api.run_action(api.wait, 300, timeout=120.0)
+    # À L'ASSEMBLEUSE, pas au point de départ : la scène a pu déblayer ce coin-là.
+    reseau = api.get_power_state(axe_x, axe_y, 6.0) or {}
     if float(reseau.get("productionKW") or 0) <= 0:
         print("[SKIP] SCENE NON MONTEE : le réseau ne produit rien — ce banc éprouve le "
               "transport, pas la tenue d'une centrale.")
-        rcon.close()
-        return 0
-
-    ok_auto, detail_auto = coord.automatiser_la_science()
-    if not ok_auto:
-        print(f"[SKIP] la science n'a pas pu être automatisée ({detail_auto[:90]}) — "
-              f"ce banc suppose ce maillon acquis, il ne l'éprouve pas.")
         rcon.close()
         return 0
 
