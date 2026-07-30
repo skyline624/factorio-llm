@@ -276,6 +276,40 @@ class Arbitre(Protocol):
     def __call__(self, etat: "EtatUsine", options: list["Decision"]) -> int: ...
 
 
+def figer_pendant(api, actif: bool, fonction, *args):
+    """Exécute une RÉFLEXION sans laisser le temps de jeu s'écouler.
+
+    Mesuré : un appel au modèle coûte cinq secondes réelles, soit trois mille ticks de
+    jeu à ×10 — cinquante secondes de partie pour une seule décision. Sur trente minutes
+    de jeu, douze appels en emportent le tiers. L'effet est pervers : plus l'agent
+    rencontre de dilemmes — ce qu'on a passé la journée à obtenir — moins il lui reste de
+    temps pour agir, et une partie « avec modèle » se compare alors à une partie « sans »
+    comme un agent lent à un agent rapide, pas comme deux stratégies.
+
+    `game.tick_paused` fige le monde pendant la réflexion (vérifié : zéro tick sur trois
+    secondes). On ne fige QUE la décision, jamais l'action : les tâches du mod sont
+    asynchrones et ne progresseraient plus.
+
+    Fonction de module et non méthode : elle est ainsi éprouvable seule, et un appelant
+    qui n'a pas d'API réelle — les faux Coordinator des tests — la traverse sans rien
+    savoir de `game.tick_paused`. La reprise est dans un `finally` : une exception
+    pendant la réflexion laisserait sinon le monde figé.
+    """
+    if not actif:
+        return fonction(*args)
+    try:
+        api.rcon.query_lua("game.tick_paused = true rcon.print(1)")
+    except Exception:
+        return fonction(*args)          # pas de pause possible : on réfléchit quand même
+    try:
+        return fonction(*args)
+    finally:
+        try:
+            api.rcon.query_lua("game.tick_paused = false rcon.print(1)")
+        except Exception:
+            pass
+
+
 def enumerer_options(etat: EtatUsine) -> list[Decision]:
     """Toutes les actions légales dans cet état, de la plus urgente à la moins.
 
@@ -492,7 +526,8 @@ class Coordinator:
                  tourelle: str = "gun-turret", munition: str = "firearm-magazine",
                  ombre: bool = False, enqueteur=None,
                  objectif_par_s: Optional[float] = None,
-                 objectif_item: str = "iron-plate"):
+                 objectif_item: str = "iron-plate",
+                 pause_reflexion: bool = False):
         self.api = api
         self.zone = zone
         self.rayon = rayon
@@ -525,6 +560,9 @@ class Coordinator:
         # de marche » cesse d'être une raison de ne rien faire.
         self.objectif_par_s = objectif_par_s
         self.objectif_item = objectif_item
+        # Le temps de reflexion du modele ne doit pas etre facture en temps de JEU.
+        # Cf. `sans_ecoulement` : c'est un choix de protocole, donc explicite.
+        self.pause_reflexion = pause_reflexion
         self._cumul: Optional[int] = None       # production cumulée à la dernière mesure
         self._tick_cumul: Optional[int] = None
         self._debit: Optional[float] = None     # dernier débit calculé, en items/s de jeu
@@ -604,6 +642,11 @@ class Coordinator:
                               usine=self.zone)
         self.derniere_menace = etat.menace
         return etat
+
+    def sans_ecoulement(self, fonction, *args):
+        """Réflexion sans écoulement du temps de jeu — cf. `figer_pendant`."""
+        return figer_pendant(self.api, getattr(self, "pause_reflexion", False),
+                             fonction, *args)
 
     def _mesurer_debit(self) -> Optional[float]:
         """Le débit réel, en items/s de jeu, ou None s'il n'est pas encore mesurable.
@@ -1082,7 +1125,8 @@ class Coordinator:
         # mauvais côté et la machine se retrouve enfermée entre sa livraison et un mur.
         # Mesuré : four posé à l'est de l'assembleuse, gisement à l'ouest, belt contrainte
         # de contourner et s'arrêtant en diagonale. Chaîne complète, four à jeun.
-        source = self.choisir_gisement(besoin, (cible.x, cible.y), self.PORTEE_APPRO)
+        source = self.sans_ecoulement(self.choisir_gisement, besoin,
+                                      (cible.x, cible.y), self.PORTEE_APPRO)
         if source is None:
             return False, (f"aucun gisement de « {besoin} » à moins de "
                            f"{self.PORTEE_APPRO:.0f} tuiles pour fabriquer « {item} »")
@@ -1307,7 +1351,8 @@ class Coordinator:
         from services.executor import execute_micro
 
         # Quel gisement : une décision, pas un calcul. Cf. `choisir_gisement`.
-        choix = self.choisir_gisement(item, (cible.x, cible.y), self.PORTEE_APPRO)
+        choix = self.sans_ecoulement(self.choisir_gisement, item, (cible.x, cible.y),
+                                     self.PORTEE_APPRO)
         if choix is None:
             return False, (f"aucun gisement de {item} à moins de {self.PORTEE_APPRO:.0f} "
                            f"tuiles : c'est un problème de train, pas de belt")
@@ -1689,7 +1734,9 @@ class Coordinator:
         effet, jamais sur le fait qu'elle ait été prise.
         """
         etat = self.observer()
-        d = decide(etat, self.arbitre)
+        d = figer_pendant(getattr(self, "api", None),
+                          getattr(self, "pause_reflexion", False),
+                          decide, etat, self.arbitre)
         agi, detail = self.agir(d)
         self.journal.append(f"{d} -> {'agi' if agi else 'sans effet'} ({detail})")
 

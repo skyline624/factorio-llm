@@ -281,6 +281,71 @@ def test_option_avec_materiel_reste_prioritaire() -> None:
     assert ok
 
 
+class _ApiJournal:
+    """Une API qui note les ordres Lua reçus — de quoi vérifier la pause sans serveur."""
+
+    def __init__(self, casse: bool = False):
+        self.ordres: list[str] = []
+        parent = self
+
+        class _Rcon:
+            def query_lua(self, code: str) -> str:
+                if casse:
+                    raise RuntimeError("rcon mort")
+                parent.ordres.append("pause" if "= true" in code else "reprise")
+                return "1"
+
+        self.rcon = _Rcon()
+
+
+def test_la_reflexion_ne_coute_pas_de_temps_de_jeu() -> None:
+    """Le monde est figé pendant la décision, et relancé après.
+
+    Mesuré : un appel au modèle coûte cinq secondes réelles, soit ~3000 ticks de jeu à
+    ×10. Douze appels emportent le tiers d'une partie de trente minutes — donc plus
+    l'agent a de dilemmes, moins il agit, et l'on compare un agent lent à un agent
+    rapide plutôt que deux stratégies.
+    """
+    from agents.coordinator import figer_pendant
+    api = _ApiJournal()
+    r = figer_pendant(api, True, lambda: "décidé")
+    ok = r == "décidé" and api.ordres == ["pause", "reprise"]
+    rec("test_la_reflexion_ne_coute_pas_de_temps_de_jeu", ok, f"{api.ordres} -> {r}")
+    assert ok
+
+
+def test_le_monde_repart_meme_si_la_reflexion_echoue() -> None:
+    """LA propriété critique : une exception ne doit pas laisser la partie figée."""
+    from agents.coordinator import figer_pendant
+    api = _ApiJournal()
+
+    def _explose():
+        raise RuntimeError("le modèle a planté")
+
+    leve = False
+    try:
+        figer_pendant(api, True, _explose)
+    except RuntimeError:
+        leve = True
+    ok = leve and api.ordres == ["pause", "reprise"]
+    rec("test_le_monde_repart_meme_si_la_reflexion_echoue", ok,
+        f"exception propagée={leve}, ordres={api.ordres}")
+    assert ok
+
+
+def test_sans_pause_ou_sans_rcon_on_reflechit_quand_meme() -> None:
+    """Le protocole de mesure ne doit jamais empêcher l'agent de décider."""
+    from agents.coordinator import figer_pendant
+    muet = _ApiJournal()
+    inactif = figer_pendant(muet, False, lambda: "ok")
+    casse = figer_pendant(_ApiJournal(casse=True), True, lambda: "ok")
+    absent = figer_pendant(None, True, lambda: "ok")
+    ok = inactif == "ok" and casse == "ok" and absent == "ok" and muet.ordres == []
+    rec("test_sans_pause_ou_sans_rcon_on_reflechit_quand_meme", ok,
+        f"inactif={inactif} rcon_casse={casse} api_absente={absent}")
+    assert ok
+
+
 def test_sous_objectif_il_etend_au_lieu_de_ne_rien_faire() -> None:
     """Un agent qui VISE cesse de se satisfaire de « ça tourne ».
 

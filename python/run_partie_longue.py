@@ -185,8 +185,12 @@ def main(argv: list[str]) -> int:
     else:
         pos = (api.get_state().get("character") or {}).get("position") or {}
         zone = (float(pos.get("x", 0.0)), float(pos.get("y", 0.0)))
+    # Le monde est figé pendant que le modèle réfléchit. Sans cela, une partie « avec
+    # modèle » se compare à une partie « sans » comme un agent lent à un agent rapide :
+    # mesuré, un appel coûte cinq secondes réelles, soit trois mille ticks de jeu à ×10,
+    # et douze appels emportent le tiers d'une partie de trente minutes.
     coord = Coordinator(api, zone=zone, rayon=30.0, ombre=ombre,
-                        objectif_par_s=objectif)
+                        objectif_par_s=objectif, pause_reflexion=True)
 
     ticks_vises = int(minutes * 60 * 60)
     t0 = _tick(api)
