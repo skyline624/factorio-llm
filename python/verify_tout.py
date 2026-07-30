@@ -42,27 +42,20 @@ COMPORTEMENT = [
     ("verify_defense_e21.py", "une défense qui ne mène à rien cède la place"),
     ("verify_objectif_e22.py", "l'agent mesure son débit et étend sous objectif"),
     ("verify_recherche_e24.py", "l'agent débloque ce qu'il ne savait pas encore faire"),
+    ("verify_alimentation_e24.py", "les ingrédients arrivent sans qu'on les porte"),
     # En DERNIER : c'est le seul qui fige une carte sans dotation. Il la rend garnie
     # avant de sortir, mais le placer en fin de liste évite que ce rétablissement soit
     # le seul rempart entre lui et les autres.
     ("verify_bootstrap_craft.py", "les mains vides, l'agent fabrique ce qu'il pose"),
 ]
 
-# PAS ENCORE DANS LA LISTE : `verify_alimentation_e24.py` (5/6). Il est écrit, il tourne,
-# et son sixième constat est ROUGE — délibérément. Il éprouve une chaîne à DEUX étages
-# (fer -> engrenages -> science) dont le second ne transporte pas : l'assembleuse à
-# engrenages garde trois pièces bloquées en sortie, et la science ne reçoit que du cuivre.
-# Le premier étage, lui, marche — c'est ce que le banc montre en 5/6.
-#
-# L'affaiblir pour le faire entrer reviendrait à écrire qu'un maillon tient alors qu'il
-# ne tient pas ; l'y mettre rouge ferait échouer une batterie qui doit rester un signal
-# fiable. Il attend donc que le second étage soit réparé, et se lance seul en attendant :
-#     python verify_alimentation_e24.py
-
 # Le bootstrap part d'un inventaire VIDE : il refabrique deux fois sa référence et va
 # chercher son charbon à plus de deux cents tuiles. Lui imposer le délai des autres le
 # ferait échouer en TIMEOUT sur sa seule longueur, ce qui ne mesure rien.
-TIMEOUTS = {"verify_bootstrap_craft.py": 3000.0}
+# `verify_alimentation_e24` monte sa scène puis observe SIX fenêtres de 1500 ticks :
+# il lui faut son propre délai, comme au bootstrap.
+TIMEOUTS = {"verify_bootstrap_craft.py": 3000.0,
+            "verify_alimentation_e24.py": 2400.0}
 
 
 def _repartir_de_la_reference() -> None:

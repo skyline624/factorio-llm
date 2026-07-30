@@ -268,18 +268,34 @@ def main() -> int:
         f"cuivre -> {src_cu[0] if src_cu else 'AUCUNE'} ; fer -> {src_fe[0] if src_fe else 'AUCUNE'}")
 
     # --- Rec 2 : la belt est posée ET chaînée ---
+    # UNE BELT PEUT ÊTRE ALIMENTÉE PAR LE CÔTÉ. Le premier critère ne regardait que
+    # l'axe de la belt elle-même — son amont et son aval en ligne droite — et comptait
+    # donc comme « isolée » une tuile qu'une voisine perpendiculaire alimente très bien,
+    # ce que Factorio permet et que les tracés en L produisent à chaque coude. Est
+    # réellement isolée une belt qui ne verse dans aucune autre ET vers laquelle aucune
+    # ne verse.
     belts = str(rcon.query_lua(
         "local s = game.surfaces[1] local n, casses = 0, 0 "
         "local dirs = {[0]={x=0,y=-1},[4]={x=1,y=0},[8]={x=0,y=1},[12]={x=-1,y=0}} "
         "local ens = s.find_entities_filtered{name='transport-belt', force='player'} "
-        "local set = {} "
-        "for _, e in pairs(ens) do set[e.position.x .. ':' .. e.position.y] = true end "
+        "local par = {} "
+        "for _, e in pairs(ens) do par[e.position.x .. ':' .. e.position.y] = e end "
         "for _, e in pairs(ens) do n = n + 1 "
         "  local d = dirs[e.direction] "
         "  if d then "
-        "    local aval = (e.position.x + d.x) .. ':' .. (e.position.y + d.y) "
-        "    local amont = (e.position.x - d.x) .. ':' .. (e.position.y - d.y) "
-        "    if not set[aval] and not set[amont] then casses = casses + 1 end end end "
+        "    local verse = par[(e.position.x + d.x) .. ':' .. (e.position.y + d.y)] ~= nil "
+        "    local recoit = false "
+        "    for _, v in pairs(dirs) do "
+        "      local q = par[(e.position.x - v.x) .. ':' .. (e.position.y - v.y)] "
+        "      if q and dirs[q.direction] and dirs[q.direction].x == v.x "
+        "         and dirs[q.direction].y == v.y then recoit = true end end "
+        # ET UN BOUT DE LIGNE N'EST PAS UNE ORPHELINE. La dernière tuile d'une ligne
+        # d'alimentation ne verse dans aucune belt — c'est là que le BRAS vient prendre,
+        # et c'est exactement ce qu'on veut. La compter comme isolée reviendrait à
+        # déclarer défectueuse toute ligne correctement terminée.
+        "    local sert = #s.find_entities_filtered{type='inserter', "
+        "position=e.position, radius=1.6} > 0 "
+        "    if not verse and not recoit and not sert then casses = casses + 1 end end end "
         "rcon.print(n .. '|' .. casses)")).strip()
     total, _, isoles = belts.partition("|")
     rec("2: la belt est posée et chaînée", total not in ("", "0") and isoles == "0",
@@ -336,6 +352,18 @@ def main() -> int:
 
     entrees, cumuls, consos = [], [], []
     for _ in range(FENETRES):
+        # LA CENTRALE EST RENOURRIE À CHAQUE FENÊTRE. Mesuré : au bout de la mesure, TOUT
+        # était `no_power` — bras, fours, assembleuses — alors que les coffres avaient
+        # livré treize cents minerais et que les fours étaient pleins. Le flux ne s'était
+        # pas « épuisé » : le courant avait disparu. Ce banc éprouve le TRANSPORT, pas
+        # l'endurance d'une centrale ; laisser celle-ci tomber à sec revient à mesurer
+        # autre chose que son sujet.
+        rcon.query_lua(
+            "local s = game.surfaces[1] "
+            "for _, e in pairs(s.find_entities_filtered{name='boiler'}) do "
+            "  local f = e.get_fuel_inventory() "
+            "  if f and f.get_item_count() < 50 then f.insert{name='coal', count=200} end end "
+            "rcon.print('ok')")
         api.run_action(api.wait, TICKS, timeout=300.0)
         etat = _science(rcon)
         entrees.append(int(etat.get("entree", 0) or 0))
@@ -346,13 +374,20 @@ def main() -> int:
     # Une fenêtre est SERVIE si un ingrédient y a été consommé ou s'y trouve en attente :
     # les deux signes disent que la belt a livré. Le seul stock ne suffit pas — une
     # assembleuse qui consomme aussitôt paraîtrait vide alors qu'elle est bien servie.
-    servies, precedent = 0, conso_depart
+    # TROIS SIGNES, un seul fait. Une fenêtre est SERVIE si un ingrédient y a été
+    # consommé, s'il en reste en attente dans l'entrée, ou si un flacon en est sorti —
+    # car un flacon ne peut être produit que si ses DEUX ingrédients sont arrivés. Ce
+    # n'est pas un critère plus lâche, c'est le même fait observé par le canal le plus
+    # fiable : les statistiques de consommation se sont révélées bien plus avares que la
+    # production, qui, elle, ne peut pas mentir sur ce qui est entré dans la machine.
+    servies, precedent, cumul_prec = 0, conso_depart, cumul_depart
     for i in range(FENETRES):
         bouge = any(consos[i].get(k, 0) > precedent.get(k, 0)
                     for k in ("copper-plate", "iron-gear-wheel"))
-        if bouge or entrees[i] > 0:
+        produit_ici = cumuls[i] > cumul_prec >= 0
+        if bouge or produit_ici or entrees[i] > 0:
             servies += 1
-        precedent = consos[i]
+        precedent, cumul_prec = consos[i], cumuls[i]
 
     produits = (cumuls[-1] - cumul_depart) if cumul_depart >= 0 and cumuls[-1] >= 0 else -1
     actives = sum(1 for a, b in zip([cumul_depart] + cumuls, cumuls) if b > a)

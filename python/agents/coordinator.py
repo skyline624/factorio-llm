@@ -2393,6 +2393,21 @@ class Coordinator:
                                         None, timeout=20.0)
                     tuiles.append((bx, by))
 
+        # ON NE LAISSE PAS DE TUILE ORPHELINE. La tuile d'arrivée est posée d'avance pour
+        # accrocher le bras ; si le tracé a finalement abouti ailleurs, elle reste seule
+        # au milieu de rien — un convoyeur qui ne relie personne, que le banc compte à
+        # juste titre comme un défaut de pose. On la retire quand aucune belt ne la
+        # dessert et qu'elle-même ne verse nulle part.
+        if vers_cible not in tuiles:
+            voisine = any(
+                e.get("type") == "transport-belt"
+                for dxv, dyv in ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0))
+                for e in site_finder._entites_a(self.api, vers_cible[0] + dxv,
+                                                vers_cible[1] + dyv, 0.4))
+            if not voisine:
+                self.api.run_action(self.api.remove_entity_at, vers_cible[0],
+                                    vers_cible[1], belt, timeout=20.0)
+
         # LA TUILE D'ARRIVÉE DOIT REGARDER LA MACHINE. `tracer_en_l` s'arrête AVANT elle
         # — c'est nous qui l'avons posée d'avance, pour y accrocher le bras, avec
         # l'orientation par défaut. Mesuré : la belt du fer descendait chargée sur onze
