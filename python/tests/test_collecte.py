@@ -265,11 +265,35 @@ def test_le_minerai_atteint_les_bras_du_premier_etage() -> None:
                f"{len(departs)} foreuse(s), {len(perdus)} dont le minerai n'arrive nulle part")
 
 
+def test_le_produit_final_a_ou_aller() -> None:
+    """Une chaîne sans sortie se bouche : elle produit, puis s'arrête.
+
+    Mesuré en jeu : `assembling-machine-1: full_output`, `electric-furnace: full_output`
+    — la chaîne tourne quelques minutes, remplit ses machines de tête et se tait. Le
+    planner pose un puits pour les CO-PRODUITS fluides orphelins (`_place_fluid_sink`,
+    S2b-1) mais rien pour le produit final solide, qui n'a pourtant pas plus de
+    destination.
+
+    Ce qu'on exige : quelque chose, au bout de la chaîne, accepte ce qu'elle fabrique —
+    un coffre, ou un bras qui l'y verse.
+    """
+    lp = _plan_chaine()
+    cible = lp.request.plan.request.item
+    vivants = [e for e in lp.entities if not getattr(e, "skip", False)]
+    puits = [e for e in vivants
+             if getattr(e, "role", "") in ("store", "sink")
+             or "chest" in getattr(e, "name", "")]
+    assert rec("le produit final a un puits", bool(puits),
+               f"cible={cible} — {len(puits)} puits : "
+               f"{[(e.name, e.x, e.y) for e in puits[:3]] or 'AUCUN, la chaîne se bouchera'}")
+
+
 TESTS = [test_gisement_large_toutes_les_foreuses_atteignent_la_belt,
          test_gisement_etroit_aucune_foreuse_n_est_abandonnee_loin_de_la_belt,
          test_chaque_bras_a_quelque_chose_sous_sa_prise,
          test_chaque_bras_puise_dans_la_bonne_source,
-         test_le_minerai_atteint_les_bras_du_premier_etage]
+         test_le_minerai_atteint_les_bras_du_premier_etage,
+         test_le_produit_final_a_ou_aller]
 
 
 def main() -> int:

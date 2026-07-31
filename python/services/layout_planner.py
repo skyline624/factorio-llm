@@ -153,6 +153,11 @@ class LayoutConstraints:
     # qui se contredisent aujourd'hui — les réconcilier demande de revoir `stage_gap`
     # et la réservation d'emprise, ce qui dépasse ce correctif.
     collect_belt_scope: str = "patch"
+    # Puits du produit FINAL. Une chaine qui produit sans rien pour recevoir se bouche :
+    # `full_output` sur ses machines de tete, et tout s'arrete derriere. Le planner posait
+    # deja un puits pour les co-produits FLUIDES orphelins (`_place_fluid_sink`) ; celui-ci
+    # en est le pendant solide. Vide -> aucun puits (back-compat stricte).
+    sink_tier: str = "wooden-chest"
     # S4 : adaptation terrain (contournement + replan auto déterministe).
     # constructible_zone = bbox autorisée (coords map). None = pas de borne (back-compat S3d).
     # replan_budget = 0 = aucun replan auto (back-compat S3d) ; typique S4b = 4 (borné).
@@ -1406,6 +1411,36 @@ def _place_pipe_bus_stub(entities, totals, pipe_name, item, facing,
         u += 1.0
 
 
+def _place_solid_sink(idx_belt: int, facing: int, entities: list, totals: dict,
+                      constraints, item: str, notes: list) -> Optional[int]:
+    """Pose un coffre et le bras qui l'alimente, au bout de la belt de sortie finale.
+
+    UNE CHAINE SANS SORTIE SE BOUCHE. Elle produit quelques minutes, remplit ses machines
+    de tete et se tait : `assembling-machine-1: full_output`, `electric-furnace:
+    full_output`, et derriere elles toute la mine a l'arret. Mesure en jeu sur une chaine
+    d'engrenages complete et par ailleurs saine.
+
+    Le montage est le meme qu'ailleurs : le bras PUISE du cote vers lequel il pointe
+    (`_dir_prise`), donc il regarde la belt et depose dans le coffre pose au-dela.
+
+    Rend l'index du coffre, ou None si la contrainte ne demande aucun puits.
+    """
+    if not getattr(constraints, "sink_tier", ""):
+        return None
+    e_belt = entities[idx_belt]
+    ub, vb = _to_uv(facing, e_belt.x, e_belt.y)
+    bx, by = _to_xy(facing, ub + 1.0, vb)
+    cx, cy = _to_xy(facing, ub + 2.0, vb)
+    _add(entities, constraints.inserter_tier, bx, by, _dir_prise(facing), "inserter",
+         node_item=item)
+    totals[constraints.inserter_tier] = totals.get(constraints.inserter_tier, 0) + 1
+    idx = _add(entities, constraints.sink_tier, cx, cy, FACING_DIR_U[facing], "store",
+               node_item=item)
+    totals[constraints.sink_tier] = totals.get(constraints.sink_tier, 0) + 1
+    notes.append(f"puits:{item} ({constraints.sink_tier})")
+    return idx
+
+
 def _place_transition(from_idx: int, to_idx: int, facing: int,
                        entities: list, totals: dict, belt_name: str,
                        item: str, notes: list) -> None:
@@ -2347,6 +2382,15 @@ def _plan_bus_core(request: LayoutRequest, geometry: GeometryBase, splan, constr
                 feasibility = "obstacle_blocking"
 
     # Obstacles (S0 : note si bbox intersecte un obstacle — pas de contournement, S4).
+    # LE PRODUIT FINAL DOIT AVOIR OU ALLER. Les etages intermediaires deversent dans le
+    # suivant ; le dernier ne deverse nulle part et se bouche. On lui pose un puits, comme
+    # le planner le fait depuis S2b-1 pour les co-produits fluides orphelins.
+    _cible = getattr(getattr(request.plan, "request", None), "item", "")
+    _info_finale = stage_info.get(_cible)
+    if _info_finale is not None and _info_finale.get("belt_out_last") is not None:
+        _place_solid_sink(_info_finale["belt_out_last"], facing, entities, totals,
+                          request.constraints, _cible, notes)
+
     # S4b : skippé si terrain_check (la détection per-entité ci-dessus est un superset plus
     # précis ; évite les doublons de notes). Back-compat : terrain_check=False -> S3d inchangé.
     if (not request.constraints.terrain_check) and request.terrain.obstacles and entities:
@@ -2627,6 +2671,17 @@ def _plan_core(request: LayoutRequest, geometry: GeometryBase) -> LayoutPlan:
     # Obstacles (S0 : note si une entité tombe dans un bbox bloquant — pas de contournement, S4).
     # S4b : skippé si terrain_check (la détection per-entité ci-dessus est un superset plus
     # précis ; évite les doublons de notes). Back-compat : terrain_check=False -> S3d inchangé.
+    # LE PRODUIT FINAL DOIT AVOIR OU ALLER. Les etages intermediaires deversent dans
+    # le suivant ; le dernier ne deverse nulle part et se bouche -- `full_output` sur
+    # ses machines de tete, et toute la mine a l'arret derriere. On lui pose un puits,
+    # comme le planner le fait depuis S2b-1 pour les co-produits fluides orphelins.
+    # `belt_out_last` porte la sortie du DERNIER etage parcouru ; l'ordre topologique
+    # place la cible en fin de course, c'est donc bien la sienne.
+    _cible = getattr(getattr(request.plan, "request", None), "item", "")
+    if belt_out_last is not None:
+        _place_solid_sink(belt_out_last, facing, entities, totals,
+                          request.constraints, _cible, notes)
+
     if (not request.constraints.terrain_check) and request.terrain.obstacles and entities:
         ent_bbox = _bbox_of(entities)
         for obs in request.terrain.obstacles:
