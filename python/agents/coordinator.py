@@ -69,7 +69,13 @@ PRIORITE = {"defendre_urgence": 4, "reparer": 3, "batir_energie": 2, "defendre":
             # débloque (cf. `enumerer_options`). Une pièce qui manque pour une réparation
             # est urgente comme une réparation ; pour une extension, comme une extension.
             # Lui donner un rang fixe doublerait tout le curriculum d'un cran.
-            "batir_production": 1, "etendre_production": 1, "rien": 0}
+            # `chercher` vaut EXACTEMENT autant qu'étendre, et c'est délibéré : les deux
+            # font grandir l'usine, l'une en largeur, l'autre en profondeur. Leur donner
+            # le même rang crée le premier vrai dilemme du projet — produire plus
+            # maintenant, ou débloquer ce qui produira mieux ensuite. C'est précisément
+            # là qu'un arbitre a quelque chose à trancher ; un rang supérieur ferait
+            # chercher sans fin, un rang inférieur ne ferait jamais chercher.
+            "batir_production": 1, "etendre_production": 1, "chercher": 1, "rien": 0}
 
 # Fenêtre minimale, en ticks de JEU, pour mesurer un débit. Deux observations rapprochées
 # donnent un rapport dominé par le bruit : une plaque de plus sur trente ticks vaut
@@ -171,6 +177,13 @@ class EtatUsine:
     # Ce que le réseau arrive à fournir, entre 0 et 1. `None` = pas mesuré, ce qui n'est
     # pas « tout va bien » : on n'agrandit pas une usine sur une mesure absente.
     satisfaction: Optional[float] = None
+    # LA MARCHE DE RECHERCHE À PORTÉE, et ce qu'elle coûte. L'agent savait chercher
+    # depuis E24 — lire l'arbre, franchir un déclencheur, payer en flacons — mais rien
+    # ne le lui proposait jamais : `chercher` n'était dans aucun curriculum, et ces
+    # capacités dormaient. Une capacité qu'aucune décision n'appelle n'existe pas.
+    marche: Optional[str] = None          # nom de la technologie visée, None = aucune
+    marche_cout: str = ""                 # « fabriquer 10 copper-plate », « 10 x 1 … »
+    marche_ouvre: tuple = ()              # ce qu'elle débloque, pour le journal
     # Les machines qui PRODUISENT, à l'exclusion des organes d'énergie. Depuis que le
     # diagnostic embrasse les centrales (elles se posent au bord de l'eau, hors de la
     # zone), `machines` n'est plus jamais nul après `batir_energie` — et la condition de
@@ -518,7 +531,18 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
              (f"{etat.debit:.2f} {etat.objectif_item}/s produits pour "
               f"{etat.objectif:.2f} demandés : l'usine tient, elle ne suffit pas"
               if etat.debit is not None and etat.objectif is not None else ""),
-             PRIORITE["etendre_production"])):
+             PRIORITE["etendre_production"]),
+            # CHERCHER EST UNE FAÇON DE GRANDIR. On ne le propose que si l'usine tourne
+            # déjà — une technologie ne nourrit personne tant qu'il n'y a pas de quoi la
+            # payer — et si une marche est réellement à portée. La condition sur les
+            # machines évite le piège symétrique de celui d'`etendre_production` :
+            # chercher au lieu de bâtir sa première chaîne serait un raffinement avant
+            # l'essentiel.
+            ("chercher", etat.marche is not None and etat.machines > 0,
+             (f"« {etat.marche} » est à portée ({etat.marche_cout}) et ouvre "
+              f"{', '.join(etat.marche_ouvre[:3]) or 'la suite de l’arbre'}"
+              if etat.marche else ""),
+             PRIORITE["chercher"])):
         if not condition:
             continue
         rates = etat.echecs.get((action, "", 0, 0), 0)
@@ -526,7 +550,12 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
         options.append(Decision(
             action=action,
             raison=raison + (f" — ÉCHOUÉ {rates} fois, on n'insiste plus" if renonce else ""),
-            priorite=0 if renonce else prio, faisable=not renonce))
+            priorite=0 if renonce else prio, faisable=not renonce,
+            # La technologie visée voyage AVEC la décision. L'extraire du texte de la
+            # raison marchait au banc et échouait dans la boucle — les guillemets
+            # français ne survivent pas à tous les chemins. Même leçon que pour
+            # `fabriquer` : une décision porte la donnée, elle ne la fait pas deviner.
+            item=(etat.marche or "") if action == "chercher" else ""))
 
     if not options:
         options.append(Decision(action="rien",
@@ -773,6 +802,22 @@ class Coordinator:
             # Le compter parmi les besoins fait que le manque appelle un minage, au lieu
             # de laisser la construction échouer trois fois puis s'abandonner.
             etat.besoins_production += ((COMBUSTIBLE, self.AMORCE_CHAINE_BURNER),)
+
+        # LA PROCHAINE MARCHE DE RECHERCHE. On retient la MOINS CHÈRE de celles qui sont
+        # à portée : une technologie qui se déclenche par un geste passe avant une qui
+        # réclame des flacons, et parmi celles qui se paient, la plus courte d'abord.
+        # Avancer par petits pas vaut mieux que viser loin et ne jamais y arriver.
+        try:
+            from services import recherche
+            arbre = recherche.lire(self.api)
+            marches = sorted(arbre.marches,
+                             key=lambda m: (0 if m.gratuite else 1, m.unites))
+            if marches:
+                etat.marche = marches[0].nom
+                etat.marche_cout = str(marches[0]).split("(", 1)[-1].split(")", 1)[0]
+                etat.marche_ouvre = marches[0].debloque
+        except Exception:
+            pass                    # arbre illisible : on n'en fait pas une panne
         # Compté depuis la ZONE, indépendamment d'où se trouve le personnage : c'est ce
         # que l'attente d'une extension comparera, et deux comptages ne se comparent que
         # s'ils sont pris du même endroit. Toujours mesuré — et pas seulement sous
@@ -966,6 +1011,25 @@ class Coordinator:
             # qu'il faudrait et en quelle quantité. Le repli sur la raison couvre les
             # décisions construites à la main (tests, arbitre) qui ne portent pas d'item.
             return self.fabriquer(d.item or d.raison.split(" ")[0], max(1, d.quantite))
+
+        if d.action == "chercher":
+            # La technologie visée est nommée dans la raison par `enumerer_options` —
+            # `decide` reste PURE : elle dit qu'il faudrait chercher, pas comment. Le
+            # chemin d'exécution existe depuis E24 (geste ou flacons) ; il ne lui
+            # manquait que d'être appelé.
+            #
+            # Si la science n'est pas encore automatisée, on la monte AVANT : payer une
+            # recherche à la main puis recommencer à la suivante n'est pas une usine.
+            entre = d.item or d.raison.split("«", 1)[-1].split("»", 1)[0].strip()
+            if entre:
+                from services import recherche
+                marche = next((m for m in recherche.lire(self.api).marches
+                               if m.nom == entre), None)
+                if marche is not None and not marche.gratuite:
+                    self.automatiser_la_science()
+                    self.alimenter_la_science()
+                return self.chercher(entre)
+            return False, "aucune technologie nommée dans la décision"
 
         if d.action == "etendre_production":
             # Une chaîne de PLUS, sur du minerai que le planner ancre lui-même. Même

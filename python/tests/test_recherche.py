@@ -214,6 +214,66 @@ def test_une_recette_fermee_declenche_la_recherche_et_non_un_abandon() -> None:
     assert ok
 
 
+def test_la_boucle_propose_de_chercher_quand_une_marche_est_a_portee() -> None:
+    """Une capacité qu'aucune décision n'appelle n'existe pas.
+
+    L'agent savait chercher depuis E24 — lire l'arbre, franchir un déclencheur, payer en
+    flacons — mais `chercher` n'était dans aucun curriculum : rien ne le lui proposait
+    jamais, et ces capacités dormaient. C'est ce que ce test empêche de refaire.
+    """
+    from agents.coordinator import EtatUsine, enumerer_options
+    from services.factory_doctor import diagnose
+    etat = EtatUsine(machines=4, diagnostic=diagnose([]), reseau=7, production_kw=900.0,
+                     marche="electronics", marche_cout="fabriquer 10 copper-plate",
+                     marche_ouvre=("lab", "inserter", "small-electric-pole"))
+    ch = next((o for o in enumerer_options(etat) if o.action == "chercher"), None)
+    ok = (ch is not None and "electronics" in ch.raison
+          and "fabriquer 10 copper-plate" in ch.raison and "lab" in ch.raison)
+    rec("test_la_boucle_propose_de_chercher_quand_une_marche_est_a_portee", ok,
+        (ch.raison[:90] if ch else "aucune option chercher"))
+    assert ok
+
+
+def test_on_ne_cherche_pas_avant_d_avoir_une_usine() -> None:
+    """Chercher au lieu de bâtir sa première chaîne serait un raffinement avant l'essentiel.
+
+    Symétrique du piège d'`etendre_production` : une technologie ne nourrit personne tant
+    qu'il n'y a pas de quoi la payer.
+    """
+    from agents.coordinator import EtatUsine, enumerer_options
+    from services.factory_doctor import diagnose
+    etat = EtatUsine(machines=0, diagnostic=diagnose([]), reseau=7, production_kw=900.0,
+                     marche="electronics", marche_cout="fabriquer 10 copper-plate")
+    actions = [o.action for o in enumerer_options(etat)]
+    ok = "chercher" not in actions and "batir_production" in actions
+    rec("test_on_ne_cherche_pas_avant_d_avoir_une_usine", ok,
+        f"usine vide -> {actions}")
+    assert ok
+
+
+def test_chercher_et_etendre_ont_le_meme_rang() -> None:
+    """Le premier VRAI dilemme du projet : grandir en largeur ou en profondeur.
+
+    Un rang supérieur ferait chercher sans fin ; un rang inférieur ne ferait jamais
+    chercher. À égalité, c'est l'arbitre qui tranche — et c'est précisément là qu'il a
+    quelque chose à apporter.
+    """
+    from agents.coordinator import EtatUsine, enumerer_options
+    from services.factory_doctor import diagnose
+    etat = EtatUsine(machines=4, diagnostic=diagnose([]), reseau=7, production_kw=900.0,
+                     debit=0.5, objectif=2.0, objectif_item="iron-plate",
+                     marche="logistics", marche_cout="20 x 1 automation-science-pack")
+    options = enumerer_options(etat)
+    ch = next((o for o in options if o.action == "chercher"), None)
+    ex = next((o for o in options if o.action == "etendre_production"), None)
+    ok = (ch is not None and ex is not None and ch.priorite == ex.priorite
+          and sum(1 for o in options if o.faisable) >= 2)
+    rec("test_chercher_et_etendre_ont_le_meme_rang", ok,
+        f"chercher={ch.priorite if ch else None} etendre={ex.priorite if ex else None}, "
+        f"{sum(1 for o in options if o.faisable)} option(s) faisable(s)")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_recette_fermee_se_relie_a_sa_technologie,
               test_la_premiere_marche_ne_coute_aucun_flacon,
@@ -222,7 +282,10 @@ def main() -> int:
               test_une_lecture_ratee_ne_rend_pas_l_agent_plus_bete,
               test_un_arbre_malforme_ne_fait_pas_tomber_la_lecture,
               test_str_dit_quoi_faire_en_une_ligne,
-              test_une_recette_fermee_declenche_la_recherche_et_non_un_abandon):
+              test_une_recette_fermee_declenche_la_recherche_et_non_un_abandon,
+              test_la_boucle_propose_de_chercher_quand_une_marche_est_a_portee,
+              test_on_ne_cherche_pas_avant_d_avoir_une_usine,
+              test_chercher_et_etendre_ont_le_meme_rang):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

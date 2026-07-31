@@ -43,6 +43,7 @@ COMPORTEMENT = [
     ("verify_objectif_e22.py", "l'agent mesure son débit et étend sous objectif"),
     ("verify_recherche_e24.py", "l'agent débloque ce qu'il ne savait pas encore faire"),
     ("verify_alimentation_e24.py", "les ingrédients arrivent sans qu'on les porte"),
+    ("verify_curriculum_recherche.py", "l'agent décide de chercher et enchaîne les technologies"),
     # En DERNIER : c'est le seul qui fige une carte sans dotation. Il la rend garnie
     # avant de sortir, mais le placer en fin de liste évite que ce rétablissement soit
     # le seul rempart entre lui et les autres.
@@ -55,7 +56,8 @@ COMPORTEMENT = [
 # `verify_alimentation_e24` monte sa scène puis observe SIX fenêtres de 1500 ticks :
 # il lui faut son propre délai, comme au bootstrap.
 TIMEOUTS = {"verify_bootstrap_craft.py": 3000.0,
-            "verify_alimentation_e24.py": 2400.0}
+            "verify_alimentation_e24.py": 2400.0,
+            "verify_curriculum_recherche.py": 1800.0}
 
 
 def _repartir_de_la_reference() -> None:
