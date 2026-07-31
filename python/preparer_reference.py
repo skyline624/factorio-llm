@@ -217,6 +217,20 @@ def main(argv: list[str]) -> int:
         "for _, e in pairs(s.find_entities_filtered{type='resource'}) do n = n + 1 end "
         "rcon.print((ok and 'ok' or 'echec') .. '|' .. n)")).strip()
 
+    # LA POLLUTION SE REMET À ZÉRO, elle aussi. Elle est figée dans la save comme le
+    # reste, et s'accumule d'une préparation à l'autre : les nids se réveillent, les
+    # vagues partent, et chaque partie passe son temps à se défendre. Mesuré sur la
+    # batterie — `verify_defense_e21` est passé de 25 s à 741 s en trois exécutions, et
+    # `verify_gisement_e21` de 73 s à 335 s. Aucun code n'avait changé ; seule la carte
+    # s'était énervée. C'est la quatrième dérive du même genre, après l'inventaire, les
+    # technologies et le minerai : ce qu'une partie consomme ou produit doit être remis
+    # à l'état de départ, sans quoi la référence cesse d'en être une.
+    nuage = str(rcon.query_lua(
+        "local s = game.surfaces[1] "
+        "local avant = s.get_total_pollution() "
+        "s.clear_pollution() "
+        "rcon.print(string.format('%.0f', avant))")).strip()
+
     efface = _rase(rcon)
     # Le terrain doit EXISTER avant d'être dégagé : hors des tuiles générées, il n'y a
     # rien à trouver et rien à poser (leçon S4d).
@@ -239,7 +253,7 @@ def main(argv: list[str]) -> int:
               f"{degage} obstacle(s) dégagé(s) sur {rayon:.0f} tuiles")
         print(f"       recherche remise à zéro : {techs} technologie(s) acquise(s)")
         print(f"       gisements régénérés : {ressources.replace('|', ' -> ')} tuile(s) "
-              f"de ressource")
+              f"de ressource | pollution effacée : {nuage}")
         print(f"       SANS DOTATION : {str(vide).strip()} objet(s) retiré(s) — "
               f"l'agent part les mains vides")
     else:
@@ -248,7 +262,7 @@ def main(argv: list[str]) -> int:
               f"{degage} obstacle(s) dégagé(s) sur {rayon:.0f} tuiles")
         print(f"       recherche remise à zéro : {techs} technologie(s) acquise(s)")
         print(f"       gisements régénérés : {ressources.replace('|', ' -> ')} tuile(s) "
-              f"de ressource")
+              f"de ressource | pollution effacée : {nuage}")
         print(f"       dotation : {doses}/{len(DOTATION)} lots insérés"
               + (f" | REFUSÉS : {', '.join(refuses)}" if refuses else ""))
 
