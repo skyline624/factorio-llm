@@ -648,6 +648,93 @@ def populate_from_rcon(api, items: list[str], machines: list[str]) -> KnowledgeB
     return kb
 
 
+def decouvrir_chaine(api, item: str, garde: int = 400) -> tuple[list[str], list[str]]:
+    """Tout ce qu'il faut savoir fabriquer pour obtenir `item`, jusqu'aux feuilles.
+
+    Rend `(items, feuilles)` : la fermeture transitive des ingrédients, et parmi eux ceux
+    qui n'ont PAS de recette — minerais, eau, pétrole brut, c'est-à-dire ce qu'il faudra
+    extraire plutôt que fabriquer.
+
+    CETTE PIÈCE MANQUAIT, et elle rendait le solveur inutilisable en pratique.
+    `populate_from_rcon` réclame la LISTE des items ; le solveur, lui, sait dimensionner
+    n'importe quelle chaîne. Entre les deux, personne ne calculait la liste : il fallait
+    la connaître d'avance, donc l'écrire à la main, donc coder une recette par produit.
+    C'est ce qui a fait dériver l'agent vers un script — chaque nouveau produit était un
+    chantier au lieu d'être un paramètre.
+
+    Mesuré en jeu sur un flacon de science : dix items, deux feuilles (le fer et le
+    cuivre), et le solveur rend un plan complet sans qu'on lui ait rien soufflé.
+
+    `api` est duck-typé (méthode `describe(name) -> dict`), comme `populate_from_rcon` :
+    les tests injectent un faux catalogue et n'ont besoin d'aucun serveur.
+
+    Un item sans recette est une FEUILLE, pas une erreur : c'est le cas normal d'un
+    minerai. On ne distingue donc pas « pas de recette » de « recette verrouillée » —
+    ouvrir une recette est le sujet de `services.recherche`, pas celui-ci.
+
+    `garde` borne le parcours : une recette qui boucle (la liquéfaction du charbon
+    consomme du charbon) tournerait sinon indéfiniment. Le passage par `vus` suffit à
+    couper les cycles ; le garde protège des catalogues aberrants.
+    """
+    vus: set[str] = set()
+    feuilles: list[str] = []
+    a_voir = [item]
+    while a_voir and len(vus) < garde:
+        courant = a_voir.pop()
+        if courant in vus:
+            continue
+        vus.add(courant)
+        d = api.describe(courant)
+        recette = recipe_from_describe(courant, d) if isinstance(d, dict) else None
+        if recette is None:
+            feuilles.append(courant)
+            continue
+        for nom, _ in (recette.ingredients or []):
+            if nom and nom not in vus:
+                a_voir.append(nom)
+    return sorted(vus), sorted(feuilles)
+
+
+def entites_par_type(api, types: tuple[str, ...] = ("assembling-machine", "furnace",
+                                                    "mining-drill")) -> list[str]:
+    """Les entités que le JEU connaît pour ces types, plutôt qu'une liste écrite à la main.
+
+    Sert aux machines (défaut) comme à la logistique (`transport-belt`, `inserter`,
+    `electric-pole`…) : ce sont des TYPES du moteur, jamais des noms de produits.
+
+    Le solveur choisit une machine par catégorie de recette (`kb.pick_machine`), mais il
+    faut d'abord lui en présenter. Coder ce catalogue en constante le figerait au jour où
+    on l'écrit : une machine ajoutée par un mod, ou simplement oubliée, deviendrait
+    invisible — et le solveur rendrait `no_machine_for_category` sur une usine où la
+    machine existe. Le jeu, lui, sait toujours ce qu'il contient.
+
+    Rendu trié pour que deux appels donnent le même ordre : `pick_machine` départage à
+    tiers égal, et une usine ne doit pas changer de forme entre deux tours pour cette
+    seule raison.
+    """
+    filtre = " or ".join(f"p.type == '{t}'" for t in types)
+    try:
+        brut = api.rcon.query_lua(
+            "local out = {} "
+            f"for name, p in pairs(prototypes.entity) do if {filtre} then "
+            "  out[#out+1] = name end end "
+            "table.sort(out) rcon.print(table.concat(out, ','))")
+    except Exception:
+        return []
+    return [n for n in str(brut).strip().split(",") if n]
+
+
+def populate_pour(api, item: str, machines: list[str]) -> tuple[KnowledgeBase, list[str]]:
+    """Une KnowledgeBase prête pour `item`, sans avoir à énumérer sa chaîne.
+
+    Commodité qui enchaîne `decouvrir_chaine` puis `populate_from_rcon`. Rend aussi les
+    feuilles : l'appelant en a besoin pour savoir QUELS gisements prospecter — c'est
+    exactement la liste des ressources à trouver sur le terrain.
+    """
+    items, feuilles = decouvrir_chaine(api, item)
+    return populate_from_rcon(api, items, machines), feuilles
+
+
 # ===== Géométrie des entités (LayoutPlanner) =====
 # Constat API Factorio 2.0 (2026-07-24, docs/layout-planner.md §3/§8) : au runtime,
 # `prototypes.entity[name]` (LuaEntityPrototype) n'expose PAS les géométries fines

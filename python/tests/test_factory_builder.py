@@ -388,6 +388,109 @@ def test_build_layout() -> None:
            f"terrain_check={getattr(lp1.request.constraints, 'terrain_check', None)}")
 
 
+# ===== 1d. Multi-gisement : un produit à deux branches =====
+
+class _FakeApiParRessource:
+    """`scan_patch` rend un gisement DIFFÉRENT selon la ressource demandée.
+
+    Le mock `_FakeModApi` sert les patches dans l'ordre des APPELS et ignore la ressource :
+    il ne peut donc pas montrer qu'on a bien prospecté deux minerais distincts. Ici chaque
+    ressource a son gisement, et l'on garde trace de ce qui a été demandé.
+    """
+
+    def __init__(self, bboxes: dict):
+        self.bboxes = bboxes
+        self.demandes: list[str] = []
+
+    def scan_patch(self, resource, radius=400.0):
+        self.demandes.append(resource)
+        b = self.bboxes.get(resource)
+        return {"bbox": b, "resource": resource, "count": 100} if b else {}
+
+    def scan_obstacles(self, radius=400.0):
+        return {"obstacles": [], "count": 0}
+
+    def scan_water_edge(self, radius=200):
+        return {}
+
+    def scan_tiles_bbox(self, x1, y1, x2, y2):
+        return {"tiles": [], "count": 0}
+
+
+def _splan_alloy():
+    """splan fixture `alloy` : une recette à DEUX minerais (iron-ore + copper-ore)."""
+    from tests.test_layout_solver import sample_kb
+    from services.production_solver import ProductionRequest, solve
+    return solve(ProductionRequest("alloy", 5.0), sample_kb())
+
+
+def test_multi_gisement() -> None:
+    """Un produit à deux branches doit donner un terrain à deux gisements.
+
+    `build_layout` retenait la PREMIÈRE mine du plan (`next(...)`) et `_build_terrain` ne
+    posait qu'un patch. Tant qu'on fabriquait des plaques de fer, personne ne pouvait
+    s'en apercevoir ; dès le premier produit à deux branches — `logistic-science-pack`
+    réclame fer ET cuivre — la seconde ressource disparaissait en silence, et l'usine
+    naissait amputée d'une branche entière.
+    """
+    print("\n[test] === UNITAIRE : multi-gisement (produit à deux branches) ===")
+    from agents.base import Contract
+    from services.knowledge import ProductionGoal
+    # `record` IMPRIME mais n'ASSERTE PAS : sous pytest, un test qui ne fait que
+    # l'appeler passe même quand tous ses constats sont faux. On mémorise donc le
+    # rang de départ pour exiger, à la fin, que rien ne soit tombé.
+    debut = len(RESULTS)
+    splan = _splan_alloy()
+
+    mines = [n.item for n in splan.nodes if n.role == "mine"]
+    record("le plan `alloy` a bien deux mines", sorted(mines) == ["copper-ore", "iron-ore"],
+           f"mines={sorted(mines)}")
+
+    # --- Les deux ressources sont retenues, dans l'ordre des nœuds ---
+    res = FactoryBuilder._ressources_du_plan(splan)
+    record("les deux ressources du plan sont retenues",
+           sorted(res) == ["copper-ore", "iron-ore"], f"ressources={res}")
+
+    # --- Un override explicite reste souverain (back-compat) ---
+    res1 = FactoryBuilder._ressources_du_plan(splan, "copper-ore")
+    record("un override explicite l'emporte", res1 == ["copper-ore"], f"override={res1}")
+
+    # --- Le terrain porte UN patch par ressource, chacun à sa place ---
+    api = _FakeApiParRessource({"iron-ore": {"x1": 0, "y1": 0, "x2": 20, "y2": 20},
+                                "copper-ore": {"x1": 80, "y1": 0, "x2": 100, "y2": 20}})
+    fb = FactoryBuilder(api, Contract(ProductionGoal("alloy", 5), zone=(0, 0)))
+    terrain = fb._build_terrain(["iron-ore", "copper-ore"],
+                                {"x1": 0, "y1": 0, "x2": 20, "y2": 20}, (0.0, 10.0))
+    noms = [p.resource for p in terrain.patches]
+    record("le terrain porte les deux gisements", sorted(noms) == ["copper-ore", "iron-ore"],
+           f"patches={noms}")
+    cu = next((p for p in terrain.patches if p.resource == "copper-ore"), None)
+    record("le second gisement garde SA position (pas celle du premier)",
+           cu is not None and cu.bbox == (80, 0, 100, 20), f"bbox cuivre={getattr(cu, 'bbox', None)}")
+    record("la seconde ressource a bien été prospectée",
+           "copper-ore" in api.demandes, f"demandes={api.demandes}")
+
+    # --- Back-compat : un simple nom donne un seul patch, comme avant ---
+    api2 = _FakeApiParRessource({"iron-ore": {"x1": 0, "y1": 0, "x2": 20, "y2": 20}})
+    fb2 = FactoryBuilder(api2, Contract(ProductionGoal("iron-plate", 5), zone=(0, 0)))
+    t2 = fb2._build_terrain("iron-ore", {"x1": 0, "y1": 0, "x2": 20, "y2": 20}, (0.0, 10.0))
+    record("back-compat : un nom seul donne un patch",
+           [p.resource for p in t2.patches] == ["iron-ore"],
+           f"patches={[p.resource for p in t2.patches]}")
+
+    # --- Un gisement introuvable n'invente rien : il manque, et cela se verra ---
+    api3 = _FakeApiParRessource({"iron-ore": {"x1": 0, "y1": 0, "x2": 20, "y2": 20}})
+    fb3 = FactoryBuilder(api3, Contract(ProductionGoal("alloy", 5), zone=(0, 0)))
+    t3 = fb3._build_terrain(["iron-ore", "copper-ore"],
+                            {"x1": 0, "y1": 0, "x2": 20, "y2": 20}, (0.0, 10.0))
+    record("un gisement introuvable n'est pas inventé",
+           [p.resource for p in t3.patches] == ["iron-ore"],
+           f"patches={[p.resource for p in t3.patches]} (le planner dira missing_patch)")
+
+    tombes = [n for n, ok, _ in RESULTS[debut:] if not ok]
+    assert not tombes, f"critères tombés : {tombes}"
+
+
 # ===== 2. Test d'intégration sur serveur =====
 
 def _inv(api: ModApi) -> dict[str, int]:

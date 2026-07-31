@@ -132,9 +132,14 @@ class FactoryBuilder(BaseAgent):
             LayoutRequest, LayoutConstraints, Terrain, ResourcePatch, plan,
         )
 
-        if resource is None:
-            mine = next((n for n in splan.nodes if n.role == "mine"), None)
-            resource = mine.item if mine is not None else None
+        # TOUTES les mines du plan, pas seulement la première. `next(...)` retenait le
+        # premier nœud `mine` et le terrain ne portait donc qu'un gisement — ce qui suffit
+        # tant qu'on fabrique des plaques de fer, et cesse de suffire dès le premier
+        # produit à deux branches. Mesuré : le premier flacon de science venu réclame du
+        # fer ET du cuivre ; le LayoutPlanner sait poser les deux (test_multi_ingredient),
+        # c'est ici que la seconde ressource se perdait.
+        ressources = self._ressources_du_plan(splan, resource)
+        resource = ressources[0] if ressources else None
         if resource is None:
             # Pas de mine : pas de gisement. Terrain vide + plan direct (back-compat).
             c = self._merge_constraints("transport-belt", LayoutConstraints())
@@ -143,13 +148,29 @@ class FactoryBuilder(BaseAgent):
             return plan(req, geometry)
 
         best: Optional[object] = None
-        for radius in self._SCAN_RADII:
-            sp = self.api.scan_patch(resource, radius)
+        deja_tentees: set = set()
+        # LE GISEMENT LOCAL D'ABORD, l'agrégat seulement en dernier recours. `scan_patch`
+        # rend un bbox AGRÉGÉ : à rayon 400 il enveloppe tout le minerai du secteur d'une
+        # seule emprise. Mesuré : un gisement de cuivre réellement large de 25×27 tuiles
+        # était rendu 88×578, et le LayoutPlanner — qui n'a aucune raison de douter du
+        # terrain qu'on lui donne — étalait l'usine sur 577 tuiles et 1126 belts pour une
+        # chaîne de dix étages. `_scan_patch_local` existe précisément pour cela (« le plus
+        # petit rayon qui trouve du minerai, pas l'agrégat ») ; elle n'était pas appelée
+        # ici. Les rayons croissants gardent leur rôle : chercher AILLEURS quand le
+        # gisement local ne permet pas d'implanter.
+        for radius in (None,) + self._SCAN_RADII:
+            sp = (self._scan_patch_local(resource) if radius is None
+                  else self.api.scan_patch(resource, radius))
             if not sp or not sp.get("bbox"):
                 continue
             bbox = sp["bbox"]
             anc = anchor or (float(bbox["x1"]), (bbox["y1"] + bbox["y2"]) / 2.0)
-            terrain = self._build_terrain(resource, bbox, anc)
+            terrain = self._build_terrain(ressources, bbox, anc, eviter=deja_tentees)
+            # Ce coin-là est tenté : s'il ne donne rien, le tour suivant cherchera ailleurs.
+            for p in terrain.patches:
+                for tx in range(int(p.bbox[0]), int(p.bbox[2]) + 1):
+                    for ty in range(int(p.bbox[1]), int(p.bbox[3]) + 1):
+                        deja_tentees.add((tx, ty))
             for bt in self._BELT_TIERS:
                 # Tier non supporté par la géométrie -> skip (ne court-circuite pas le replan lourd
                 # en retournant missing_geometry, qui ne distingue pas "tier absent" d'un vrai défaut).
@@ -168,15 +189,168 @@ class FactoryBuilder(BaseAgent):
                 return lp
         return best
 
-    def _build_terrain(self, resource: str, bbox: dict, anchor: tuple) -> object:
+    # Rayon retenu autour de la tuile la plus proche pour délimiter « le » gisement. Assez
+    # large pour une dizaine de foreuses, assez étroit pour ne pas enjamber le vide qui
+    # sépare deux gisements voisins.
+    # Resserré sur le CŒUR du gisement. Large, l'emprise englobe les trous du bord :
+    # le LayoutPlanner y répartit ses foreuses en croyant le rectangle plein, et une
+    # foreuse 2x2 qui déborde sur l'herbe est refusée à la pose — une seule suffit à faire
+    # capoter le plan entier (`can_place=False`, zéro entité posée). Près du centre, les
+    # tuiles échantillonnées sont denses.
+    EMPRISE_GISEMENT = 8
+    # Rayon sur lequel on juge qu'une tuile d'ancrage est « dégagée ». Une foreuse fait
+    # trois tuiles de côté et sa belt de collecte longe la colonne : huit tuiles autour
+    # suffisent à distinguer un coin de gisement libre d'un coin collé à l'usine.
+    DEGAGEMENT_ANCRE = 8
+
+    @classmethod
+    def emprise_du_gisement(cls, sp: dict, occupes=None) -> Optional[tuple]:
+        """L'emprise de MINERAI GARANTI, déduite des tuiles échantillonnées.
+
+        La `bbox` de `scan_patch` enveloppe tous les gisements du rayon, trous compris —
+        le mod le dit lui-même : « on ancre sur une tuile du sample, jamais sur le centre
+        de la bbox ». Le LayoutPlanner, lui, ne connaît que le bbox du `ResourcePatch`
+        qu'on lui donne : il y répartit ses foreuses en le croyant plein, et l'executor
+        refuse la pose sur l'herbe (`can_place=False`, mesuré à 112 tuiles).
+
+        On reconstruit donc l'emprise depuis les tuiles réellement vues, bornée autour de
+        la plus proche : deux gisements voisins ont des tuiles dans le même échantillon,
+        et leur enveloppe commune contiendrait précisément le vide qui les sépare.
+        """
+        ech = [t for t in ((sp or {}).get("sample") or []) if isinstance(t, dict)]
+        if not ech:
+            b = (sp or {}).get("bbox")
+            return (b["x1"], b["y1"], b["x2"], b["y2"]) if b else None
+        # ON N'IMPLANTE PAS SUR CE QUI EST DÉJÀ BÂTI. Les foreuses suivent le gisement et
+        # aucun décalage du plan ne les en sort : si l'emprise retenue recouvre la chaîne
+        # déjà debout — le cas normal, puisque l'agent a commencé à miner là — le plan est
+        # refusé (`obstacle_blocking`) et aucun replan n'y peut rien. On écarte donc les
+        # tuiles occupées AVANT de délimiter, pour viser la part encore libre du gisement.
+        # Si tout est pris, on garde l'échantillon complet : le refus vaut mieux qu'une
+        # emprise inventée.
+        if occupes:
+            libres = [t for t in ech if (int(t["x"]), int(t["y"])) not in occupes]
+            # UNE TUILE LIBRE NE SUFFIT PAS : c'est son ENTOURAGE qui doit l'être. La
+            # tuile voisine d'une usine est libre et pourtant inutilisable — les foreuses
+            # occupent trois tuiles de côté et la cascade s'étend derrière. On classe donc
+            # les candidates par encombrement du voisinage et l'on ancre sur la plus
+            # dégagée, à proximité égale. Sans cela, l'emprise recouvrait la chaîne déjà
+            # debout et le plan était refusé sans qu'aucun replan puisse y remédier : les
+            # foreuses suivent le gisement, elles ne suivent pas la cascade.
+            if libres:
+                d = cls.DEGAGEMENT_ANCRE
+                libres.sort(key=lambda t: sum(
+                    1 for dx in range(-d, d + 1) for dy in range(-d, d + 1)
+                    if (int(t["x"]) + dx, int(t["y"]) + dy) in occupes))
+            ech = libres or ech
+        x0, y0 = int(ech[0]["x"]), int(ech[0]["y"])       # la plus proche de l'observateur
+        proches = [(int(t["x"]), int(t["y"])) for t in ech
+                   if abs(int(t["x"]) - x0) <= cls.EMPRISE_GISEMENT
+                   and abs(int(t["y"]) - y0) <= cls.EMPRISE_GISEMENT]
+        if not proches:
+            proches = [(x0, y0)]
+        # UN RECTANGLE PLEIN, PAS UNE ENVELOPPE. L'enveloppe des tuiles vues contient les
+        # trous du gisement, et le LayoutPlanner y répartit ses foreuses en la croyant
+        # pleine : mesuré, une foreuse plantée sur `sand-3` — zéro minerai, zéro entité —
+        # refusée à la pose, et le plan entier abandonné pour elle seule. On fait donc
+        # croître un rectangle depuis la tuile la plus proche tant que chaque bande
+        # ajoutée est ENTIÈREMENT minérale : ce qu'on transmet est alors constructible par
+        # construction, et aucun repère intermédiaire ne peut le trahir.
+        dispo = set(proches)
+        x1 = x2 = x0
+        y1 = y2 = y0
+        for _ in range(cls.EMPRISE_GISEMENT * 4):
+            grandi = False
+            for (nx1, ny1, nx2, ny2) in ((x1 - 1, y1, x2, y2), (x1, y1, x2 + 1, y2),
+                                         (x1, y1 - 1, x2, y2), (x1, y1, x2, y2 + 1)):
+                if all((tx, ty) in dispo
+                       for tx in range(nx1, nx2 + 1) for ty in range(ny1, ny2 + 1)):
+                    x1, y1, x2, y2 = nx1, ny1, nx2, ny2
+                    grandi = True
+            if not grandi:
+                break
+        return (x1, y1, x2 + 1, y2 + 1)
+
+    @staticmethod
+    def _ressources_du_plan(splan, resource: Optional[str] = None) -> list:
+        """Les ressources à extraire pour ce plan, dans l'ordre des nœuds `mine`.
+
+        Un override explicite l'emporte (back-compat : un appelant qui nomme sa ressource
+        sait ce qu'il veut). Sinon on prend TOUTES les mines, dédoublonnées : la première
+        sert d'ancrage, les autres deviennent des gisements du terrain.
+        """
+        if resource is not None:
+            return [resource]
+        vues, out = set(), []
+        for n in getattr(splan, "nodes", []) or []:
+            if getattr(n, "role", "") == "mine" and n.item not in vues:
+                vues.add(n.item)
+                out.append(n.item)
+        return out
+
+    # Fenêtre de relevé du bâti autour de l'ancre. Elle recouvre l'emprise que le
+    # LayoutPlanner peut occuper ; au-delà, une entité ne gêne plus.
+    FENETRE_BATI = 200
+
+    def _bati_existant(self, anchor: tuple) -> list:
+        """Les emprises de ce qui est DÉJÀ construit, en bbox (x1, y1, x2, y2).
+
+        Non destructif : on regarde, on ne touche à rien. Le personnage est écarté — il
+        se déplace, et l'executor sait déjà se dégager quand il gêne sa propre pose.
+        """
+        x1, y1 = int(anchor[0]) - self.FENETRE_BATI, int(anchor[1]) - self.FENETRE_BATI
+        x2, y2 = int(anchor[0]) + self.FENETRE_BATI, int(anchor[1]) + self.FENETRE_BATI
+        try:
+            brut = self.api.rcon.query_lua(
+                "local s = game.surfaces[1] local out = {} "
+                f"for _, e in pairs(s.find_entities_filtered{{force='player', area="
+                f"{{{{{x1},{y1}}},{{{x2},{y2}}}}}}}) do "
+                "  if e.type ~= 'character' then local b = e.bounding_box "
+                "    out[#out+1] = math.floor(b.left_top.x) .. ',' .. "
+                "      math.floor(b.left_top.y) .. ',' .. math.ceil(b.right_bottom.x) "
+                "      .. ',' .. math.ceil(b.right_bottom.y) end end "
+                "rcon.print(table.concat(out, ';'))")
+        except Exception:
+            return []
+        out = []
+        for morceau in str(brut).strip().split(";"):
+            bits = morceau.split(",")
+            if len(bits) == 4:
+                try:
+                    out.append(tuple(int(float(v)) for v in bits))
+                except ValueError:
+                    continue
+        return out
+
+    def _build_terrain(self, resource, bbox: dict, anchor: tuple, eviter=None) -> object:
         """Construit Terrain peuplé depuis le RCON (scan_obstacles/water_edge/tiles_bbox).
-        Non destructif. tile_grid autour de l'anchor pour précision tuile water/out-of-map."""
+        Non destructif. tile_grid autour de l'anchor pour précision tuile water/out-of-map.
+
+        `resource` accepte un nom OU une liste de noms (back-compat : un str donne un seul
+        patch, comme avant). Le premier est celui dont on a déjà le `bbox` — il a servi à
+        choisir l'ancrage ; les suivants sont prospectés ici. Un gisement introuvable n'est
+        pas ajouté : le planner rendra `missing_patch:<ressource>`, ce qui NOMME ce qui
+        manque, là où un patch silencieusement absent produisait une usine amputée d'une
+        branche entière sans que rien ne le signale.
+        """
         from services.layout_planner import Terrain, ResourcePatch
+        noms = [resource] if isinstance(resource, str) else [n for n in (resource or [])]
         obstacles = []
         r_obs = self.api.scan_obstacles(400)
         if isinstance(r_obs, dict):
             for o in r_obs.get("obstacles", []):
                 obstacles.append((o["x"], o["y"], o["x"] + o["w"], o["y"] + o["h"]))
+        # LE BÂTI ORIENTE LE CHOIX DU GISEMENT, MAIS N'INTERDIT PAS LE PLAN. Le déclarer
+        # comme obstacle de terrain a été essayé : le planner refuse alors d'implanter
+        # (`obstacle_blocking`) et, comme les foreuses suivent le gisement — celui-là même
+        # où l'agent a commencé à miner — aucun décalage de cascade ne l'en sort. Mesuré :
+        # seize replans, un pas porté de 3 à 12 tuiles, un plafond de 64, et toujours zéro
+        # entité posée là où l'on en posait trois cent soixante-dix-huit.
+        #
+        # Il sert donc là où il est utile — écarter les tuiles bâties du choix d'emprise
+        # (`emprise_du_gisement`) — et pas là où il stérilise. Les collisions résiduelles
+        # sont traitées à la source depuis que le plan est aligné sur la grille du jeu.
+        bati = self._bati_existant(anchor)
         water = []
         r_we = self.api.scan_water_edge(200)
         if isinstance(r_we, dict) and r_we.get("bbox"):
@@ -189,9 +363,39 @@ class FactoryBuilder(BaseAgent):
         if isinstance(r_st, dict) and "error" not in r_st:
             for t in r_st.get("tiles", []):
                 tile_grid[(t["x"], t["y"])] = t["name"]
+        # CHAQUE gisement est délimité par ses tuiles, jamais par l'enveloppe du scan —
+        # y compris le premier, dont on a pourtant le bbox sous la main : s'y fier faisait
+        # planter des foreuses hors minerai. Le bbox reçu ne sert plus que de repli.
+        # Les tuiles que le bâti occupe déjà : les gisements les éviteront. `eviter` y
+        # ajoute les emprises DÉJÀ TENTÉES : sans cela, « chercher un autre gisement »
+        # rendait invariablement le même — `scan_patch` est centré sur l'avatar, donc le
+        # coin le plus proche gagne à tous les coups, et les rayons croissants ne
+        # servaient à rien. En les écartant, l'agent explore réellement le gisement.
+        occupes = set(eviter or ())
+        for (ox1, oy1, ox2, oy2) in bati:
+            if (ox2 - ox1) * (oy2 - oy1) <= 400:      # une emprise démesurée n'est pas du bâti
+                for tx in range(int(ox1), int(ox2) + 1):
+                    for ty in range(int(oy1), int(oy2) + 1):
+                        occupes.add((tx, ty))
+        patches = []
+        for rang, nom in enumerate(noms):
+            sp = self._scan_patch_local(nom)
+            emprise = self.emprise_du_gisement(sp, occupes)
+            if emprise is None and rang == 0 and bbox:
+                emprise = (bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"])
+            if emprise is not None:
+                # LES TUILES, PAS SEULEMENT LA BOÎTE. Un gisement est irrégulier : son
+                # rectangle englobant contient de l'herbe, et une foreuse qui déborde
+                # dessus est refusée à la pose — une seule suffit à faire capoter le plan.
+                # On transmet donc les tuiles réellement vues ; le planner s'en sert pour
+                # n'implanter que sur du minerai.
+                tuiles = [(int(t["x"]), int(t["y"]))
+                          for t in ((sp or {}).get("sample") or []) if isinstance(t, dict)
+                          and emprise[0] <= int(t["x"]) <= emprise[2]
+                          and emprise[1] <= int(t["y"]) <= emprise[3]]
+                patches.append(ResourcePatch(nom, tiles=tuiles, bbox=emprise))
         return Terrain(
-            patches=[ResourcePatch(resource,
-                                    bbox=(bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]))],
+            patches=patches,
             obstacles=obstacles, water=water, tile_grid=tile_grid,
         )
 

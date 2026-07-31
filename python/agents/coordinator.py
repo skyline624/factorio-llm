@@ -75,7 +75,14 @@ PRIORITE = {"defendre_urgence": 4, "reparer": 3, "batir_energie": 2, "defendre":
             # maintenant, ou débloquer ce qui produira mieux ensuite. C'est précisément
             # là qu'un arbitre a quelque chose à trancher ; un rang supérieur ferait
             # chercher sans fin, un rang inférieur ne ferait jamais chercher.
-            "batir_production": 1, "etendre_production": 1, "chercher": 1, "rien": 0}
+            # `produire` vaut autant qu'`etendre` et que `chercher`, et pour la même
+            # raison : c'est une troisième façon de grandir — non pas produire PLUS, ni
+            # débloquer MIEUX, mais produire ce qu'on ne produisait pas du tout. Lui
+            # donner le rang supérieur ferait bâtir sans fin des chaînes neuves au lieu
+            # de nourrir celles qui tournent ; le rang inférieur ne les ferait jamais
+            # naître. À égalité, le choix redevient un arbitrage — ce qui est le but.
+            "batir_production": 1, "etendre_production": 1, "chercher": 1,
+            "produire": 1, "rien": 0}
 
 # Fenêtre minimale, en ticks de JEU, pour mesurer un débit. Deux observations rapprochées
 # donnent un rapport dominé par le bruit : une plaque de plus sur trente ticks vaut
@@ -191,6 +198,13 @@ class EtatUsine:
     marche: Optional[str] = None          # nom de la technologie visée, None = aucune
     marche_cout: str = ""                 # « fabriquer 10 copper-plate », « 10 x 1 … »
     marche_ouvre: tuple = ()              # ce qu'elle débloque, pour le journal
+    # CE QUE LA MARCHE RÉCLAME ET QUE RIEN NE PRODUIT. Une technologie qui se paie exige
+    # des flacons ; tant qu'aucune chaîne ne les fabrique, l'agent les porte à la main et
+    # la recherche s'arrête dès qu'il regarde ailleurs. Ces items viennent de l'ARBRE, pas
+    # d'une liste écrite ici : c'est ce qui permet à `produire` de rester un verbe, et non
+    # une recette de plus. Le jour où l'arbre demandera autre chose, l'agent le produira
+    # sans qu'on ait une ligne à changer.
+    a_fournir: tuple = ()                 # items du coût de `marche` sans source connue
     # Les machines qui PRODUISENT, à l'exclusion des organes d'énergie. Depuis que le
     # diagnostic embrasse les centrales (elles se posent au bord de l'eau, hors de la
     # zone), `machines` n'est plus jamais nul après `batir_energie` — et la condition de
@@ -549,7 +563,16 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
              (f"« {etat.marche} » est à portée ({etat.marche_cout}) et ouvre "
               f"{', '.join(etat.marche_ouvre[:3]) or 'la suite de l’arbre'}"
               if etat.marche else ""),
-             PRIORITE["chercher"])):
+             PRIORITE["chercher"]),
+            # PRODUIRE CE QU'ON NE PRODUIT PAS ENCORE. Tant que rien ne fabrique ce que
+            # la recherche réclame, l'agent paie de ses mains : il mine, il fond, il
+            # porte — et tout s'arrête à la seconde où il fait autre chose. L'item n'est
+            # écrit nulle part ici, il vient de l'arbre des technologies ; c'est ce qui
+            # sépare un verbe d'une recette, et c'est vérifiable au grep.
+            ("produire", bool(etat.a_fournir) and etat.machines > 0,
+             (f"« {etat.a_fournir[0]} » est réclamé par « {etat.marche} » et rien ne le "
+              f"produit : bâtir la chaîne qui le fabrique" if etat.a_fournir else ""),
+             PRIORITE["produire"])):
         if not condition:
             continue
         rates = etat.echecs.get((action, "", 0, 0), 0)
@@ -562,7 +585,9 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
             # raison marchait au banc et échouait dans la boucle — les guillemets
             # français ne survivent pas à tous les chemins. Même leçon que pour
             # `fabriquer` : une décision porte la donnée, elle ne la fait pas deviner.
-            item=(etat.marche or "") if action == "chercher" else ""))
+            item=((etat.marche or "") if action == "chercher"
+                  else (etat.a_fournir[0] if action == "produire" and etat.a_fournir
+                        else ""))))
 
     if not options:
         options.append(Decision(action="rien",
@@ -834,6 +859,11 @@ class Coordinator:
                 etat.marche = marches[0].nom
                 etat.marche_cout = str(marches[0]).split("(", 1)[-1].split(")", 1)[0]
                 etat.marche_ouvre = marches[0].debloque
+                # Ce que cette marche réclame et que RIEN ne produit encore. `_source_de`
+                # cherche une machine qui fabrique l'item ; son absence est exactement ce
+                # qui rend l'agent dépendant de ses propres mains.
+                etat.a_fournir = tuple(
+                    n for n, _ in marches[0].cout if self._source_de(n) is None)
         except Exception:
             pass                    # arbre illisible : on n'en fait pas une panne
         # Compté depuis la ZONE, indépendamment d'où se trouve le personnage : c'est ce
@@ -1030,6 +1060,13 @@ class Coordinator:
             # décisions construites à la main (tests, arbitre) qui ne portent pas d'item.
             return self.fabriquer(d.item or d.raison.split(" ")[0], max(1, d.quantite))
 
+        if d.action == "produire":
+            # L'item voyage AVEC la décision, comme pour `chercher` et `fabriquer` : le
+            # relire dans la raison marchait au banc et cassait dans la boucle.
+            if not d.item:
+                return False, "produire sans item : rien à bâtir"
+            return self.batir_chaine(d.item, self.DEBIT_CHAINE)
+
         if d.action == "chercher":
             # La technologie visée est nommée dans la raison par `enumerer_options` —
             # `decide` reste PURE : elle dit qu'il faudrait chercher, pas comment. Le
@@ -1220,6 +1257,258 @@ class Coordinator:
     # brûlent, plus la marge que l'executor exige au pré-vol. Mesuré, il manquait 7
     # unités avec 8 en poche — 20 laisse de quoi poser sans revenir miner aussitôt.
     AMORCE_CHAINE_BURNER = 20
+    # Débit visé par une chaîne NEUVE. Modeste et délibérément : ce qui compte est qu'elle
+    # existe et tourne seule, pas qu'elle sature. Viser haut multiplie les machines, donc
+    # les belts, donc les façons d'échouer à la pose — et l'agent sait déjà nourrir ce qui
+    # ne suffit pas (`etendre_production`). Un débit, pas un produit : cette constante
+    # vaut pour n'importe quel item.
+    DEBIT_CHAINE = 0.5
+    # Combien de fois on retente une pose après avoir fabriqué ce qui manquait. Borné :
+    # la boucle s'arrête d'elle-même dès que le manque cesse de diminuer, ce garde-fou
+    # ne sert qu'aux cas où il diminuerait d'une unité à chaque tour.
+    REPRISES_APPRO = 4
+    # Combien d'unités de rab on fabrique au-delà du manque annoncé. Le plan est refait
+    # après chaque approvisionnement — le terrain a changé — et ses besoins varient d'une
+    # ou deux machines. Sans marge, on poursuit une cible mouvante.
+    MARGE_APPRO = 3
+    # Combien de fois le planner a le droit de se DÉCALER avant de renoncer. Une chaîne
+    # neuve naît à côté d'une usine déjà debout : depuis que le bâti est déclaré comme
+    # obstacle, le premier emplacement est presque toujours pris, et le budget par défaut
+    # (4) s'épuisait sans avoir trouvé d'espace libre. Chercher plus loin coûte des essais
+    # de calcul, pas des entités posées.
+    REPLANS_CHAINE = 16
+    # De combien la cascade peut s'écarter pour trouver de la place. Le plafond par défaut
+    # (12 tuiles) suppose qu'on contourne un rocher ; ici il faut sortir d'une USINE, et
+    # une usine fait plusieurs dizaines de tuiles. Sans cette ouverture, les seize replans
+    # échouaient tous au même endroit et rien n'était posé.
+    ECART_MAX_CHAINE = 64
+    # Le PAS de ces écarts. Les candidats de replan valent ±pas et ±2×pas ; avec le défaut
+    # (3 tuiles) on explore ±6 par tentative — de quoi contourner un rocher, pas une usine.
+    # Ouvrir le plafond sans ouvrir le pas ne change donc rien : les deux vont ensemble.
+    PAS_ECART_CHAINE = 12
+    # Les types d'entités que réclame une chaîne complète, en plus des machines : de quoi
+    # transporter, insérer et alimenter. Ce sont des TYPES du moteur de jeu, jamais des
+    # noms d'items — le catalogue est demandé au jeu (`entites_par_type`), pas écrit ici.
+    TYPES_LOGISTIQUES = ("transport-belt", "underground-belt", "splitter",
+                         "inserter", "electric-pole")
+
+    def batir_chaine(self, item: str, debit: float = 0.5) -> tuple[bool, str]:
+        """Bâtit de quoi produire `item` en continu — quel que soit `item`.
+
+        Le nom dit BÂTIR et non produire : `produire(cible, item)` existe déjà et règle la
+        recette d'UNE machine. Deux méthodes homonymes, et Python garde silencieusement la
+        dernière définie — mesuré ici même : l'appel partait dans le régleur de recette,
+        qui recevait un débit en guise d'item et répondait « 0.5 n'a pas de recette ».
+        L'action de décision, elle, reste `produire` : c'est le verbe de l'agent.
+
+        LE VERBE QUI MANQUAIT. Le solveur savait dimensionner n'importe quelle chaîne et
+        le LayoutPlanner en tirer un blueprint, mais rien ne les appelait : le Coordinator
+        ne connaissait que des verbes sans objet (`batir_production`, `etendre_production`)
+        et une poignée de méthodes écrites produit par produit. Chaque nouvelle marchandise
+        était donc un chantier, et l'agent un script qui s'allongeait.
+
+        Ici l'item est un PARAMÈTRE de bout en bout : on découvre sa chaîne
+        (`decouvrir_chaine`), on la dimensionne (`solve`), on l'implante (`FactoryBuilder`,
+        qui prospecte autant de gisements que la chaîne en réclame) et on la pose
+        (`execute_micro`). Aucune étape ne sait quel produit elle traite — et c'est
+        vérifiable : le nom d'aucune marchandise n'apparaît dans ce fichier.
+
+        Le catalogue des machines vient du JEU et non d'une constante : une machine
+        ajoutée par un mod, ou simplement oubliée en écrivant la liste, rendrait le
+        solveur aveugle à une catégorie entière de recettes.
+        """
+        from agents.base import Contract
+        from agents.factory_builder import FactoryBuilder
+        from services import knowledge
+        from services.executor import execute_micro
+        from services.knowledge import ProductionGoal
+        from services import deplacement
+        from services.production_solver import ProductionRequest, solve
+
+        # SEULEMENT CE QU'IL SAIT FABRIQUER. Le catalogue du jeu contient toutes les
+        # machines, y compris celles dont la recette dort derrière une technologie non
+        # acquise. Le solveur, qui ne connaît que les catégories, retenait la meilleure —
+        # et l'agent se retrouvait à devoir poser vingt-quatre foreuses électriques qu'il
+        # ne sait pas encore construire : « s'ouvre par electric-mining-drill », zéro
+        # entité posée. On lui présente donc l'outillage RÉELLEMENT disponible ; le jour
+        # où la technologie tombe, la même chaîne se bâtira avec de meilleures machines
+        # sans qu'on touche à rien.
+        machines = [m for m in knowledge.entites_par_type(self.api)
+                    if perception.recipe_of(self.api, m) is not None]
+        if not machines:
+            return False, "aucune machine connue du jeu : catalogue illisible"
+        kb, gisements = knowledge.populate_pour(self.api, item, machines)
+        # LA MEILLEURE FOREUSE QU'ON AIT, pas celle par défaut. Le solveur retient une
+        # foreuse ÉLECTRIQUE d'office ; absente du catalogue — parce que sa technologie
+        # dort encore — il renonce d'un bloc (`no_mining_machine`) au lieu de se rabattre
+        # sur la foreuse à charbon qui est là. `machine_tiers` existe exactement pour cet
+        # arbitrage : on désigne la plus rapide de celles que l'agent sait construire.
+        foreuses = [(s.mining_speed, n) for n, s in kb.machines.items()
+                    if getattr(s, "type", "") == "mining-drill" and s.mining_speed > 0]
+        tiers = {"mine": max(foreuses)[1]} if foreuses else {}
+        splan = solve(ProductionRequest(item=item, rate_per_sec=debit,
+                                        machine_tiers=tiers), kb)
+        if getattr(splan, "feasibility", "") != "ok":
+            return False, (f"« {item} » non calculable : "
+                           f"{getattr(splan, 'feasibility', '?')}")
+
+        geometry = knowledge.GeometryBase()
+        geometry.populate_from_rcon(
+            self.api,
+            machines + knowledge.entites_par_type(self.api, self.TYPES_LOGISTIQUES))
+
+        # COLLECTE SERRÉE SUR LES FOREUSES. Par défaut la belt de collecte se cale sur le
+        # bord du GISEMENT ; un gisement large de quarante tuiles pour cinq foreuses met
+        # donc la belt hors de portée de leur drop, et rien ne sort de la mine. On demande
+        # explicitement une collecte calée sur les machines posées.
+        from services.layout_planner import LayoutConstraints
+        fb = FactoryBuilder(
+            self.api,
+            Contract(ProductionGoal(item, debit), zone=self.zone,
+                     replan_budget=self.REPLANS_CHAINE,
+                     layout_constraints=LayoutConstraints(
+                         collect_belt_scope="drills",
+                         bypass_offset_v=self.PAS_ECART_CHAINE,
+                         bypass_max_offset_v=self.ECART_MAX_CHAINE)))
+        lp = fb.build_layout(splan, geometry)
+        if lp is None:
+            return False, (f"aucun terrain pour « {item} » — gisements requis : "
+                           f"{', '.join(gisements) or 'aucun'}")
+        faisabilite = getattr(lp, "feasibility", "?")
+        if faisabilite != "ok":
+            # `missing_patch:<ressource>` NOMME le gisement introuvable : le dire évite de
+            # chercher la panne du côté du plan alors qu'il manque un minerai.
+            return False, f"« {item} » non implantable : {faisabilite}"
+
+        # Le combustible n'est versé qu'aux burners ; une chaîne électrique n'en veut pas,
+        # et l'executor le sait (`is_burner`). On ne présume donc pas du palier.
+        def poser():
+            # DE QUOI TENIR SANS RUINER LE PRÉ-VOL. `AMORCE_BRAS` (5 charbons) laisse les
+            # bras à sec : les fours restent `no_ingredients`, la belt de collecte sature
+            # et toute la mine passe en `waiting_for_space_in_destination` pour un bras
+            # vide. Mais le combustible est réclamé PAR ENTITÉ et d'avance : porté à 50, il
+            # exigeait 6768 charbons sur une chaîne à quatre gisements — infaisable, donc
+            # zéro entité posée. Entre les deux, l'agent sait ravitailler ce qui s'épuise.
+            # L'AVATAR EST UN OBSTACLE POUR LUI-MÊME. `can_place` en mode manuel refuse la
+            # tuile où se tient le personnage ; l'approche le mène au milieu du chantier,
+            # et une foreuse était refusée sur un emplacement PARFAITEMENT valide —
+            # vérifié après coup : minerai sur les quatre tuiles, `can_place=True` une fois
+            # l'avatar ailleurs. Une seule entité refusée fait abandonner le plan entier.
+            # Une chaîne s'étend sur des centaines de tuiles : aucune position d'approche
+            # n'est sûre. On ne s'approche donc pas.
+            return execute_micro(self.api, lp, fuel=self.combustible,
+                                 fuel_count=self.AMORCE_BRAS, approach=False,
+                                 timeout=40.0)
+
+        # SE PROCURER CE QUI MANQUE, plutôt que de renoncer. Le pré-vol NOMME les pièces
+        # absentes et l'agent sait les fabriquer depuis E23 — mais personne ne faisait le
+        # lien : une chaîne entière se refusait pour vingt-huit bras alors que tout le
+        # reste était en stock, et trois refus de suite valent abandon définitif.
+        #
+        # ON REPREND TANT QUE LE MANQUE DIMINUE, et pas un tour de plus. Une seule reprise
+        # ne suffisait pas — mesuré : vingt-huit bras fabriqués, dix manquaient encore, car
+        # une fabrication consomme le fer que la suivante réclame. Mais s'acharner à manque
+        # constant masquerait la vraie cause : si l'inventaire ne progresse plus, ce n'est
+        # plus une question d'inventaire.
+        def _s_ecarter():
+            """Sort le personnage de l'emprise du plan avant de poser.
+
+            `can_place` en mode manuel REFUSE la tuile où se tient l'avatar. Or pour
+            fabriquer ce qui manque, l'agent va miner — donc il se tient précisément sur
+            le gisement où la première foreuse doit aller. Mesuré : refus sur une position
+            dont on a vérifié après coup qu'elle acceptait la foreuse dans les quatre
+            directions, l'avatar une fois parti. Une seule entité refusée fait abandonner
+            le plan entier ; il suffit de s'écarter.
+            """
+            ents = [e for e in lp.entities if not getattr(e, "skip", False)]
+            if not ents:
+                return
+            marge = 6.0
+            x2 = max(e.x for e in ents) + marge
+            y0 = sum(e.y for e in ents) / len(ents)
+            deplacement.marcher_vers(self.api, x2, y0)
+
+        _s_ecarter()
+        rap = poser()
+        faits: list[str] = []
+        for _ in range(self.REPRISES_APPRO):
+            if rap.ok:
+                break
+            manques = dict(getattr(rap, "missing", None) or {})
+            # ON COMPTE AUSSI LES ENTITÉS BLOQUÉES. La boucle ne réagissait qu'aux pièces
+            # absentes et sortait dès que `missing` était vide — alors qu'un plan refusé
+            # sur une position se répare en replanifiant, pas en fabriquant. Mesuré : la
+            # chaîne s'arrêtait à une entité près, avec un compte rendu qui disait
+            # pourtant exactement ce qu'il fallait faire.
+            avant = sum(manques.values()) + len(getattr(rap, "blocked", None) or ())
+            if not avant:
+                break
+            inv_courant = perception.inventory(self.api)
+            for nom, combien in manques.items():
+                # `fabriquer` vise un TOTAL, pas un supplément : lui passer le seul manque
+                # lui fait répondre « l'inventaire en contient déjà assez » dès qu'on en
+                # possède plus que ce qui manque — mesuré, vingt-trois bras en poche et dix
+                # réclamés suffisaient à bloquer la chaîne. Même leçon que
+                # `quantite_a_produire` : ce qu'on demande, c'est un état final.
+                # AVEC UNE MARGE : replanifier change légèrement le compte des machines
+                # (le gisement n'est plus le même après qu'on y a miné), et fabriquer le
+                # manque au plus juste fait courir après une cible qui bouge — mesuré, la
+                # chaîne s'arrêtait sur « il manque un four » après en avoir fabriqué cinq.
+                vise = inv_courant.get(nom, 0) + max(1, int(combien)) + self.MARGE_APPRO
+                ok_f, detail_f = self.fabriquer(nom, vise)
+                # LE MOTIF DU REFUS, pas seulement le refus : « échec » tout court oblige
+                # à relancer une sonde pour apprendre ce que la fabrication savait déjà.
+                faits.append(f"{combien} {nom}" if ok_f
+                             else f"{nom} (échec : {str(detail_f)[:70]})")
+            # LE TERRAIN A CHANGÉ : ON REPLANIFIE. Se procurer ce qui manque veut dire
+            # MINER, et l'agent mine le gisement le plus proche — celui-là même que le
+            # plan vient de retenir. Mesuré : les quatre tuiles sous la première foreuse
+            # portaient du minerai à la planification et plus rien à la pose ; la foreuse
+            # était refusée et le plan entier abandonné pour elle. Replanifier après
+            # s'être équipé est la seule façon de poser sur le terrain RÉEL.
+            neuf = fb.build_layout(splan, geometry)
+            if neuf is not None and getattr(neuf, "feasibility", "") == "ok":
+                lp = neuf
+            _s_ecarter()
+            rap = poser()
+            apres = (sum((getattr(rap, "missing", None) or {}).values())
+                     + len(getattr(rap, "blocked", None) or ()))
+            if apres >= avant:
+                break
+        fabriques = f" — fabriqué {', '.join(faits)}" if faits else ""
+        n = len(getattr(rap, "placed", []) or [])
+        if not rap.ok:
+            return False, (f"chaîne « {item} » incomplète : {n} entité(s) posée(s), "
+                           f"missing={getattr(rap, 'missing', None)} "
+                           f"blocked={(getattr(rap, 'blocked', []) or [])[:1]}{fabriques}")
+        # UNE CHAÎNE POSÉE N'EST PAS UNE CHAÎNE VIVANTE. Le plan sème ses poteaux, mais
+        # rien ne les rattache au réseau : mesuré en jeu, trois cent soixante-sept entités
+        # debout, recettes réglées — et six assembleuses, sept foreuses et cinq bras en
+        # `no_power`. Les foreuses sans courant ne minent pas, les fours n'ont donc rien à
+        # fondre (`no_ingredients`), et trente-trois bras attendent une matière qui ne
+        # viendra jamais. Une seule machine tournait sur seize.
+        #
+        # On raccorde APRÈS la pose, pas avant : le réseau doit exister et les poteaux du
+        # plan être en terre pour que la ligne trouve où s'accrocher.
+        branchees, echecs_r = 0, ""
+        for p in (getattr(rap, "placed", []) or []):
+            if getattr(p, "role", "") not in ("machine", "drill"):
+                continue
+            etat_p = self.api.get_power_state(p.x, p.y, 1.5) or {}
+            if etat_p.get("connected") is True:
+                continue
+            ok_r, detail_r = self.relier(
+                Symptome(name=p.name, x=p.x, y=p.y, cause="debranchee", gravite=1,
+                         detail="machine d'une chaîne posée à l'instant"))
+            if ok_r:
+                branchees += 1
+            elif not echecs_r:
+                echecs_r = f" — raccordement refusé : {str(detail_r)[:60]}"
+        return True, (f"chaîne « {item} » bâtie : {n} entité(s), "
+                      f"{len(getattr(splan, 'nodes', []) or [])} étage(s), "
+                      f"gisements {', '.join(gisements) or 'aucun'}, "
+                      f"objectif {debit}/s, {branchees} machine(s) raccordée(s)"
+                      f"{fabriques}{echecs_r}")
 
     def choisir_gisement(self, resource: str, depuis: tuple[float, float],
                          portee_max: float = 60.0):

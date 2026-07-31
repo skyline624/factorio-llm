@@ -348,14 +348,41 @@ def _place_drills(node, patch, geometry, constraints, facing, au, av,
     lv1, lv2 = min(lv1, lv2), max(lv1, lv2)
 
     # Grille de drills sur le patch (local), à partir du coin (lu1, lv1).
+    #
+    # ON EMPILE LE LONG DE v, PAS DE u — c'est-à-dire DANS L'AXE de la belt de collecte,
+    # qui longe v à un u fixe. En remplissant u d'abord, les foreuses formaient une LIGNE
+    # perpendiculaire à leur propre collecte : seule la dernière touchait la belt, et les
+    # autres déposaient dans le vide. Mesuré : cinq foreuses de fer alignées en x, la belt
+    # en colonne à dix-huit tuiles de la première, sept `waiting_for_space_in_destination`
+    # et toute la chaîne à l'arrêt derrière. Le nombre de foreuses ne change pas, leur
+    # rangement si.
+    #
+    # ON N'IMPLANTE QUE SUR DU MINERAI. `patch.tiles`, quand il est fourni, dit où il y en
+    # a VRAIMENT : le bbox, lui, englobe les trous du bord, et une foreuse qui déborde sur
+    # l'herbe est refusée à la pose — une seule suffit à faire capoter le plan entier
+    # (`can_place=False`, zéro entité posée). Patch sans tuiles : comportement d'avant,
+    # le bbox fait foi (back-compat stricte, aucun test existant n'en fournit).
+    minerai = {(int(tx), int(ty)) for (tx, ty) in (getattr(patch, "tiles", None) or ())}
+
+    def _sur_minerai(cu: float, cv: float) -> bool:
+        if not minerai:
+            return True
+        x, y = _to_xy(facing, cu + g.w / 2.0, cv + g.h / 2.0)
+        return all((tx, ty) in minerai
+                   for tx in range(math.floor(x - g.w / 2.0),
+                                   math.floor(x + g.w / 2.0 - 0.01) + 1)
+                   for ty in range(math.floor(y - g.h / 2.0),
+                                   math.floor(y + g.h / 2.0 - 0.01) + 1))
+
     positions: list[tuple[float, float]] = []
-    lv = lv1
-    while lv + g.h <= lv2 + 0.01 and len(positions) < node.machine_count:
-        lu = lu1
-        while lu + g.w <= lu2 + 0.01 and len(positions) < node.machine_count:
-            positions.append((lu + g.w / 2.0, lv + g.h / 2.0))
-            lu += step
-        lv += step
+    lu = lu1
+    while lu + g.w <= lu2 + 0.01 and len(positions) < node.machine_count:
+        lv = lv1
+        while lv + g.h <= lv2 + 0.01 and len(positions) < node.machine_count:
+            if _sur_minerai(lu, lv):
+                positions.append((lu + g.w / 2.0, lv + g.h / 2.0))
+            lv += step
+        lu += step
     if len(positions) < node.machine_count:
         notes.append(f"patch_trop_petit:{node.item} ({len(positions)}/{node.machine_count} drills dans le bbox)")
         # Prolonge la grille au-delà du bbox (layout débordant — S4 adaptera le terrain).
@@ -367,9 +394,15 @@ def _place_drills(node, patch, geometry, constraints, facing, au, av,
                 lu += step
             lv += step
 
+    # ORIENTÉES VERS LEUR BELT. Une foreuse dépose du côté où elle regarde ; la direction
+    # était figée au nord (0) alors que la collecte longe v à un u SUPÉRIEUR, c'est-à-dire
+    # à l'est en facing par défaut. Les foreuses déposaient donc à l'opposé de la seule
+    # belt qui les desservait — `waiting_for_space_in_destination` sur toute la mine, sans
+    # que rien n'indique que le minerai tombait deux tuiles trop loin.
     for (pu, pv) in positions:
         x, y = _to_xy(facing, pu, pv)
-        _add(entities, node.machine, x, y, 0, "drill", node_item=node.item)
+        _add(entities, node.machine, x, y, FACING_DIR_U[facing], "drill",
+             node_item=node.item)
     totals[node.machine] = totals.get(node.machine, 0) + len(positions)
 
     # Belt de collecte : sa LONGUEUR suit l'étendue des drills posés, pas celle du
@@ -394,10 +427,22 @@ def _place_drills(node, patch, geometry, constraints, facing, au, av,
     if constraints.collect_belt_scope == "drills" and positions:
         dv1 = min(pv for _, pv in positions) - g.h / 2.0
         dv2 = max(pv for _, pv in positions) + g.h / 2.0
+        # EN u AUSSI, et c'est le point qui manquait. Le scope « drills » ne resserrait
+        # que la LONGUEUR de la collecte ; sa POSITION restait calée sur le bord du patch
+        # (`lu2`), c'est-à-dire à l'autre bout du gisement dès que les foreuses n'en
+        # occupent qu'un coin. La note ci-dessus l'annonçait — « une belt calée sur `lu2`
+        # peut se retrouver hors de portée du drop des drills » — et la correction avait
+        # été écartée car elle déplaçait les étages de TOUS les plans. En la réservant au
+        # scope « drills », le défaut `patch` ne bouge pas d'un pouce (177 tests intacts)
+        # et l'appelant qui veut une collecte serrée l'obtient.
+        #
+        # Mesuré en jeu : sept foreuses en `waiting_for_space_in_destination`, aucune belt
+        # à moins de trois tuiles de leur drop, et toute la chaîne à l'arrêt derrière.
+        collect_u = max(pu for pu, _ in positions) + g.w / 2.0 + 0.5
     else:
         dv1, dv2 = lv1, lv2
+        collect_u = lu2 + 0.5
     n_seg = max(1, int(math.ceil(dv2 - dv1)))
-    collect_u = lu2 + 0.5
     first_belt = None
     last_belt = None
     belt_out_end_idxs: list[int] = []
@@ -2522,17 +2567,151 @@ def _plan_core(request: LayoutRequest, geometry: GeometryBase) -> LayoutPlan:
 
 # ===== S4b : dispatcher plan() + replan auto déterministe =====
 
+def _sur_la_grille(lp: LayoutPlan, geometry: GeometryBase) -> LayoutPlan:
+    """Aligne les entités là où le JEU les posera vraiment.
+
+    Factorio ne pose pas où on lui dit, il pose sur SA grille : une emprise impaire
+    (inserter 1×1, foreuse 3×3) se centre sur une tuile — coordonnée en .5 — et une
+    emprise paire (four 2×2) se cale sur un coin — coordonnée entière. Le MicroPlanner
+    applique cette règle depuis le bootstrap ; le LayoutPlanner l'ignorait.
+
+    Conséquence mesurée en jeu : un bras planifié en x = −3.0 était snappé en −2.5,
+    c'est-à-dire exactement sur la belt planifiée là — quarante-sept tuiles portaient
+    ainsi deux entités du même plan. La pose s'arrêtait à la 250e entité sur 391, et
+    comme l'ordre topologique construit les foreuses et les fours avant les assembleuses,
+    l'usine naissait sans une seule machine de production : dix machines posées, une seule
+    en marche, aucune recette réglée.
+
+    On aligne AVANT de chercher les tuiles partagées : un plan doit décrire ce qui sera
+    posé, pas ce qu'on aurait souhaité poser.
+    """
+    def _cales(v: float, impair: bool) -> list:
+        """Les positions légales, la plus proche d'abord.
+
+        Une coordonnée ENTIÈRE pour une emprise impaire est à égale distance de deux
+        centres de tuile : le jeu tranche seul, et il tranche mal une fois sur deux. Un
+        bras planifié en −3.0 sépare la belt (−2.5) du four ; l'arrondi le pose SUR la
+        belt, et le flux qu'il devait servir est coupé — les foreuses minent sans pouvoir
+        déposer, les bras attendent une source qui n'arrive plus. On propose donc les deux
+        cales et l'appelant retient celle qui ne heurte rien.
+        """
+        if impair:
+            bas = math.floor(v) + 0.5
+            return [bas] if abs(v - round(v)) > 1e-6 else [bas, bas - 1.0]
+        haut = float(math.floor(v + 0.5))
+        return [haut] if abs(v - math.floor(v)) > 1e-6 else [haut, haut + 1.0]
+
+    occupe: set = set()
+    # Les entités déjà sur la grille posent leur emprise d'abord : elles ne bougeront pas,
+    # et ce sont elles que les ambiguës doivent éviter.
+    ambigues = []
+    for e in lp.entities:
+        if getattr(e, "skip", False):
+            continue
+        g = geometry.geometry(e.name)
+        w, h = (int(g.w) if g else 1), (int(g.h) if g else 1)
+        cx, cy = _cales(e.x, bool(w % 2)), _cales(e.y, bool(h % 2))
+        if len(cx) == 1 and len(cy) == 1:
+            e.x, e.y = cx[0], cy[0]
+            occupe.update(_tuiles_de(e, geometry))
+        else:
+            ambigues.append((e, cx, cy))
+    for e, cx, cy in ambigues:
+        choisi = None
+        for x in cx:
+            for y in cy:
+                e.x, e.y = x, y
+                tuiles = _tuiles_de(e, geometry)
+                if not any(t in occupe for t in tuiles):
+                    choisi = (x, y, tuiles)
+                    break
+            if choisi:
+                break
+        if choisi is None:                      # aucune cale libre : la plus proche
+            e.x, e.y = cx[0], cy[0]
+            choisi = (e.x, e.y, _tuiles_de(e, geometry))
+        e.x, e.y = choisi[0], choisi[1]
+        occupe.update(choisi[2])
+    return lp
+
+
+def _tuiles_de(e, geometry: GeometryBase) -> list:
+    """Les tuiles que l'entité occupe VRAIMENT, d'après son emprise.
+
+    Comparer les centres ne suffit pas : un four 2×2 en (-1.0,-61.0) couvre quatre tuiles
+    et écrase une belt en (-1.5,-61.5) sans partager son point. Mesuré, quatre collisions
+    de ce type survivaient à une détection par position.
+    """
+    g = geometry.geometry(e.name)
+    w = float(g.w) if g else 1.0
+    h = float(g.h) if g else 1.0
+    x1, y1 = e.x - w / 2.0, e.y - h / 2.0
+    x2, y2 = e.x + w / 2.0, e.y + h / 2.0
+    return [(tx, ty)
+            for tx in range(math.floor(x1), math.floor(x2 - 0.01) + 1)
+            for ty in range(math.floor(y1), math.floor(y2 - 0.01) + 1)]
+
+
+def _sans_tuile_partagee(lp: LayoutPlan, geometry: GeometryBase) -> LayoutPlan:
+    """Deux entités ne peuvent pas occuper le même point. Garantie de sortie.
+
+    UN PLAN QUI SE CONTREDIT NE DOIT PAS SORTIR « ok ». Les transitions vérifient déjà
+    l'occupation avant de poser une belt (`_occupied`), mais rien ne revérifie ce qui est
+    ajouté ENSUITE : un bras placé après coup vient occuper la tuile d'une belt déjà
+    planifiée. Le plan s'annonçait faisable, ne le signalait qu'en note, et la
+    contradiction n'apparaissait qu'à la pose — mesuré en jeu : deux cent quarante-huit
+    entités en terre, puis « cannot place here » sur une belt dont la case portait un
+    `burner-inserter` du même plan. C'est le pire moment pour l'apprendre : la moitié de
+    l'usine est construite et l'autre ne viendra jamais.
+
+    La belt cède le pas : elle se contourne, un bras ou une machine non. On marque `skip`
+    plutôt que de supprimer — c'est le mécanisme déjà prévu (S1f), l'executor filtre
+    `not skip` et les index des connexions restent valides.
+    """
+    vus: dict = {}
+    for e in lp.entities:
+        if getattr(e, "skip", False):
+            continue
+        tuiles = _tuiles_de(e, geometry)
+        heurte = next((vus[t] for t in tuiles if t in vus), None)
+        if heurte is None:
+            for t in tuiles:
+                vus[t] = e
+            continue
+        cede = e if getattr(e, "role", "") == "belt" else (
+            heurte if getattr(heurte, "role", "") == "belt" else e)
+        try:
+            cede.skip = True
+        except Exception:          # entité figée : on note sans pouvoir l'écarter
+            lp.notes.append(f"tuile_partagee_non_resolue:{cede.name}@({e.x},{e.y})")
+            continue
+        if cede is heurte:
+            # Le sortant libère ses tuiles ; l'entrant les prend.
+            for t in list(vus):
+                if vus[t] is heurte:
+                    del vus[t]
+            for t in tuiles:
+                vus[t] = e
+        lp.notes.append(f"tuile_partagee:{cede.name}@({cede.x},{cede.y})")
+    return lp
+
+
 def plan(request: LayoutRequest, geometry: GeometryBase) -> LayoutPlan:
     """Produit le blueprint positionné + dimensionné au débit. Déterministe, sans LLM.
 
     S4b : dispatcher public. Si terrain_check ou replan_budget>0 -> _plan_with_replan
     (replan auto déterministe : shift anchor en v / pivot facing, règles fixes, avant
     handoff obstacle_blocking -> FactoryBuilder S4c). Sinon -> _plan_core (back-compat S3d,
-    check post-hoc global inchangé). Signature inchangée (back-compat stricte)."""
+    check post-hoc global inchangé). Signature inchangée (back-compat stricte).
+
+    La sortie passe par `_sans_tuile_partagee` : quel que soit le chemin emprunté, aucun
+    plan ne sort avec deux entités sur le même point."""
     c = request.constraints
     if c.terrain_check or c.replan_budget > 0:
-        return _plan_with_replan(request, geometry)
-    return _plan_core(request, geometry)
+        return _sans_tuile_partagee(
+            _sur_la_grille(_plan_with_replan(request, geometry), geometry), geometry)
+    return _sans_tuile_partagee(
+        _sur_la_grille(_plan_core(request, geometry), geometry), geometry)
 
 
 def _plan_with_replan(request: LayoutRequest, geometry: GeometryBase) -> LayoutPlan:

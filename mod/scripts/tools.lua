@@ -520,8 +520,16 @@ function M.scan_patch(resource, radius)
     local db = (b.position.x - origin.x) ^ 2 + (b.position.y - origin.y) ^ 2
     return da < db
   end)
+  -- DOUZE TUILES DECRIVENT UNE ANCRE, PAS UN GISEMENT. Le sample servait a choisir ou
+  -- poser UNE machine ; depuis qu'un plan complet s'implante sur plusieurs gisements, il
+  -- faut aussi savoir quelle EMPRISE est reellement du minerai. La bbox ne le dit pas --
+  -- elle enveloppe tous les patches du rayon, trous compris -- et le LayoutPlanner, qui
+  -- s'y fie, posait un foreur sur de l'herbe : « can_place=False » a 112 tuiles, mesure
+  -- en jeu. Avec un echantillon dense, l'appelant reconstruit une emprise de minerai
+  -- GARANTI. Les tuiles restent triees par distance : les premieres sont inchangees,
+  -- donc tous les appelants qui ancrent sur sample[1] gardent exactement leur comportement.
   local sample = {}
-  for i = 1, math.min(#resources, 12) do
+  for i = 1, math.min(#resources, 400) do
     table.insert(sample, {x = math.floor(resources[i].position.x), y = math.floor(resources[i].position.y)})
   end
   return json.encode({
