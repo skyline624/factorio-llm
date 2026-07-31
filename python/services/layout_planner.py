@@ -374,24 +374,41 @@ def _place_drills(node, patch, geometry, constraints, facing, au, av,
                    for ty in range(math.floor(y - g.h / 2.0),
                                    math.floor(y + g.h / 2.0 - 0.01) + 1))
 
-    positions: list[tuple[float, float]] = []
+    #
+    # UNE SEULE COLONNE — celle qui porte le plus de foreuses. La belt de collecte longe v
+    # à un u FIXE : une foreuse posée sur une seconde colonne se retrouve à un `step` de
+    # cette belt, soit cinq tuiles pour une foreuse électrique quand son drop porte à
+    # moins de deux. Son minerai tombe alors AU SOL, en silence : la mine est bâtie, les
+    # foreuses passent en `waiting_for_space_in_destination`, les fours restent à jeun et
+    # toute la chaîne s'arrête derrière sans qu'aucune erreur ne soit levée. Mesuré sur un
+    # gisement étroit : neuf foreuses sur dix hors de portée, jusqu'à trente-huit tuiles.
+    #
+    # Un gisement trop court donne donc une mine plus PETITE, pas une mine qui ne produit
+    # pas — et `patch_trop_petit` le dit en clair juste en dessous.
+    meilleure: list[tuple[float, float]] = []
     lu = lu1
-    while lu + g.w <= lu2 + 0.01 and len(positions) < node.machine_count:
+    while lu + g.w <= lu2 + 0.01:
+        colonne: list[tuple[float, float]] = []
         lv = lv1
-        while lv + g.h <= lv2 + 0.01 and len(positions) < node.machine_count:
+        while lv + g.h <= lv2 + 0.01 and len(colonne) < node.machine_count:
             if _sur_minerai(lu, lv):
-                positions.append((lu + g.w / 2.0, lv + g.h / 2.0))
+                colonne.append((lu + g.w / 2.0, lv + g.h / 2.0))
             lv += step
+        if len(colonne) > len(meilleure):
+            meilleure = colonne
+            if len(meilleure) >= node.machine_count:
+                break
         lu += step
+    positions: list[tuple[float, float]] = meilleure
     if len(positions) < node.machine_count:
         notes.append(f"patch_trop_petit:{node.item} ({len(positions)}/{node.machine_count} drills dans le bbox)")
-        # Prolonge la grille au-delà du bbox (layout débordant — S4 adaptera le terrain).
-        lv = lv1
+        # Prolonge LA COLONNE au-delà du bbox (layout débordant — S4 adaptera le terrain).
+        # Jamais une seconde colonne : elle serait hors de portée de la belt de collecte
+        # et déposerait au sol, ce que la boucle ci-dessus vient précisément d'éviter.
+        lu = (positions[0][0] - g.w / 2.0) if positions else lu1
+        lv = (max(pv for _, pv in positions) + g.h / 2.0) if positions else lv1
         while len(positions) < node.machine_count:
-            lu = lu1
-            while len(positions) < node.machine_count:
-                positions.append((lu + g.w / 2.0, lv + g.h / 2.0))
-                lu += step
+            positions.append((lu + g.w / 2.0, lv + g.h / 2.0))
             lv += step
 
     # ORIENTÉES VERS LEUR BELT. Une foreuse dépose du côté où elle regarde ; la direction
