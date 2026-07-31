@@ -1266,11 +1266,12 @@ class Coordinator:
     # Combien de fois on retente une pose après avoir fabriqué ce qui manquait. Borné :
     # la boucle s'arrête d'elle-même dès que le manque cesse de diminuer, ce garde-fou
     # ne sert qu'aux cas où il diminuerait d'une unité à chaque tour.
-    REPRISES_APPRO = 4
-    # Combien d'unités de rab on fabrique au-delà du manque annoncé. Le plan est refait
-    # après chaque approvisionnement — le terrain a changé — et ses besoins varient d'une
-    # ou deux machines. Sans marge, on poursuit une cible mouvante.
-    MARGE_APPRO = 3
+    REPRISES_APPRO = 20
+    # PAS DE RAB. Fabriquer au-delà du manque annoncé a été essayé pour absorber la
+    # variation du replan : l'agent y épuise son fer (« manque iron-plate: 0/72 ») et le
+    # manque explose au lieu de se résorber. On fabrique donc au plus juste, et c'est le
+    # NOMBRE de reprises qui laisse la boucle converger.
+    MARGE_APPRO = 0
     # Combien de fois le planner a le droit de se DÉCALER avant de renoncer. Une chaîne
     # neuve naît à côté d'une usine déjà debout : depuis que le bâti est déclaré comme
     # obstacle, le premier emplacement est presque toujours pris, et le budget par défaut
@@ -1444,6 +1445,7 @@ class Coordinator:
             if not avant:
                 break
             inv_courant = perception.inventory(self.api)
+            produit_quelque_chose = False
             for nom, combien in manques.items():
                 # `fabriquer` vise un TOTAL, pas un supplément : lui passer le seul manque
                 # lui fait répondre « l'inventaire en contient déjà assez » dès qu'on en
@@ -1460,21 +1462,43 @@ class Coordinator:
                 # à relancer une sonde pour apprendre ce que la fabrication savait déjà.
                 faits.append(f"{combien} {nom}" if ok_f
                              else f"{nom} (échec : {str(detail_f)[:70]})")
+                produit_quelque_chose = produit_quelque_chose or ok_f
             # LE TERRAIN A CHANGÉ : ON REPLANIFIE. Se procurer ce qui manque veut dire
             # MINER, et l'agent mine le gisement le plus proche — celui-là même que le
             # plan vient de retenir. Mesuré : les quatre tuiles sous la première foreuse
             # portaient du minerai à la planification et plus rien à la pose ; la foreuse
             # était refusée et le plan entier abandonné pour elle. Replanifier après
             # s'être équipé est la seule façon de poser sur le terrain RÉEL.
-            neuf = fb.build_layout(splan, geometry)
-            if neuf is not None and getattr(neuf, "feasibility", "") == "ok":
-                lp = neuf
+            # SEULEMENT QUAND CE N'EST PLUS UNE QUESTION D'INVENTAIRE. Replanifier à
+            # chaque reprise fait varier les besoins d'une machine à l'autre et la boucle
+            # poursuit une cible mouvante — mesuré, le compte rendu oscillait entre « il
+            # manque un four » et « il manque une foreuse » sur huit reprises. Tant que
+            # quelque chose manque, on se procure ce qui manque et on repose le MÊME plan ;
+            # c'est lorsque plus rien ne manque et que la pose refuse encore que le terrain
+            # est en cause, et alors seulement on replanifie.
+            change = False
+            if not manques:
+                neuf = fb.build_layout(splan, geometry)
+                if neuf is not None and getattr(neuf, "feasibility", "") == "ok":
+                    lp = neuf
+                    change = True
             _s_ecarter()
             rap = poser()
-            apres = (sum((getattr(rap, "missing", None) or {}).values())
-                     + len(getattr(rap, "blocked", None) or ()))
-            if apres >= avant:
-                break
+            # ON NE COMPARE PAS LES MANQUES DE DEUX PLANS DIFFÉRENTS. Le garde-fou de
+            # non-progression suppose qu'on poursuit le même objectif ; après un replan,
+            # les besoins sont ceux d'un AUTRE plan et le rapprochement n'a aucun sens.
+            # Mesuré : une pose bloquée sur une seule entité (avant = 1) suivie d'un
+            # replan qui réclamait cinq foreuses (après = 5) passait pour une régression,
+            # et la boucle abandonnait alors qu'il suffisait de les fabriquer.
+            # LE PROGRÈS SE MESURE À CE QU'ON A PRODUIT, pas au total qui reste. Le
+            # garde-fou comparait deux sommes : résoudre cinq foreuses et découvrir cinq
+            # fours donnait « autant qu'avant » et faisait abandonner, alors qu'un étage
+            # entier venait d'être réglé. Tant qu'une fabrication aboutit, on avance ; le
+            # jour où plus rien ne se fabrique, c'est que le manque n'est plus dans
+            # l'inventaire, et il est temps de rendre la main.
+            if change or produit_quelque_chose:
+                continue
+            break
         fabriques = f" — fabriqué {', '.join(faits)}" if faits else ""
         n = len(getattr(rap, "placed", []) or [])
         if not rap.ok:
