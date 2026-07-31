@@ -64,6 +64,12 @@ REPARATION: dict[str, tuple[str, str]] = {
 #     avec la production. C'est le premier arbitrage du projet où deux options
 #     défendables s'équivalent — et donc le premier endroit où un arbitre LLM aurait
 #     quelque chose à apporter.
+# À partir de combien de fabrications manuelles d'un même item on juge qu'il mérite une
+# chaîne. Trois : une fois est un besoin ponctuel, deux une coïncidence, trois une
+# habitude — et une habitude se mécanise. C'est le déclencheur naturel du passage de
+# l'artisanat à l'industrie, et il ne nomme aucun produit.
+SEUIL_INDUSTRIALISATION = 3
+
 PRIORITE = {"defendre_urgence": 4, "reparer": 3, "batir_energie": 2, "defendre": 2,
             # `fabriquer` n'a pas de rang propre : il HÉRITE de celui de l'action qu'il
             # débloque (cf. `enumerer_options`). Une pièce qui manque pour une réparation
@@ -205,6 +211,10 @@ class EtatUsine:
     # une recette de plus. Le jour où l'arbre demandera autre chose, l'agent le produira
     # sans qu'on ait une ligne à changer.
     a_fournir: tuple = ()                 # items du coût de `marche` sans source connue
+    # COMBIEN DE FOIS IL L'A FAIT A LA MAIN. Un item refabriqué sans cesse est un item
+    # qu'aucune chaîne ne produit ; c'est le signal de l'industrialisation, et il ne
+    # nomme aucun produit — il compte, simplement.
+    fabrications: dict = field(default_factory=dict)
     # Les machines qui PRODUISENT, à l'exclusion des organes d'énergie. Depuis que le
     # diagnostic embrasse les centrales (elles se posent au bord de l'eau, hors de la
     # zone), `machines` n'est plus jamais nul après `batir_energie` — et la condition de
@@ -424,6 +434,30 @@ def figer_pendant(api, actif: bool, fonction, *args):
             pass
 
 
+def a_industrialiser(etat: EtatUsine) -> tuple[str, str]:
+    """Ce qu'il faudrait produire, et pourquoi. ("", "") si rien ne le justifie.
+
+    Deux signaux, tous deux tirés de ce que l'agent VIT — jamais d'une liste écrite :
+
+      - la recherche réclame un item que rien ne produit (`a_fournir`) ;
+      - il refait le même item à la main, encore et encore (`fabrications`).
+
+    Le second est le vrai déclencheur de l'industrialisation, et il manquait : sans lui,
+    `produire` ne s'offrait que dans la fenêtre étroite où une technologie exigeait
+    précisément ce qu'aucune chaîne ne fabriquait. Mesuré sur quarante tours, l'agent ne
+    l'a jamais rencontrée. On mécanise ce qu'on répète : c'est vrai d'une usine comme
+    d'un atelier.
+    """
+    if etat.a_fournir:
+        return etat.a_fournir[0], f"« {etat.marche} » le réclame et rien ne le produit"
+    repetes = [(n, c) for n, c in (etat.fabrications or {}).items()
+               if c >= SEUIL_INDUSTRIALISATION]
+    if repetes:
+        nom, combien = max(repetes, key=lambda t: t[1])
+        return nom, f"fabriqué {combien} fois à la main : c'est une habitude, pas un besoin"
+    return "", ""
+
+
 def enumerer_options(etat: EtatUsine) -> list[Decision]:
     """Toutes les actions légales dans cet état, de la plus urgente à la moins.
 
@@ -519,6 +553,7 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
     # Elles n'ont pas de cible, et la clé sans cible est ce qui les y rattache : sans
     # cela, `batir_energie` était retenté 1241 fois d'affilée — mesuré. Bâtir est
     # justement ce qui coûte le plus cher à recommencer pour rien.
+    _a_prod = a_industrialiser(etat)
     for action, condition, raison, prio in (
             # Une centrale n'a de sens que si l'on pose des machines ÉLECTRIQUES. Mesuré :
             # les mains vides, l'agent réclamait une centrale qu'il ne pouvait pas bâtir,
@@ -569,9 +604,9 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
             # porte — et tout s'arrête à la seconde où il fait autre chose. L'item n'est
             # écrit nulle part ici, il vient de l'arbre des technologies ; c'est ce qui
             # sépare un verbe d'une recette, et c'est vérifiable au grep.
-            ("produire", bool(etat.a_fournir) and etat.machines > 0,
-             (f"« {etat.a_fournir[0]} » est réclamé par « {etat.marche} » et rien ne le "
-              f"produit : bâtir la chaîne qui le fabrique" if etat.a_fournir else ""),
+            ("produire", bool(_a_prod[0]) and etat.machines > 0,
+             (f"« {_a_prod[0]} » : {_a_prod[1]} — bâtir la chaîne qui le fabrique"
+              if _a_prod[0] else ""),
              PRIORITE["produire"])):
         if not condition:
             continue
@@ -586,8 +621,7 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
             # français ne survivent pas à tous les chemins. Même leçon que pour
             # `fabriquer` : une décision porte la donnée, elle ne la fait pas deviner.
             item=((etat.marche or "") if action == "chercher"
-                  else (etat.a_fournir[0] if action == "produire" and etat.a_fournir
-                        else ""))))
+                  else (_a_prod[0] if action == "produire" else ""))))
 
     if not options:
         options.append(Decision(action="rien",
@@ -759,6 +793,11 @@ class Coordinator:
         self._chaines: dict = {}
         # Échecs consécutifs par (action, cible) : la mémoire qui empêche l'acharnement.
         self._echecs: dict = {}
+        # CE QU'IL REFAIT A LA MAIN. Un item qu'on fabrique encore et encore est un item
+        # qu'aucune chaine ne produit : c'est le signal — mesurable, sans rien deviner —
+        # qu'il faut industrialiser. Compter les fabrications REUSSIES le dit sans qu'on
+        # ait a nommer un seul produit.
+        self._fabrications: dict = {}
         self.journal: list[str] = []
         # Les actions menées à leur terme sans produire leur effet. C'est le signal sur
         # lequel une enquête pourra être déclenchée ; sans lui, l'agent est aveugle à
@@ -830,6 +869,7 @@ class Coordinator:
         etat.ravitaillements = dict(self._ravitaillements)
         etat.evacuations = dict(self._evacuations)
         etat.echecs = dict(self._echecs)
+        etat.fabrications = dict(self._fabrications)
         etat.debit, etat.objectif = self._mesurer_debit(), self.objectif_par_s
         etat.objectif_item = self.objectif_item
         # Le palier conditionne DEUX choses : faut-il une centrale, et que faut-il avoir
@@ -1874,6 +1914,8 @@ class Coordinator:
         apres = perception.inventory(self.api).get(item, 0)
         gagne = apres - avant
         rates = [r for r in resultats if not (isinstance(r, dict) and r.get("ok") is True)]
+        if gagne > 0:
+            self._fabrications[item] = self._fabrications.get(item, 0) + 1
         return gagne > 0, (f"{item} : {avant} -> {apres} ({gagne:+d}) en "
                            f"{len(steps)} étape(s) [{plan_summary(steps)[:70]}]"
                            + (f" — bloqué sur {str(rates[0])[:60]}" if rates else ""))

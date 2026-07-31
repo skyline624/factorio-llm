@@ -1113,6 +1113,43 @@ def test_arbitre_defaillant_reste_trace_comme_appele() -> None:
     assert ok
 
 
+def test_industrialiser_ce_quon_refait_a_la_main() -> None:
+    """L'agent doit finir par MECANISER ce qu'il repete, sans qu'on nomme un produit.
+
+    `produire` ne s'offrait que dans une fenetre etroite : il fallait qu'une technologie
+    reclame precisement l'item qu'aucune chaine ne fabriquait. Mesure sur quarante tours
+    de jeu, l'agent ne l'a JAMAIS rencontree — la capacite existait sans jamais servir.
+
+    Le second signal est celui qui compte : refaire trois fois le meme item a la main est
+    une habitude, et une habitude se mecanise.
+    """
+    from agents.coordinator import EtatUsine, SEUIL_INDUSTRIALISATION, a_industrialiser
+
+    rien = a_industrialiser(EtatUsine())
+    rec("rien a industrialiser sans signal", rien == ("", ""), f"{rien}")
+
+    sous = EtatUsine(fabrications={"engrenage": SEUIL_INDUSTRIALISATION - 1})
+    rec("sous le seuil, on laisse faire a la main",
+        a_industrialiser(sous)[0] == "", f"{a_industrialiser(sous)}")
+
+    au = EtatUsine(fabrications={"engrenage": SEUIL_INDUSTRIALISATION})
+    item, motif = a_industrialiser(au)
+    rec("au seuil, l'habitude declenche l'industrialisation",
+        item == "engrenage" and "habitude" in motif, f"{item} — {motif}")
+
+    # Le plus repete l'emporte : c'est lui qui coute le plus cher a la main.
+    plusieurs = EtatUsion = EtatUsine(fabrications={"a": 3, "b": 7, "c": 4})
+    rec("le plus repete l'emporte", a_industrialiser(plusieurs)[0] == "b",
+        f"{a_industrialiser(plusieurs)}")
+
+    # La recherche reste prioritaire : ce qu'elle reclame bloque une marche entiere.
+    melange = EtatUsine(a_fournir=("flacon",), marche="techno",
+                        fabrications={"b": 9})
+    rec("ce que la recherche reclame passe devant",
+        a_industrialiser(melange)[0] == "flacon", f"{a_industrialiser(melange)}")
+    assert all(ok for _, ok, _ in RESULTS[-5:]), "industrialisation"
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -1146,6 +1183,7 @@ def main() -> int:
         test_arbitrage_trace_meme_sans_arbitre,
         test_arbitrage_note_lappel_et_la_divergence,
         test_arbitre_defaillant_reste_trace_comme_appele,
+        test_industrialiser_ce_quon_refait_a_la_main,
     ]
     for t in tests:
         t()
