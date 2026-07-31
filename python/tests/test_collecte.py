@@ -160,9 +160,56 @@ def test_chaque_bras_a_quelque_chose_sous_sa_prise() -> None:
                f"{len(bras)} bras, {len(aveugles)} sans source : {aveugles[:4]}")
 
 
+def test_chaque_bras_puise_dans_la_bonne_source() -> None:
+    """Trouver QUELQUE CHOSE sous la prise ne suffit pas : encore faut-il que ce soit ÇA.
+
+    Un bras transporte un item — `node_item` le dit. Il n'y a donc que deux montages
+    licites, et ils se distinguent par ce qu'on trouve sous la prise :
+
+      - une BELT qui porte le même item : le bras alimente la machine devant lui ;
+      - une MACHINE qui produit cet item : le bras l'évacue vers la belt devant lui.
+
+    Tout le reste est un bras qui brasse du vent. Le cas mesuré en jeu est le second
+    déguisé en premier : les bras d'ENTRÉE, orientés vers la machine, puisaient dedans au
+    lieu de puiser sur la belt — un four ne produit pas le minerai qu'on doit lui donner,
+    et il restait donc `no_ingredients` pendant que la belt saturait derrière.
+    """
+    lp = _plan_chaine()
+    f = lp.request.facing
+    geo = sample_geometry()
+    vivants = [e for e in lp.entities if not getattr(e, "skip", False)]
+    sources = {}
+    for e in vivants:
+        if getattr(e, "role", "") not in ("belt", "bus-belt", "machine", "drill"):
+            continue
+        ge = geo.geometry(e.name)
+        w = (ge.w if ge else 1) / 2.0
+        h = (ge.h if ge else 1) / 2.0
+        for dx in (-w + 0.5, 0.0, w - 0.5):
+            for dy in (-h + 0.5, 0.0, h - 0.5):
+                eu, ev = _to_uv(f, e.x + dx, e.y + dy)
+                sources[(round(eu), round(ev))] = e
+
+    incoherents = []
+    for b in [e for e in vivants if getattr(e, "role", "") == "inserter"]:
+        g = geo.geometry(b.name)
+        reach = (g.pickup_distance if g and g.pickup_distance else 1.0)
+        ux, uy = FACING_UNIT[b.direction]
+        pu, pv = _to_uv(f, b.x + ux * reach, b.y + uy * reach)
+        src = sources.get((round(pu), round(pv)))
+        porte = getattr(b, "node_item", "")
+        if src is None or getattr(src, "node_item", "") != porte:
+            incoherents.append((round(b.x, 1), round(b.y, 1), porte,
+                                getattr(src, "name", "vide"),
+                                getattr(src, "node_item", "-")))
+    assert rec("chaque bras puise dans une source qui porte son item", not incoherents,
+               f"{len(incoherents)} bras incohérent(s) : {incoherents[:3]}")
+
+
 TESTS = [test_gisement_large_toutes_les_foreuses_atteignent_la_belt,
          test_gisement_etroit_aucune_foreuse_n_est_abandonnee_loin_de_la_belt,
-         test_chaque_bras_a_quelque_chose_sous_sa_prise]
+         test_chaque_bras_a_quelque_chose_sous_sa_prise,
+         test_chaque_bras_puise_dans_la_bonne_source]
 
 
 def main() -> int:

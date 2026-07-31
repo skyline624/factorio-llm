@@ -267,6 +267,25 @@ class LayoutPlan:
 
 # ===== Helpers géométriques =====
 
+def _dir_prise(facing: int) -> int:
+    """La direction à donner à un bras pour qu'il PUISE du côté -u.
+
+    UN INSERTER PREND DU CÔTÉ VERS LEQUEL IL POINTE, et dépose à l'opposé. Mesuré en jeu
+    sur les quatre orientations : `dir=E -> pickup=(+1,0) drop=(-1.2,0)`. Le placement
+    supposait l'inverse et orientait tous les bras vers +u :
+
+      - le bras d'ENTRÉE, posé entre la belt (-u) et la machine (+u), puisait DANS la
+        machine — un four ne produit pas le minerai qu'on doit lui donner, il restait donc
+        `no_ingredients` pendant que la belt saturait derrière ;
+      - le bras de SORTIE, posé entre la machine (-u) et la belt de sortie (+u), puisait
+        sur la belt et reversait dans la machine.
+
+    Dans les deux montages la source est en -u : c'est donc là que les bras doivent
+    pointer, quel que soit leur rôle.
+    """
+    return (FACING_DIR_U[facing] + 4) % 8
+
+
 def _to_uv(facing: int, x: float, y: float) -> tuple[float, float]:
     """(x,y) map -> (u,v) local (u = facing, v = perpendiculaire). Base orthonormée."""
     ux, uy = FACING_UNIT[facing]
@@ -865,7 +884,7 @@ def _place_stage(node, geometry, constraints, belt_speed, inserter_tp, inserter_
             for s in range(min(ins_in_i, slots)):
                 sv = vv - half_v + 0.5 + s
                 x, y = _to_xy(facing, iu_i, sv)
-                _add(entities, ins_name, x, y, FACING_DIR_U[facing], "inserter", node_item=ing_name)
+                _add(entities, ins_name, x, y, _dir_prise(facing), "inserter", node_item=ing_name)
         totals[ins_name] = totals.get(ins_name, 0) + N * min(ins_in_i, slots)
 
     # --- Sortie (produit) : S2a -> pipe si fluide, sinon belts+inserters (back-compat) ---
@@ -1031,7 +1050,7 @@ def _place_stage(node, geometry, constraints, belt_speed, inserter_tp, inserter_
                 sv = vv - half_v + 0.5 + s
                 iu = u_machine + half_u + 0.5
                 x, y = _to_xy(facing, iu, sv)
-                _add(entities, constraints.inserter_tier, x, y, FACING_DIR_U[facing], "inserter", node_item=node.item)
+                _add(entities, constraints.inserter_tier, x, y, _dir_prise(facing), "inserter", node_item=node.item)
         totals[constraints.inserter_tier] = totals.get(constraints.inserter_tier, 0) + N * min(ins_out, slots)
 
     # --- S3c : beacons (côté +u, couvrent les machines). Calcul AVANT les poles car les
