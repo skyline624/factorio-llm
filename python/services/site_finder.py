@@ -357,7 +357,16 @@ def place_belt_line(api, depart: tuple[float, float], arrivee: tuple[float, floa
         deja = next((e for e in _entites_a(api, bx, by, 0.4)
                      if e.get("type") == "transport-belt"), None)
         if deja is not None:
-            if deja.get("direction") != d:
+            # ON NE RETOURNE PAS UNE BELT QUI SERT DÉJÀ. Aligner l'existant sur son propre
+            # tracé est juste pour une belt isolée ; appliqué à une belt qui appartient à
+            # une chaîne, cela la détourne et coupe le flux qu'elle portait. Mesuré : une
+            # usine posée avec une colonne de collecte impeccable — dix-huit belts vers le
+            # sud, une seule tournée en bout — puis l'agent trace sa ligne, retourne la
+            # belt du MILIEU, et le minerai s'empile devant une tuile vide pendant que
+            # toute la mine se bloque derrière. Casser une chaîne de cent entités pour
+            # faire passer une ligne de charbon est un mauvais échange : on la laisse
+            # intacte et l'on signale le passage.
+            if deja.get("direction") != d and not _belt_sert_une_chaine(api, bx, by, deja):
                 api.run_action(api.rotate_entity_at, bx, by, d, belt, timeout=timeout)
             poses.append((bx, by))
             continue
@@ -406,6 +415,36 @@ def place_belt_line(api, depart: tuple[float, float], arrivee: tuple[float, floa
         if any(e.get("type") == "transport-belt" for e in _entites_a(api, bx, by, 0.4)):
             poses.append((bx, by))
     return poses, len(poses) == len(tuiles)
+
+
+# Vecteur unitaire d'une direction du JEU (échelle 16 : 0=N, 4=E, 8=S, 12=W).
+_PAS_DIR = {0: (0.0, -1.0), 4: (1.0, 0.0), 8: (0.0, 1.0), 12: (-1.0, 0.0),
+            2: (1.0, 0.0), 6: (-1.0, 0.0)}
+_PAS_NOM = {"north": (0.0, -1.0), "east": (1.0, 0.0),
+            "south": (0.0, 1.0), "west": (-1.0, 0.0)}
+
+
+def _belt_sert_une_chaine(api, x: float, y: float, belt: dict) -> bool:
+    """La belt en (x, y) déverse-t-elle dans une autre belt ?
+
+    C'est le seul critère qui distingue une belt isolée — qu'on peut réorienter sans
+    dommage — d'un maillon de chaîne, qu'on briserait. Une belt qui mène à une autre
+    porte un flux ; la retourner l'interrompt sans que rien ne le signale.
+    """
+    # LA DIRECTION ARRIVE SOUS DEUX FORMES : un entier de l'échelle du jeu, ou un NOM
+    # ("south"). Supposer l'entier lève un `ValueError` sur la moitié des appelants.
+    brut = belt.get("direction", 0)
+    if isinstance(brut, str):
+        dx, dy = _PAS_NOM.get(brut.lower(), (0.0, 0.0))
+    else:
+        try:
+            dx, dy = _PAS_DIR.get(int(brut), (0.0, 0.0))
+        except (TypeError, ValueError):
+            return False
+    if (dx, dy) == (0.0, 0.0):
+        return False
+    return any(e.get("type") == "transport-belt"
+               for e in _entites_a(api, x + dx, y + dy, 0.4))
 
 
 def _entites_a(api, x: float, y: float, rayon: float = 0.3) -> list[dict]:
