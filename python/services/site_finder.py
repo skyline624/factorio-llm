@@ -331,7 +331,19 @@ def place_belt_line(api, depart: tuple[float, float], arrivee: tuple[float, floa
     déboguer à l'œil dans le jeu.
     """
     x1, y1 = math.floor(arrivee[0]) + 0.5, math.floor(arrivee[1]) + 0.5
-    tuiles, propre = tracer_en_l(depart, arrivee, eviter, garde)
+    # ON CONTOURNE CE QUI SERT, ON NE S'Y ARRÊTE PAS. Refuser de retourner ou de retirer
+    # une belt qui porte un flux protège l'existant — mais laisse le tracé buter dessus :
+    # mesuré, `alimenter` posait UNE tuile de belt puis renonçait, et la science ne
+    # recevait plus rien. Les tuiles occupées par une chaîne en service rejoignent donc
+    # celles qu'on évite, AVANT de tracer : le chemin passe à côté au lieu de s'arrêter
+    # devant.
+    occupees = set(eviter or ())
+    for (tx, ty) in tracer_en_l(depart, arrivee, eviter, garde)[0]:
+        deja = next((e for e in _entites_a(api, tx, ty, 0.4)
+                     if e.get("type") == "transport-belt"), None)
+        if deja is not None and _belt_sert_une_chaine(api, tx, ty, deja):
+            occupees.add((math.floor(tx), math.floor(ty)))
+    tuiles, propre = tracer_en_l(depart, arrivee, occupees or None, garde)
     if not propre:
         # Emprunter la voie d'un autre flux revient à le détourner (on retourne ses
         # tuiles plus bas). Mieux vaut ne rien poser que casser ce qui marchait.

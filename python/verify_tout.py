@@ -45,6 +45,8 @@ COMPORTEMENT = [
     ("verify_alimentation_e24.py", "les ingrédients arrivent sans qu'on les porte"),
     ("verify_curriculum_recherche.py", "l'agent décide de chercher et enchaîne les technologies"),
     ("verify_endurance.py", "l'usine ne s'éteint pas quand le combustible manque"),
+    ("verify_produire_generique.py",
+     "le produit est un paramètre : la chaîne se découvre, se bâtit et débite"),
     # En DERNIER : c'est le seul qui fige une carte sans dotation. Il la rend garnie
     # avant de sortir, mais le placer en fin de liste évite que ce rétablissement soit
     # le seul rempart entre lui et les autres.
@@ -56,7 +58,11 @@ COMPORTEMENT = [
 # ferait échouer en TIMEOUT sur sa seule longueur, ce qui ne mesure rien.
 # `verify_alimentation_e24` monte sa scène puis observe SIX fenêtres de 1500 ticks :
 # il lui faut son propre délai, comme au bootstrap.
+# `verify_produire_generique` pose une chaîne entière — il se procure ce qui manque, mine
+# ce qu'il faut, puis observe quatre fenêtres de 1800 ticks. Le délai commun le tuerait sur
+# sa seule longueur.
 TIMEOUTS = {"verify_bootstrap_craft.py": 3000.0,
+            "verify_produire_generique.py": 2400.0,
             "verify_alimentation_e24.py": 2400.0,
             "verify_curriculum_recherche.py": 1800.0,
             "verify_endurance.py": 1800.0}
