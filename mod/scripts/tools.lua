@@ -230,6 +230,24 @@ function M.describe(name)
   -- Recette (force-specifique pour `enabled`).
   local force = player_mod.get_ai_force()
   local recipe = force.recipes[name]
+
+  -- QUI PRODUIT CET ITEM. Le NOM d'une recette n'est pas son produit : le gaz sort de
+  -- `basic-oil-processing`, l'acide de `sulfuric-acid`... Interroger `describe` sur le
+  -- PRODUIT ne rendait donc rien, et l'appelant en concluait qu'il fallait le MINER --
+  -- « petroleum-gas » figurait parmi les gisements a prospecter. On expose donc les
+  -- recettes qui le fabriquent ; laquelle retenir est un arbitrage, il appartient a
+  -- l'appelant (certaines bouclent, d'autres ne font que vider des barils).
+  local producteurs = {}
+  for nom, r in pairs(force.recipes) do
+    for _, p in pairs(r.products or {}) do
+      if p.name == name and nom ~= name then
+        producteurs[#producteurs + 1] = {name = nom, enabled = r.enabled and true or false,
+                                         n_ingredients = #r.ingredients}
+        break
+      end
+    end
+  end
+  if #producteurs > 0 then result.recipes_producing = producteurs end
   if recipe then
     -- S2a : type ("item"|"fluid") par ingredient/produit (lisible sur LuaRecipe 2.0
     -- via i.type/p.type). Defaut "item" (back-compat : recipes solides inchangues).

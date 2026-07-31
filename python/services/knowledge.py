@@ -617,7 +617,10 @@ def populate_from_rcon(api, items: list[str], machines: list[str]) -> KnowledgeB
         d = api.describe(it)
         if not isinstance(d, dict):
             continue
-        r = recipe_from_describe(it, d)
+        # `recette_de` et non `recipe_from_describe` : sans cela le solveur rendait
+        # `missing_recipe:petroleum-gas` sur un fluide dont la recette existe bel et bien,
+        # sous le nom du PROCÉDÉ qui le fabrique.
+        r = recette_de(api, it)
         if r is not None:
             # S2a : indexer par produit principal (products[0]) si différent du nom de
             # recette. Back-compat : recettes solides (iron-plate, iron-gear-wheel) ont
@@ -646,6 +649,43 @@ def populate_from_rcon(api, items: list[str], machines: list[str]) -> KnowledgeB
     # Additif, idempotent, back-compat (chaînes solides existantes non affectées).
     inject_power_units(kb)
     return kb
+
+
+def recette_de(api, item: str):
+    """La recette qui FABRIQUE `item`, même quand elle ne porte pas son nom.
+
+    LE NOM D'UNE RECETTE N'EST PAS SON PRODUIT : le gaz sort de `basic-oil-processing`,
+    l'huile lourde d'`advanced-oil-processing`. Interroger le jeu sur le produit ne rendait
+    rien, et l'appelant en concluait qu'il fallait le MINER — « petroleum-gas » figurait
+    parmi les gisements à prospecter et toute la moitié chimique de l'arbre passait pour
+    hors d'atteinte.
+
+    Une RESSOURCE BRUTE, elle, ne se fabrique pas : le jeu lui rend une `entity` (son
+    gisement), et l'on s'arrête là. Sans ce garde on cherche « qui produit du minerai de
+    fer », on tombe sur des recettes de recyclage, et la chaîne d'un engrenage passe de
+    trois items à quarante et un.
+
+    Entre plusieurs producteurs, on retient ceux que l'agent sait déjà faire, puis les plus
+    simples — ce qui écarte de soi-même les recyclages et les déballages de barils, qui
+    « produisent » l'item sans le fabriquer.
+    """
+    d = api.describe(item)
+    if not isinstance(d, dict):
+        return None
+    directe = recipe_from_describe(item, d)
+    if directe is not None:
+        return directe
+    if "entity" in d:                      # ressource brute : elle s'extrait
+        return None
+    for p in sorted(d.get("recipes_producing") or [],
+                    key=lambda r: (not r.get("enabled"), r.get("n_ingredients", 99),
+                                   r.get("name", ""))):
+        via = api.describe(p.get("name", ""))
+        if isinstance(via, dict):
+            r2 = recipe_from_describe(p.get("name", ""), via)
+            if r2 is not None:
+                return r2
+    return None
 
 
 def decouvrir_chaine(api, item: str, garde: int = 400) -> tuple[list[str], list[str]]:
@@ -684,8 +724,7 @@ def decouvrir_chaine(api, item: str, garde: int = 400) -> tuple[list[str], list[
         if courant in vus:
             continue
         vus.add(courant)
-        d = api.describe(courant)
-        recette = recipe_from_describe(courant, d) if isinstance(d, dict) else None
+        recette = recette_de(api, courant)
         if recette is None:
             feuilles.append(courant)
             continue

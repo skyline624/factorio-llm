@@ -54,7 +54,14 @@ class FauxJeu:
         self.appels.append(name)
         r = self.recettes.get(name)
         if r is None:
-            return {}
+            # Comme le vrai jeu : une ressource brute porte une `entity`, un produit
+            # fabrique par un PROCEDE au nom different porte ses `recipes_producing`.
+            if name in getattr(self, "ressources", ()):
+                return {"name": name, "entity": {"type": "resource"}}
+            prod = [{"name": n, "enabled": True, "n_ingredients": len(ing)}
+                    for n, ing in self.recettes.items()
+                    if name in getattr(self, "produits", {}).get(n, ())]
+            return {"name": name, "recipes_producing": prod} if prod else {}
         return {"recipe": {"ingredients": [{"name": n, "amount": a} for n, a in r],
                            "energy": 0.5, "category": "crafting",
                            "products": [{"name": name, "amount": 1}]}}
@@ -143,13 +150,52 @@ def test_chaque_item_n_est_interroge_qu_une_fois() -> None:
         f"{len(jeu.appels)} appel(s), doublons : {doublons or 'aucun'}")
 
 
+def test_un_produit_dont_la_recette_porte_un_autre_nom() -> None:
+    """LE NOM D'UNE RECETTE N'EST PAS SON PRODUIT.
+
+    Le gaz sort de `basic-oil-processing`, l'huile lourde d'`advanced-oil-processing` :
+    interroger le jeu sur le PRODUIT ne rend rien. On en concluait qu'il fallait le MINER
+    — « petroleum-gas » figurait parmi les gisements a prospecter — et toute la moitie
+    chimique de l'arbre passait pour hors d'atteinte : `missing_recipe:petroleum-gas` sur
+    le plastique comme sur les circuits avances.
+    """
+    jeu = FauxJeu({"plastique": [("charbon", 1), ("gaz", 20)],
+                   "raffinage": [("brut", 100)]})
+    jeu.ressources = {"charbon", "brut"}
+    jeu.produits = {"raffinage": ("gaz",)}          # le procede produit le gaz
+    items, feuilles = decouvrir_chaine(jeu, "plastique")
+    assert rec("la chaine remonte le procede jusqu'a la ressource",
+               "gaz" in items and "brut" in feuilles,
+               f"items={items} feuilles={feuilles}")
+    assert rec("le produit d'un procede n'est PAS un gisement",
+               "gaz" not in feuilles, f"feuilles={feuilles}")
+
+
+def test_une_ressource_brute_reste_une_feuille() -> None:
+    """Une ressource s'EXTRAIT, elle ne se fabrique pas.
+
+    Sans ce garde, on cherche « qui produit du minerai de fer », on tombe sur des recettes
+    de recyclage et de fonderie, et la chaine d'un simple engrenage passe de trois items a
+    quarante et un — jusqu'a reclamer de la saumure de lithium.
+    """
+    jeu = FauxJeu({"engrenage": [("minerai", 2)], "recyclage": [("engrenage", 1)]})
+    jeu.ressources = {"minerai"}
+    jeu.produits = {"recyclage": ("minerai",)}      # piege : le recyclage "produit" du minerai
+    items, feuilles = decouvrir_chaine(jeu, "engrenage")
+    assert rec("une ressource ne part pas chercher qui la produit",
+               set(items) == {"engrenage", "minerai"} and feuilles == ["minerai"],
+               f"items={items} feuilles={feuilles}")
+
+
 TESTS = [test_chaine_complete_du_flacon_vert,
          test_les_feuilles_sont_les_gisements,
          test_profondeur_complete,
          test_une_recette_qui_boucle_ne_tourne_pas_sans_fin,
          test_item_inconnu_est_une_feuille_pas_une_erreur,
          test_le_garde_borne_un_catalogue_aberrant,
-         test_chaque_item_n_est_interroge_qu_une_fois]
+         test_chaque_item_n_est_interroge_qu_une_fois,
+         test_un_produit_dont_la_recette_porte_un_autre_nom,
+         test_une_ressource_brute_reste_une_feuille]
 
 
 def main() -> int:
