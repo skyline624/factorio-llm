@@ -206,10 +206,69 @@ def test_chaque_bras_puise_dans_la_bonne_source() -> None:
                f"{len(incoherents)} bras incohérent(s) : {incoherents[:3]}")
 
 
+def test_le_minerai_atteint_les_bras_du_premier_etage() -> None:
+    """Poser les belts ne suffit pas : il faut qu'elles se REJOIGNENT.
+
+    Mesuré en jeu, tout étant par ailleurs correct : la belt de collecte de la mine
+    (x = -13.5) était PLEINE et les foreuses en `waiting_for_space_in_destination`, tandis
+    que la belt d'entrée des fours (x = -12.5) était VIDE et les bras en
+    `waiting_for_source_items`. Deux belts parallèles, adjacentes, et rien qui fasse passer
+    le minerai de l'une à l'autre : elles avancent toutes deux le long de v sans jamais se
+    croiser.
+
+    On suit donc le flux tel que le jeu le suivra — de belt en belt, chacune dans SA
+    direction — depuis la sortie des foreuses, et l'on exige d'atteindre la prise d'un
+    bras. C'est la seule définition utile d'une chaîne : ce qui entre quelque part en
+    ressort ailleurs.
+    """
+    lp = _plan_chaine()
+    f = lp.request.facing
+    geo = sample_geometry()
+    vivants = [e for e in lp.entities if not getattr(e, "skip", False)]
+
+    belts = {}
+    for e in vivants:
+        if getattr(e, "role", "") in ("belt", "bus-belt"):
+            belts[(round(e.x), round(e.y))] = e
+    prises = set()
+    for b in [e for e in vivants if getattr(e, "role", "") == "inserter"]:
+        g = geo.geometry(b.name)
+        reach = (g.pickup_distance if g and g.pickup_distance else 1.0)
+        ux, uy = FACING_UNIT[b.direction]
+        prises.add((round(b.x + ux * reach), round(b.y + uy * reach)))
+
+    # Départs : les tuiles où les foreuses déposent.
+    departs = []
+    for d in [e for e in vivants if getattr(e, "role", "") == "drill"]:
+        gd = geo.geometry(d.name)
+        portee = (gd.w / 2.0 + 0.7) if gd else 1.7
+        dx, dy = FACING_UNIT[d.direction]
+        departs.append((round(d.x + dx * portee), round(d.y + dy * portee)))
+
+    def atteint_une_prise(depart) -> bool:
+        """Suit les belts dans leur sens jusqu'à une prise de bras (ou un cycle)."""
+        vus, ici = set(), depart
+        for _ in range(500):
+            if ici in prises:
+                return True
+            b = belts.get(ici)
+            if b is None or ici in vus:
+                return False
+            vus.add(ici)
+            bx, by = FACING_UNIT[b.direction]
+            ici = (round(b.x + bx), round(b.y + by))
+        return False
+
+    perdus = [d for d in departs if not atteint_une_prise(d)]
+    assert rec("le minerai des foreuses atteint la prise d'un bras", not perdus,
+               f"{len(departs)} foreuse(s), {len(perdus)} dont le minerai n'arrive nulle part")
+
+
 TESTS = [test_gisement_large_toutes_les_foreuses_atteignent_la_belt,
          test_gisement_etroit_aucune_foreuse_n_est_abandonnee_loin_de_la_belt,
          test_chaque_bras_a_quelque_chose_sous_sa_prise,
-         test_chaque_bras_puise_dans_la_bonne_source]
+         test_chaque_bras_puise_dans_la_bonne_source,
+         test_le_minerai_atteint_les_bras_du_premier_etage]
 
 
 def main() -> int:
