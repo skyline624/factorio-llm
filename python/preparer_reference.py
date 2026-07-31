@@ -291,6 +291,21 @@ def main(argv: list[str]) -> int:
         print(f"       {semes} nid(s) semé(s) à 280 tuiles au nord "
               f"({'menace reproductible' if semes else 'AUCUN — menace absente'})")
 
+    # LA FILE DE RECHERCHE AUSSI VOYAGE — cinquième fuite, après l'inventaire, les
+    # technologies, le minerai et la pollution. Depuis que l'agent cherche de lui-même
+    # (E25a), il en lance une pendant qu'on bâtit l'usine de référence, et l'état figé
+    # part avec une recherche EN COURS. Le banc qui redemandait cette technologie-là se
+    # la voyait alors refuser — « file pleine » — laboratoire posé, alimenté et chargé de
+    # ses dix flacons. Une référence doit ouvrir toutes les portes, pas en tenir une.
+    file = rcon.query_lua(
+        "local f = game.forces.player local n = 0 "
+        "for _, t in pairs(f.research_queue or {}) do n = n + 1 end "
+        "f.research_queue = {} local m = 0 "
+        "for _, t in pairs(f.research_queue or {}) do m = m + 1 end "
+        "rcon.print(n .. ' -> ' .. m .. ' (en cours : ' "
+        ".. tostring(f.current_research and f.current_research.name) .. ')')")
+    print(f"       file de recherche vidée : {str(file).strip()}")
+
     # ×1 AVANT de figer : la vitesse voyage dans la save.
     rcon.query_lua("game.speed = 1 rcon.print('ok')")
     ok, motif = save_ref.sauver_reference(rcon=rcon)

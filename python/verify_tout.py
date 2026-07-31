@@ -80,17 +80,25 @@ def _repartir_de_la_reference() -> None:
         pass                    # pas de référence figée : les scripts feront avec
 
 
-def _lancer(script: str, promesse: str, timeout: float) -> tuple[str, bool, str]:
-    """Rend (script, réussi, résumé). Un script absent ou en erreur n'est jamais un succès."""
+def _lancer(script: str, promesse: str, timeout: float) -> tuple[str, bool, str, list[str]]:
+    """Rend (script, réussi, résumé, critères tombés).
+
+    Un script absent ou en erreur n'est jamais un succès.
+
+    LA SORTIE DU BANC ÉTAIT JETÉE. On n'en gardait que « N/M reussies. » — donc en cas
+    d'échec, aucune trace du critère tombé. C'est justement le cas qui compte : un banc
+    qui échoue ici mais passe en solo ne se laisse pas réinterroger, et son détail
+    n'existe qu'ici. On remonte donc ses lignes `[FAIL]`.
+    """
     if not os.path.exists(script):
-        return script, False, "ABSENT"
+        return script, False, "ABSENT", []
     _repartir_de_la_reference()
     t0 = time.time()
     try:
         p = subprocess.run([sys.executable, script], capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
-        return script, False, f"TIMEOUT après {timeout:.0f}s"
+        return script, False, f"TIMEOUT après {timeout:.0f}s", []
     sortie = (p.stdout or "") + (p.stderr or "")
     # Les scripts finissent par « N/M reussies. » ; à défaut, le code de sortie tranche.
     bilan = ""
@@ -99,12 +107,23 @@ def _lancer(script: str, promesse: str, timeout: float) -> tuple[str, bool, str]
             bilan = ligne.strip()
             break
     if "[SKIP]" in sortie and not bilan:
-        return script, True, f"SKIP ({time.time() - t0:.0f}s) — pré-requis absent"
+        return script, True, f"SKIP ({time.time() - t0:.0f}s) — pré-requis absent", []
+    tombes = [l.rstrip() for l in sortie.splitlines() if l.startswith("[FAIL]")]
     return script, p.returncode == 0, f"{bilan or 'code ' + str(p.returncode)} " \
-                                      f"({time.time() - t0:.0f}s)"
+                                      f"({time.time() - t0:.0f}s)", tombes
 
 
 def main(argv: list[str]) -> int:
+    # UNE LIGNE REMONTÉE D'UN BANC PEUT CONTENIR N'IMPORTE QUOI. Elle a déjà traversé un
+    # décodage en `errors="replace"` — donc des `�` — et la console Windows écrit en
+    # cp1252, qui ne sait pas les représenter. La batterie est tombée au SEPTIÈME banc sur
+    # un `UnicodeEncodeError` le jour où l'on a voulu afficher le détail des échecs : le
+    # diagnostic tuait ce qu'il devait éclairer. Ici on n'échoue plus jamais sur un
+    # caractère, quitte à en perdre un.
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
     rapide = "--rapide" in argv
     liste = SOCLE + ([] if rapide else COMPORTEMENT)
     # `flush` partout : une batterie dure un quart d'heure, et une sortie redirigée vers
@@ -117,13 +136,19 @@ def main(argv: list[str]) -> int:
     for script, promesse in liste:
         print(f"       ... {script} — {promesse}", flush=True)
         r = _lancer(script, promesse, timeout=TIMEOUTS.get(script, 900.0))
-        resultats.append((r[0], r[1], r[2], promesse))
+        resultats.append((r[0], r[1], r[2], promesse, r[3]))
         print(f"       [{'OK  ' if r[1] else 'FAIL'}] {r[0]:28s} {r[2]}", flush=True)
+        # Le critère tombé, tout de suite : on lit ce journal PENDANT que la batterie
+        # tourne, et attendre le bilan final coûterait un quart d'heure d'ignorance.
+        for tombe in r[3]:
+            print(f"              {tombe}", flush=True)
     print("\n" + "=" * 72)
-    nok = sum(1 for _, ok, _, _ in resultats if ok)
-    for script, ok, resume, promesse in resultats:
+    nok = sum(1 for _, ok, _, _, _ in resultats if ok)
+    for script, ok, resume, promesse, tombes in resultats:
         if not ok:
             print(f"  ECHEC : {script} — {promesse} ({resume})")
+            for tombe in tombes:
+                print(f"          {tombe}")
     print(f"{nok}/{len(resultats)} verification(s) en jeu reussie(s).")
     print("=" * 72)
     return 0 if nok == len(resultats) else 1

@@ -105,6 +105,13 @@ def main() -> int:
 
     api.set_test_mode(True)
     api.setup()
+    # ACCELERER LE JEU NE CHANGE RIEN A CE QU'ON MESURE : un banc compte des TICKS, et
+    # `game.speed` ne fait que decider en combien de secondes ils s'ecoulent. Ce banc-ci
+    # ne fixait pas la vitesse et heritait donc du x1 de la reference. Tant que l'agent
+    # ne faisait que poser des machines, cela passait inapercu ; depuis qu'il DECIDE de
+    # chercher (E25a), il fond son minerai -- `wait{ticks=17600}` -- et la meme epreuve
+    # est passee de 70 a 336 secondes sans qu'un seul constat change.
+    rcon.query_lua("game.speed = 30 rcon.print(1)")
 
     # La reference peut porter des nids (elle sert aussi aux tests de defense). Ici le
     # sujet est autre : laisses en place, ils consomment les premiers tours en `defendre`
@@ -143,6 +150,7 @@ def main() -> int:
         print(f"[SKIP] l'usine ne produit pas après {tours} tours — ce test suppose la "
               f"chaîne acquise (E8/E19b), il ne l'éprouve pas.")
         print(f"       journal : {coord.journal[-1][:110] if coord.journal else ''}")
+        rcon.query_lua("game.speed = 1 rcon.print(1)")
         rcon.close()
         return 0
     dx, dy, dn = float(drill["x"]), float(drill["y"]), str(drill["name"])
@@ -228,6 +236,7 @@ def _verdict(rcon) -> int:
     print(f"{nok}/{len(RESULTS)} reussies.")
     print("=" * 72)
     try:
+        rcon.query_lua("game.speed = 1 rcon.print(1)")
         rcon.close()
     except Exception:
         pass

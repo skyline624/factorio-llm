@@ -124,7 +124,11 @@ def main() -> int:
         ouvre5 = []
     else:
         ok5, detail5 = coord.chercher(payante.nom)
-        rec("5: une marche qui se paie est menée à bout", ok5, detail5[:110])
+        # PAS DE TRONCATURE : `chercher` place son motif d'échec À LA FIN de son détail
+        # (« — TOUJOURS PAS acquise — <ce que le jeu a répondu> »). Couper à 110
+        # caractères jetait exactement l'information pour laquelle on lit ce banc, et
+        # laissait un échec muet ; `rec` sait déjà replier une ligne longue.
+        rec("5: une marche qui se paie est menée à bout", ok5, detail5)
         ouvre5 = list(payante.debloque)
 
     # --- Rec 6 : le laboratoire a été posé ET alimenté ---

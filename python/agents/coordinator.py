@@ -777,7 +777,18 @@ class Coordinator:
         etat = EtatUsine(machines=diag.machines, diagnostic=diag)
         # Un point du réseau suffit à savoir s'il y a du courant : on interroge la
         # première machine observée plutôt que toutes (chaque appel est un aller-retour).
-        sa = self.api.scan_area(self.rayon)
+        #
+        # ON REGARDE L'USINE, PAS SES PROPRES PIEDS. `scan_area` est centré sur le
+        # PERSONNAGE ; le diagnostic juste au-dessus, lui, porte sur `self.zone`. L'agent
+        # jugeait donc son réseau depuis l'endroit où il se tenait — et aller miner du
+        # charbon à deux cents tuiles, ce qu'on lui demande précisément de faire, le
+        # rendait aveugle à sa propre centrale.
+        #
+        # Mesuré au banc d'endurance : réseau vu au tour 1, PERDU du tour 2 au tour 6
+        # alors qu'il produisait 245 kW. L'agent en concluait « aucun réseau alimenté »
+        # et brûlait trois tours à rebâtir une centrale qu'il avait déjà, pendant que
+        # celle-ci se vidait faute d'un second ravitaillement.
+        sa = self.api.inspect_at(self.zone[0], self.zone[1], self.rayon)
         rows = sa.get("entities", []) if isinstance(sa, dict) else []
         for r in rows:
             if r.get("type") in ("generator", "electric-pole", "mining-drill", "furnace"):

@@ -1091,6 +1091,24 @@ end
 
 -- ===== Etat RESEARCHING =====
 
+-- DEJA EN ROUTE N'EST PAS UN REFUS.
+--
+-- `add_research` rend `false` dans deux situations que rien ne distingue ensuite : la
+-- technologie est hors d'atteinte, ou elle est DEJA en file. On renoncait donc a ce
+-- qu'on etait precisement en train de chercher.
+--
+-- Vu en jeu : l'etat de reference avait ete fige pendant que l'agent cherchait
+-- `gun-turret`. Toute nouvelle demande de `gun-turret` echouait alors sur « recherche
+-- refusee (prerequis, ou file pleine) » -- laboratoire pose, alimente, charge de dix
+-- flacons, prerequis acquis. Rien ne manquait : c'etait deja parti.
+local function deja_en_file(force, nom)
+  if force.current_research and force.current_research.name == nom then return true end
+  for _, t in pairs(force.research_queue or {}) do
+    if t.name == nom then return true end
+  end
+  return false
+end
+
 local function state_researching(params)
   local force = player_mod.get_ai_force()
   if not params.started then
@@ -1107,7 +1125,9 @@ local function state_researching(params)
     -- Le cas normal est celui d'une technologie a DECLENCHEUR (Factorio 2.0) : elle ne
     -- se met pas en file, elle tombe quand le geste est fait. Le dire evite de
     -- s'acharner sur la file de recherche alors qu'il fallait aller fabriquer.
-    if not force.add_research(params.technology_name) then
+    local en_route = force.add_research(params.technology_name)
+                     or deja_en_file(force, params.technology_name)
+    if not en_route then
       local tr = tech.prototype and tech.prototype.research_trigger
       if tr then
         M._complete("technologie a declencheur (" .. tostring(tr.type)

@@ -57,6 +57,9 @@ def main() -> int:
 
     api.set_test_mode(True)
     rcon.query_lua("game.speed = 30 rcon.print(1)")
+    # `pause_reflexion=True` a été ESSAYÉ ICI, puis retiré : mesuré sur trois passages,
+    # il ne change pas le résultat (2/4, 3/4, 3/4). Ce n'est donc pas la latence de la
+    # décision qui tue la centrale — l'agent perd ses tours autrement, cf. plus bas.
     coord = Coordinator(api, zone=deplacement.position(api), rayon=25.0)
 
     # --- La scène : une usine qui tourne, puis la panne sèche ---

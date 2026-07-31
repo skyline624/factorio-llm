@@ -86,6 +86,10 @@ def main() -> int:
 
     api.set_test_mode(True)
     api.setup()
+    # x1 hérité de la référence : voir la même note dans verify_gisement_e21. Ce banc
+    # était le plus exposé — 22 s à l'origine, 761 s une fois que l'agent s'est mis à
+    # fondre du minerai entre deux décisions.
+    rcon.query_lua("game.speed = 30 rcon.print(1)")
     pos = (api.get_state().get("character") or {}).get("position") or {}
     zone = (float(pos.get("x", 0.0)), float(pos.get("y", 0.0)))
 
@@ -108,6 +112,7 @@ def main() -> int:
     menace = etat.menace
     if semes == 0 or menace is None or not menace.agir:
         print(f"[SKIP] aucune menace obtenue ({semes} nid(s) semé(s), menace={menace}).")
+        rcon.query_lua("game.speed = 1 rcon.print(1)")
         rcon.close()
         return 0
     print(f"       {semes} nid(s) semé(s) à 280 tuiles au nord — {menace}")
@@ -167,6 +172,7 @@ def main() -> int:
             print(f"  ECHEC : {name} -> {detail}")
     print(f"{nok}/{len(RESULTS)} reussies.")
     print("=" * 72)
+    rcon.query_lua("game.speed = 1 rcon.print(1)")
     rcon.close()
     return 0 if nok == len(RESULTS) else 1
 
