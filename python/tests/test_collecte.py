@@ -26,7 +26,7 @@ from __future__ import annotations
 import sys
 
 from services.layout_planner import (LayoutConstraints, LayoutRequest, ResourcePatch,
-                                     Terrain, _to_uv, plan)
+                                     Terrain, FACING_UNIT, _to_uv, plan)
 from services.production_solver import ProductionRequest, solve
 from tests.test_layout_solver import sample_geometry, sample_kb
 
@@ -99,8 +99,70 @@ def test_gisement_etroit_aucune_foreuse_n_est_abandonnee_loin_de_la_belt() -> No
                f"{len(ecarts)} foreuse(s), {len(hors)} hors de portée : {hors}")
 
 
+def _plan_chaine(rate: float = 0.5):
+    """Un plan complet ore -> plate -> gear, la chaîne courte à un seul gisement."""
+    splan = solve(ProductionRequest("iron-gear-wheel", rate), sample_kb())
+    terrain = Terrain(patches=[ResourcePatch(
+        "iron-ore",
+        tiles=[(x, y) for x in range(40) for y in range(40)],
+        bbox=(0, 0, 40, 40))])
+    req = LayoutRequest(plan=splan, terrain=terrain, anchor=(0.0, 0.0), facing=2,
+                        constraints=LayoutConstraints(collect_belt_scope="drills"))
+    return plan(req, sample_geometry())
+
+
+def test_chaque_bras_a_quelque_chose_sous_sa_prise() -> None:
+    """Un bras qui prend dans le VIDE ne transporte rien, et rien ne le dit.
+
+    Mesuré en jeu : `burner-inserter waiting_for_source_items pickup[] drop[transport-belt]`
+    — le bras prenait dans le vide et déposait sur une belt, c'est-à-dire à l'envers de ce
+    qu'il devait faire. Un bras d'entrée prend SUR LA BELT et dépose DANS LA MACHINE ;
+    entre les deux il n'y a rien à inventer, mais tout à vérifier.
+
+    On regarde ce qui se trouve à la position de prise, dans le repère du plan : une belt,
+    une machine ou une foreuse. Le vide est le seul résultat interdit.
+    """
+    lp = _plan_chaine()
+    f = lp.request.facing
+    vivants = [e for e in lp.entities if not getattr(e, "skip", False)]
+    bras = [e for e in vivants if getattr(e, "role", "") == "inserter"]
+    # Tout ce dans quoi un bras peut puiser, indexé par tuile (u,v) arrondie.
+    # PAR EMPRISE, pas par centre : une machine 3×3 occupe neuf tuiles, et la prise d'un
+    # bras de sortie tombe dans la machine SANS tomber sur son centre. Indexer les seuls
+    # centres faisait passer neuf bras corrects pour aveugles — le test accusait le plan
+    # d'un défaut qui était le sien.
+    geo = sample_geometry()
+    sources = {}
+    for e in vivants:
+        if getattr(e, "role", "") not in ("belt", "bus-belt", "machine", "drill"):
+            continue
+        ge = geo.geometry(e.name)
+        w = (ge.w if ge else 1) / 2.0
+        h = (ge.h if ge else 1) / 2.0
+        for dx in (-w + 0.5, 0.0, w - 0.5):
+            for dy in (-h + 0.5, 0.0, h - 0.5):
+                eu, ev = _to_uv(f, e.x + dx, e.y + dy)
+                sources[(round(eu), round(ev))] = e.name
+
+    aveugles = []
+    for b in bras:
+        g = geo.geometry(b.name)
+        reach = (g.pickup_distance if g and g.pickup_distance else 1.0)
+        # LA PRISE SE DÉDUIT DE LA DIRECTION POSÉE, pas de celle qu'on aurait voulue.
+        # Mesuré en jeu sur les quatre orientations : un bras PREND du côté vers lequel il
+        # pointe et dépose à l'opposé — l'inverse de ce que suppose le placement. Calculer
+        # la prise « en arrière du bras » masquait donc exactement le défaut recherché.
+        ux, uy = FACING_UNIT[b.direction]
+        pu, pv = _to_uv(f, b.x + ux * reach, b.y + uy * reach)
+        if (round(pu), round(pv)) not in sources:
+            aveugles.append((b.name, round(b.x, 1), round(b.y, 1), b.direction))
+    assert rec("chaque bras a une source sous sa prise", not aveugles,
+               f"{len(bras)} bras, {len(aveugles)} sans source : {aveugles[:4]}")
+
+
 TESTS = [test_gisement_large_toutes_les_foreuses_atteignent_la_belt,
-         test_gisement_etroit_aucune_foreuse_n_est_abandonnee_loin_de_la_belt]
+         test_gisement_etroit_aucune_foreuse_n_est_abandonnee_loin_de_la_belt,
+         test_chaque_bras_a_quelque_chose_sous_sa_prise]
 
 
 def main() -> int:
