@@ -1334,8 +1334,15 @@ class Coordinator:
         # entité posée. On lui présente donc l'outillage RÉELLEMENT disponible ; le jour
         # où la technologie tombe, la même chaîne se bâtira avec de meilleures machines
         # sans qu'on touche à rien.
+        # EN POCHE OU FABRICABLE. Ne retenir que ce qui se fabrique écartait les machines
+        # que l'agent POSSÈDE sans savoir les construire — sa dotation de foreuses
+        # électriques, par exemple. Il se rabattait alors sur des foreuses à charbon,
+        # d'une autre emprise, dont la collecte ne tombait plus en face : onze
+        # `waiting_for_space_in_destination` et une chaîne qui ne produisait plus rien là
+        # où elle débitait. Ce qui compte est ce qu'il peut POSER.
+        inv0 = perception.inventory(self.api)
         machines = [m for m in knowledge.entites_par_type(self.api)
-                    if perception.recipe_of(self.api, m) is not None]
+                    if inv0.get(m, 0) > 0 or perception.recipe_of(self.api, m) is not None]
         if not machines:
             return False, "aucune machine connue du jeu : catalogue illisible"
         kb, gisements = knowledge.populate_pour(self.api, item, machines)
@@ -1528,7 +1535,26 @@ class Coordinator:
                 branchees += 1
             elif not echecs_r:
                 echecs_r = f" — raccordement refusé : {str(detail_r)[:60]}"
+        # ÉVACUER, SINON LA CHAÎNE S'ÉTOUFFE. Mesuré : la chaîne posée produit seule
+        # (+3, +4, +3, +2 sur quatre fenêtres) puis s'arrête net — `full_output` sur les
+        # assembleuses de tête, et derrière elles toute la mine en attente. Produire sans
+        # évacuer ne tient que le temps de remplir la machine. `batir_evacuation` est le
+        # pendant exact d'`approvisionner`, à l'autre bout : un coffre et un bras.
+        finales = {i for i, e in enumerate(lp.entities)
+                   if getattr(e, "role", "") == "machine"
+                   and getattr(e, "node_item", "") == item}
+        vidées = 0
+        for p in (getattr(rap, "placed", []) or []):
+            if getattr(p, "idx", -1) not in finales:
+                continue
+            ok_e, _ = self.batir_evacuation(
+                Symptome(name=p.name, x=p.x, y=p.y, cause="sortie_pleine", gravite=1,
+                         detail="machine de tête d'une chaîne posée à l'instant"))
+            if ok_e:
+                vidées += 1
+                break          # un ramassage suffit à amorcer ; l'agent complètera
         return True, (f"chaîne « {item} » bâtie : {n} entité(s), "
+                      f"{vidées} sortie(s) évacuée(s), "
                       f"{len(getattr(splan, 'nodes', []) or [])} étage(s), "
                       f"gisements {', '.join(gisements) or 'aucun'}, "
                       f"objectif {debit}/s, {branchees} machine(s) raccordée(s)"
