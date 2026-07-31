@@ -1440,7 +1440,20 @@ def _place_transition(from_idx: int, to_idx: int, facing: int,
     #
     # On oriente donc la sortie amont vers l'aval. C'est ce virage qui fait la jonction ;
     # il ne coûte aucune entité et vaut pour tous les écarts, l'adjacence comprise.
-    if abs(du) > 0.1 or abs(dv) > 0.1:
+    # MAIS SEULEMENT SI ELLE NE SERT PLUS PERSONNE. Réorienter aveuglément détourne une
+    # belt qui a déjà un successeur : mesuré en jeu, une belt au MILIEU de la colonne de
+    # collecte s'est retrouvée tournée vers l'est, poussant le minerai sur une tuile sans
+    # belt. Cinq items s'y sont empilés, toute la colonne a bloqué derrière, et la vraie
+    # fin de colonne — correctement tournée, elle — n'a plus rien reçu. On ne tourne donc
+    # que la belt dont la direction actuelle ne mène nulle part.
+    def _mene_a_une_belt(e) -> bool:
+        ux, uy = FACING_UNIT[e.direction]
+        return any(getattr(o, "role", "") in ("belt", "bus-belt")
+                   and not getattr(o, "skip", False)
+                   and abs(o.x - (e.x + ux)) < 0.4 and abs(o.y - (e.y + uy)) < 0.4
+                   for o in entities)
+
+    if (abs(du) > 0.1 or abs(dv) > 0.1) and not _mene_a_une_belt(e_from):
         if abs(du) >= abs(dv):
             e_from.direction = FACING_DIR_U[facing] if du > 0 else (
                 (FACING_DIR_U[facing] + 4) % 8)
