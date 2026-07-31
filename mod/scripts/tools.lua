@@ -475,7 +475,53 @@ function M.can_place_check(name, x, y, direction)
     }
   end)
   if not ok then return json.encode({name = name, x = r1(x), y = r1(y), can_place = false, error = tostring(can)}) end
-  return json.encode({name = name, x = r1(x), y = r1(y), can_place = can == true})
+  if can == true then
+    return json.encode({name = name, x = r1(x), y = r1(y), can_place = true})
+  end
+
+  -- POURQUOI, ET PAS SEULEMENT NON. `can_place_entity` rend un booleen muet : l'appelant
+  -- sait qu'il ne peut pas poser, jamais ce qui l'en empeche. Une seule entite refusee
+  -- fait abandonner un plan de plusieurs centaines, et il a fallu quatre hypotheses
+  -- fausses -- l'avatar, la direction, un obstacle, une collision interne -- avant de
+  -- decouvrir que l'agent avait MINE le minerai sous sa propre foreuse. Le jeu connait la
+  -- cause ; il suffit de la lui demander.
+  local proto = prototypes.entity[name]
+  local w = (proto and proto.tile_width) or 1
+  local h = (proto and proto.tile_height) or 1
+  local x1, y1 = x - w / 2, y - h / 2
+  local x2, y2 = x + w / 2, y + h / 2
+  local motifs = {}
+
+  local occ = {}
+  for _, e in pairs(surface.find_entities_filtered{area = {{x1, y1}, {x2, y2}}}) do
+    if e.type ~= "resource" and e.type ~= "decorative" then
+      occ[#occ + 1] = e.name .. (e.type == "character" and " (l'avatar)" or "")
+    end
+  end
+  if #occ > 0 then motifs[#motifs + 1] = "occupe par " .. table.concat(occ, ", ") end
+
+  local mauvaises = {}
+  for tx = math.floor(x1), math.ceil(x2) - 1 do
+    for ty = math.floor(y1), math.ceil(y2) - 1 do
+      local t = surface.get_tile(tx, ty)
+      local n = t and t.name or ""
+      if n == "out-of-map" or string.find(n, "water") then
+        mauvaises[#mauvaises + 1] = n
+      end
+    end
+  end
+  if #mauvaises > 0 then motifs[#motifs + 1] = "tuile " .. table.concat(mauvaises, ", ") end
+
+  -- Une foreuse exige du minerai SOUS son emprise : c'est le refus le plus frequent, et
+  -- le plus trompeur, puisque la position etait valide au moment ou le plan l'a choisie.
+  if proto and proto.type == "mining-drill" then
+    local n = #surface.find_entities_filtered{area = {{x1, y1}, {x2, y2}}, type = "resource"}
+    if n == 0 then motifs[#motifs + 1] = "aucun minerai sous la foreuse" end
+  end
+
+  return json.encode({name = name, x = r1(x), y = r1(y), can_place = false,
+                      motif = (#motifs > 0) and table.concat(motifs, " ; ")
+                              or "refus sans cause visible (portee ? force ?)"})
 end
 
 -- scan_patch(resource, radius) : bbox + count d'un gisement reel autour de l'avatar.

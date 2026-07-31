@@ -241,7 +241,11 @@ def _can_place(api, name: str, x: float, y: float, d: str) -> tuple[bool, str]:
     if isinstance(chk, dict) and chk.get("can_place") is True:
         return True, ""
     if isinstance(chk, dict):
-        return False, str(chk.get("error", "can_place=False"))
+        # LE MOTIF D'ABORD. Le mod dit désormais POURQUOI il refuse — « aucun minerai sous
+        # la foreuse », « occupé par … (l'avatar) », « tuile water ». Sans lui, `blocked`
+        # ne portait qu'un « can_place=False » muet, et il fallait relancer une sonde par
+        # hypothèse pour apprendre ce que le jeu savait déjà.
+        return False, str(chk.get("motif") or chk.get("error") or "can_place=False")
     return False, "can_place_check illisible"
 
 
