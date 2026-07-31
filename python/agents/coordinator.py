@@ -140,6 +140,13 @@ RESERVE_AMORCE = 40
 BESOINS: dict[str, tuple[tuple[str, int], ...]] = {
     "defendre": (("gun-turret", 1),),
     "ravitailler": (("coal", 1),),
+    # UNE CHAÎNE D'APPROVISIONNEMENT S'AMORCE. Sans besoin déclaré, l'agent basculait sur
+    # `approvisionner` dès que sa réserve baissait — c'est le bon réflexe — mais rien ne
+    # lui proposait jamais d'aller CHERCHER du charbon quand il n'en avait plus du tout.
+    # Il savait pourtant le faire depuis E23 : miner, marcher par bonds sur deux cents
+    # tuiles s'il le faut. Déclarer l'amorce fait que le manque appelle un minage, au lieu
+    # de laisser l'usine s'éteindre faute d'avoir su se ravitailler elle-même.
+    "approvisionner": ((COMBUSTIBLE, RESERVE_AMORCE),),
     "relier": (("small-electric-pole", 1),),
     # Le cas nominal : un bras électrique et un coffre. `batir_evacuation` sait se
     # rabattre sur un burner-inserter, mais déclarer le cas nominal garde la

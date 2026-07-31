@@ -180,6 +180,26 @@ def diagnose(rows: list[dict], power: Optional[dict] = None) -> Diagnostic:
             if s.cause == "entree_vide" and s.racine:
                 s.racine = False
                 s.detail += " — probable conséquence d'une panne en amont"
+
+    # UNE CENTRALE À SEC EXPLIQUE TOUT LE RÉSEAU. Même raisonnement d'un cran plus haut :
+    # si une chaudière ou un générateur manque de combustible, les machines « sans
+    # courant » n'ont pas chacune un problème — elles ont TOUTES le même, et il est en
+    # amont. Sans ce déclassement, le diagnostic rendait quatre `renforcer_energie` de
+    # gravité 3 qui masquaient le ravitaillement de la chaudière : l'agent renforçait
+    # sans fin une centrale qui n'attendait qu'un seau de charbon.
+    centrale_a_sec = [s for s in diag.symptomes
+                      if s.cause in ("sans_combustible", "sans_eau")
+                      and s.name in ("boiler", "steam-engine", "nuclear-reactor")]
+    if centrale_a_sec:
+        for s in diag.symptomes:
+            if s.cause in ("sans_courant", "courant_insuffisant") and s.racine:
+                s.racine = False
+                s.gravite = min(s.gravite, 1)
+                s.detail += (f" — conséquence : {centrale_a_sec[0].name} en amont "
+                             f"({centrale_a_sec[0].cause})")
+        diag.notes.append(
+            f"{len(centrale_a_sec)} organe(s) de production d'énergie en panne : les "
+            f"machines sans courant en sont la conséquence, pas la cause")
         diag.notes.append(
             f"{len(propres)} panne(s) propre(s) détectée(s) : les machines à l'entrée "
             f"vide sont traitées comme des conséquences, pas comme des causes")
