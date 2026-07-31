@@ -735,11 +735,18 @@ def decouvrir_chaine(api, item: str, garde: int = 400) -> tuple[list[str], list[
 
 
 def entites_par_type(api, types: tuple[str, ...] = ("assembling-machine", "furnace",
-                                                    "mining-drill")) -> list[str]:
+                                                    "mining-drill",
+                                                    "offshore-pump")) -> list[str]:
     """Les entités que le JEU connaît pour ces types, plutôt qu'une liste écrite à la main.
 
     Sert aux machines (défaut) comme à la logistique (`transport-belt`, `inserter`,
     `electric-pole`…) : ce sont des TYPES du moteur, jamais des noms de produits.
+
+    L'OFFSHORE-PUMP EST DU TYPE `offshore-pump`, et de nul autre. L'omettre revenait à
+    déclarer l'eau inaccessible : le solveur la cherche via `DEFAULT_WATER_MACHINE` et ne
+    la trouvait pas dans un catalogue dont elle était absente. Tout ce qui réclame de
+    l'eau — soufre, flacon chimique — rendait `no_mining_machine`, alors que l'agent
+    construit des pompes depuis qu'il bâtit ses centrales.
 
     Le solveur choisit une machine par catégorie de recette (`kb.pick_machine`), mais il
     faut d'abord lui en présenter. Coder ce catalogue en constante le figerait au jour où
