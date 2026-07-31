@@ -288,7 +288,18 @@ def _enjamber(api, tuiles: list, i: int, direction: str, belt: str,
         if not can_place(api, ug, sortie[0], sortie[1], direction):
             continue
         if not can_place(api, ug, entree[0], entree[1], direction):
-            # L'entrée porte déjà une belt ordinaire : on la remplace par le souterrain.
+            # L'entrée porte déjà une belt ordinaire : on la remplace par le souterrain —
+            # SAUF si cette belt sert une chaîne. La remplacer y ouvrirait un trou, et un
+            # trou coupe le flux aussi sûrement qu'un détournement : mesuré, l'agent posait
+            # une colonne de collecte de dix-huit belts, puis `alimenter` en retirait une
+            # au milieu pour passer sa propre ligne. Le minerai s'arrêtait là, toute la
+            # mine bloquait derrière, et rien ne le signalait. On cherche alors un autre
+            # point d'enjambement plutôt que de sacrifier l'existant.
+            existante = next((e for e in _entites_a(api, entree[0], entree[1], 0.4)
+                              if e.get("type") == "transport-belt"), None)
+            if existante is not None and _belt_sert_une_chaine(
+                    api, entree[0], entree[1], existante):
+                continue
             api.run_action(api.remove_entity_at, entree[0], entree[1], belt,
                            timeout=timeout)
             if not can_place(api, ug, entree[0], entree[1], direction):
