@@ -1429,6 +1429,25 @@ def _place_transition(from_idx: int, to_idx: int, facing: int,
     def _occupied(x: float, y: float) -> bool:
         return any(abs(e.x - x) < 0.4 and abs(e.y - y) < 0.4 for e in entities)
 
+    # LA DERNIÈRE BELT AMONT DOIT REGARDER LA BELT AVAL. Deux belts adjacentes ne se
+    # transmettent RIEN : chacune avance dans sa propre direction. La collecte de la mine
+    # poussait donc son minerai le long de v pendant que l'entrée de l'étage suivant
+    # l'attendait une tuile plus loin en u — et comme l'écart valait exactement 1, aucun
+    # segment intermédiaire n'était posé et rien ne le signalait. Mesuré en jeu : la belt
+    # de collecte pleine, les foreuses en `waiting_for_space_in_destination`, la belt
+    # d'entrée vide et les bras en `waiting_for_source_items`, de part et d'autre d'une
+    # frontière d'une seule tuile.
+    #
+    # On oriente donc la sortie amont vers l'aval. C'est ce virage qui fait la jonction ;
+    # il ne coûte aucune entité et vaut pour tous les écarts, l'adjacence comprise.
+    if abs(du) > 0.1 or abs(dv) > 0.1:
+        if abs(du) >= abs(dv):
+            e_from.direction = FACING_DIR_U[facing] if du > 0 else (
+                (FACING_DIR_U[facing] + 4) % 8)
+        else:
+            e_from.direction = FACING_DIR_V[facing] if dv > 0 else (
+                (FACING_DIR_V[facing] + 4) % 8)
+
     # Segment u : belts intermédiaires le long de u (si écart > adjacence), au v aligné.
     if abs(du) > 1.0:
         step = 1.0 if du > 0 else -1.0
@@ -2269,10 +2288,15 @@ def _plan_bus_core(request: LayoutRequest, geometry: GeometryBase, splan, constr
         node = info["node"]
         if node.role != "mine":
             continue
+        # UNE TRANSITION SAUTÉE EN SILENCE COÛTE TOUTE LA CHAÎNE. Sans ces notes, la
+        # jonction mine -> premier étage manquait sans que rien ne le dise : le plan
+        # sortait `ok`, la mine et les fours étaient posés, et le minerai s'arrêtait au
+        # bout de la belt de collecte — cinq tuiles avant la prise du premier bras.
         out_item = info["out_item"]
         if out_item in lane_idx_by_item:
             continue  # déjà géré par le feed (ore sur le bus)
         if info["belt_out_last"] is None:
+            notes.append(f"transition_sautee:{out_item} (mine sans belt de sortie)")
             continue
         # Cherche l'étage consommateur de out_item.
         for other_item, other_info in stage_info.items():
@@ -2287,6 +2311,8 @@ def _plan_bus_core(request: LayoutRequest, geometry: GeometryBase, splan, constr
                 _place_transition(info["belt_out_last"], target, facing, entities, totals,
                                   constraints.belt_tier, out_item, notes)
                 break
+        else:
+            notes.append(f"transition_sautee:{out_item} (aucun étage ne le consomme)")
 
     # S4b : détection per-entité (précise) si terrain_check. Passe AVANT le check post-hoc
     # global (imprécis). _occ_terrain couvre obstacles + water + out-of-map (superset du

@@ -23,6 +23,7 @@ Lancement :
 
 from __future__ import annotations
 
+import math
 import sys
 
 from services.layout_planner import (LayoutConstraints, LayoutRequest, ResourcePatch,
@@ -142,7 +143,7 @@ def test_chaque_bras_a_quelque_chose_sous_sa_prise() -> None:
         for dx in (-w + 0.5, 0.0, w - 0.5):
             for dy in (-h + 0.5, 0.0, h - 0.5):
                 eu, ev = _to_uv(f, e.x + dx, e.y + dy)
-                sources[(round(eu), round(ev))] = e.name
+                sources[(math.floor(eu), math.floor(ev))] = e.name
 
     aveugles = []
     for b in bras:
@@ -154,7 +155,7 @@ def test_chaque_bras_a_quelque_chose_sous_sa_prise() -> None:
         # la prise « en arrière du bras » masquait donc exactement le défaut recherché.
         ux, uy = FACING_UNIT[b.direction]
         pu, pv = _to_uv(f, b.x + ux * reach, b.y + uy * reach)
-        if (round(pu), round(pv)) not in sources:
+        if (math.floor(pu), math.floor(pv)) not in sources:
             aveugles.append((b.name, round(b.x, 1), round(b.y, 1), b.direction))
     assert rec("chaque bras a une source sous sa prise", not aveugles,
                f"{len(bras)} bras, {len(aveugles)} sans source : {aveugles[:4]}")
@@ -188,7 +189,7 @@ def test_chaque_bras_puise_dans_la_bonne_source() -> None:
         for dx in (-w + 0.5, 0.0, w - 0.5):
             for dy in (-h + 0.5, 0.0, h - 0.5):
                 eu, ev = _to_uv(f, e.x + dx, e.y + dy)
-                sources[(round(eu), round(ev))] = e
+                sources[(math.floor(eu), math.floor(ev))] = e
 
     incoherents = []
     for b in [e for e in vivants if getattr(e, "role", "") == "inserter"]:
@@ -196,7 +197,7 @@ def test_chaque_bras_puise_dans_la_bonne_source() -> None:
         reach = (g.pickup_distance if g and g.pickup_distance else 1.0)
         ux, uy = FACING_UNIT[b.direction]
         pu, pv = _to_uv(f, b.x + ux * reach, b.y + uy * reach)
-        src = sources.get((round(pu), round(pv)))
+        src = sources.get((math.floor(pu), math.floor(pv)))
         porte = getattr(b, "node_item", "")
         if src is None or getattr(src, "node_item", "") != porte:
             incoherents.append((round(b.x, 1), round(b.y, 1), porte,
@@ -229,13 +230,13 @@ def test_le_minerai_atteint_les_bras_du_premier_etage() -> None:
     belts = {}
     for e in vivants:
         if getattr(e, "role", "") in ("belt", "bus-belt"):
-            belts[(round(e.x), round(e.y))] = e
+            belts[(math.floor(e.x), math.floor(e.y))] = e
     prises = set()
     for b in [e for e in vivants if getattr(e, "role", "") == "inserter"]:
         g = geo.geometry(b.name)
         reach = (g.pickup_distance if g and g.pickup_distance else 1.0)
         ux, uy = FACING_UNIT[b.direction]
-        prises.add((round(b.x + ux * reach), round(b.y + uy * reach)))
+        prises.add((math.floor(b.x + ux * reach), math.floor(b.y + uy * reach)))
 
     # Départs : les tuiles où les foreuses déposent.
     departs = []
@@ -243,7 +244,7 @@ def test_le_minerai_atteint_les_bras_du_premier_etage() -> None:
         gd = geo.geometry(d.name)
         portee = (gd.w / 2.0 + 0.7) if gd else 1.7
         dx, dy = FACING_UNIT[d.direction]
-        departs.append((round(d.x + dx * portee), round(d.y + dy * portee)))
+        departs.append((math.floor(d.x + dx * portee), math.floor(d.y + dy * portee)))
 
     def atteint_une_prise(depart) -> bool:
         """Suit les belts dans leur sens jusqu'à une prise de bras (ou un cycle)."""
@@ -256,7 +257,7 @@ def test_le_minerai_atteint_les_bras_du_premier_etage() -> None:
                 return False
             vus.add(ici)
             bx, by = FACING_UNIT[b.direction]
-            ici = (round(b.x + bx), round(b.y + by))
+            ici = (math.floor(b.x + bx), math.floor(b.y + by))
         return False
 
     perdus = [d for d in departs if not atteint_une_prise(d)]
