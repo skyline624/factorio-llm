@@ -1351,8 +1351,14 @@ class Coordinator:
         # dort encore — il renonce d'un bloc (`no_mining_machine`) au lieu de se rabattre
         # sur la foreuse à charbon qui est là. `machine_tiers` existe exactement pour cet
         # arbitrage : on désigne la plus rapide de celles que l'agent sait construire.
+        # SOLIDE, et pas seulement « de type foreuse ». Un pumpjack est lui aussi un
+        # `mining-drill` et il est plus rapide que toutes les foreuses à minerai : retenir
+        # la plus rapide le désignait pour extraire du fer, et la chaîne réclamait un
+        # pumpjack qu'aucune technologie à portée n'ouvre. `mining_kind` distingue ce qui
+        # se pompe de ce qui se creuse.
         foreuses = [(s.mining_speed, n) for n, s in kb.machines.items()
-                    if getattr(s, "type", "") == "mining-drill" and s.mining_speed > 0]
+                    if getattr(s, "type", "") == "mining-drill" and s.mining_speed > 0
+                    and getattr(s, "mining_kind", "solid") == "solid"]
         tiers = {"mine": max(foreuses)[1]} if foreuses else {}
         splan = solve(ProductionRequest(item=item, rate_per_sec=debit,
                                         machine_tiers=tiers), kb)
