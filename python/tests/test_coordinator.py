@@ -1150,6 +1150,86 @@ def test_industrialiser_ce_quon_refait_a_la_main() -> None:
     assert all(ok for _, ok, _ in RESULTS[-5:]), "industrialisation"
 
 
+def test_une_action_sans_effet_compte_comme_un_echec() -> None:
+    """RÉUSSIR N'EST PAS SERVIR, et seul le second doit peser sur la suite.
+
+    La boucle savait déjà constater qu'une attente n'était pas tenue : elle consignait
+    un `Ecart`, tentait une remise en état, ouvrait une enquête. Mais `_echecs` ne
+    bougeait pas — donc au tour suivant l'action repartait au même rang, avec le même
+    attrait, et rien dans l'état ne disait qu'on venait de la jouer pour rien.
+
+    Mesuré le 01/08/2026, A/B de trois manches par branche : le modèle arbitre a passé
+    **50 tours sur 75 (66 %)** sur `evacuer`, qui pose son coffre, rend `ok=True` et
+    laisse l'usine identique. Le déterministe n'y échappait que par un contournement
+    nommé (`if action == "evacuer" and vidages >= SEUIL_AUTOMATISATION`) — une exception
+    par action, là où il fallait une loi.
+    """
+    from agents.coordinator import Coordinator, Decision, EtatUsine
+    from services.factory_doctor import Symptome
+    cible = Symptome(name="boiler", x=0.0, y=0.0, cause="sans_combustible",
+                     gravite=2, detail="vide")
+    # Le réservoir est TOUJOURS à sec après l'action : l'attente ne peut pas être tenue.
+    api = _ApiMesure([{"name": "boiler", "x": 0.0, "y": 0.0, "status": "no_fuel"}])
+    c = _coord_mesure(api)
+    c.journal, c.ecarts, c.arbitre = [], [], None
+    c.constats, c.enqueteur = [], None
+    c._echecs = {}
+    c.remettre_en_etat = lambda e: False     # la réparation ne rattrape rien
+    c.observer = lambda: EtatUsine()
+    c.agir = lambda d: (True, "posé sans broncher")   # l'action RÉUSSIT
+    c.tick = Coordinator.tick.__get__(c)
+    c._attente = Coordinator._attente.__get__(c)
+    import agents.coordinator as mod
+    vrai_decide = mod.decide
+    mod.decide = lambda etat, arbitre=None: Decision(action="ravitailler", raison="",
+                                                     cible=cible)
+    try:
+        c.tick()
+        c.tick()
+    finally:
+        mod.decide = vrai_decide
+    cle = ("ravitailler", "boiler", 0, 0)
+    ok = c._echecs.get(cle) == 2
+    rec("test_une_action_sans_effet_compte_comme_un_echec", ok,
+        f"deux tours réussis mais sans effet -> _echecs={c._echecs or 'vide'} "
+        f"(attendu {{{cle}: 2}})")
+    assert ok
+
+
+def test_evacuer_est_juge_sur_son_effet() -> None:
+    """Vider une machine à la main doit se mesurer, comme tout le reste.
+
+    Sept actions ont une attente — `ravitailler`, `approvisionner`, `etendre_production`,
+    `redeployer_foreur`, `batir_evacuation`, `relier`, `defendre`. `evacuer` n'en avait
+    aucune : bâtir le coffre était jugé sur son effet, vider à la main jamais. C'est
+    précisément l'action sur laquelle l'arbitre s'est enfermé.
+
+    Le critère est le pendant exact de `ravitailler` : le réservoir n'est plus à sec /
+    la sortie n'est plus pleine.
+    """
+    from agents.coordinator import Decision
+    from services.factory_doctor import Symptome
+    cible = Symptome(name="stone-furnace", x=0.0, y=0.0, cause="sortie_bloquee",
+                     gravite=2, detail="pleine")
+    d = Decision(action="evacuer", raison="", cible=cible)
+
+    vide = _coord_mesure(_ApiMesure(
+        [{"name": "stone-furnace", "x": 0.0, "y": 0.0, "status": "working"}]))
+    pleine = _coord_mesure(_ApiMesure(
+        [{"name": "stone-furnace", "x": 0.0, "y": 0.0, "status": "full_output"}]))
+
+    a = vide._attente(d)
+    b = pleine._attente(d)
+    couverte = a is not None and b is not None
+    tenue = couverte and a.evaluer(vide.api)[0]
+    decue = couverte and not b.evaluer(pleine.api)[0]
+    ok = couverte and tenue and decue
+    rec("test_evacuer_est_juge_sur_son_effet", ok,
+        f"attente définie : {couverte} — sortie vidée -> {tenue}, "
+        f"toujours pleine -> déçue {decue}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -1184,6 +1264,8 @@ def main() -> int:
         test_arbitrage_note_lappel_et_la_divergence,
         test_arbitre_defaillant_reste_trace_comme_appele,
         test_industrialiser_ce_quon_refait_a_la_main,
+        test_une_action_sans_effet_compte_comme_un_echec,
+        test_evacuer_est_juge_sur_son_effet,
     ]
     for t in tests:
         t()

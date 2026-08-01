@@ -997,6 +997,19 @@ class Coordinator:
                 lambda s: s not in ("no_fuel", "absente"),
                 delai_ticks=30)
 
+        if d.action == "evacuer" and c is not None:
+            # Le pendant exact de `ravitailler` : là on remplit l'entrée, ici on vide la
+            # sortie, et dans les deux cas le seul verdict qui vaille est le statut RELU
+            # après le geste. `batir_evacuation` — poser le coffre — avait son attente ;
+            # `evacuer` — vider à la main — n'en avait aucune, alors que c'est celle qu'on
+            # rejoue. Une sortie encore pleine après vidange signale une machine qui
+            # reproduit plus vite qu'on ne la vide : le geste a réussi et n'a pas servi.
+            return Attente(
+                f"la sortie de {c.name} n'est plus pleine",
+                lambda api: self._statut_de(api, c.name, c.x, c.y),
+                lambda s: s not in ("full_output", "absente"),
+                delai_ticks=30)
+
         if d.action == "approvisionner" and c is not None:
             from services.flux import suivre_flux
             depart = self._chaines.get((c.name, round(c.x), round(c.y)))
@@ -3623,7 +3636,45 @@ class Coordinator:
         # retenter pour rien.
         cle = ((d.action, d.cible.name, round(d.cible.x), round(d.cible.y))
                if d.cible is not None else (d.action, "", 0, 0))
+
+        # RÉUSSIR N'EST PAS SERVIR, et c'est le second qui doit peser sur la suite.
+        # `agir` rend vrai dès que le geste est allé à son terme — le coffre est posé, le
+        # bras tourne — ce qui ne dit rien de l'usine. L'écart était déjà constaté, mais
+        # il ne comptait nulle part : au tour suivant l'action repartait au même rang,
+        # avec le même attrait, et rien ne disait qu'on venait de la jouer pour rien.
+        #
+        # Mesuré le 01/08/2026 (A/B, trois manches par branche) : l'arbitre LLM a passé
+        # 50 tours sur 75 — 66 % — sur `evacuer`, qui pose son coffre, rend `ok=True` et
+        # laisse l'usine identique. Le déterministe n'y échappait que par un contournement
+        # nommé (`evacuer` + SEUIL_AUTOMATISATION) : une exception par action, là où il
+        # fallait une loi.
+        #
+        # Le verdict se prend AVANT de toucher au compteur : remettre à zéro sur `agi`
+        # puis réincrémenter sur l'attente déçue le plafonnerait à 1 pour toujours, et
+        # l'acharnement ne serait jamais vu.
+        servi = agi
         if agi:
+            attente = self._attente(d)
+            if attente is not None:
+                tenue, observe = attente.evaluer(self.api)
+                if not tenue:
+                    contexte = {}
+                    if d.cible is not None:
+                        depart = self._chaines.get(
+                            (d.cible.name, round(d.cible.x), round(d.cible.y)))
+                        if depart is not None:
+                            contexte["depart_du_flux"] = list(depart)
+                    ecart = Ecart(d.action, attente.description, observe, d.cible,
+                                  contexte)
+                    self.ecarts.append(ecart)
+                    self.journal.append(str(ecart))
+                    # La remise en état peut rattraper le tour : flux rétabli, l'action a
+                    # bel et bien servi et rien ne lui est imputé.
+                    servi = self.remettre_en_etat(ecart)
+                    if not servi:
+                        self.enqueter(ecart)
+
+        if servi:
             self._echecs.pop(cle, None)
         else:
             self._echecs[cle] = self._echecs.get(cle, 0) + 1
@@ -3634,24 +3685,6 @@ class Coordinator:
                                     f"{SEUIL_ABANDON} échecs : {detail}")
         if not agi:
             return d, agi, etat
-
-        # L'action a été menée à son terme. Reste à savoir si elle a SERVI — ce qui
-        # n'est pas la même question, et c'est celle qu'on ne posait pas.
-        attente = self._attente(d)
-        if attente is not None:
-            tenue, observe = attente.evaluer(self.api)
-            if not tenue:
-                contexte = {}
-                if d.cible is not None:
-                    depart = self._chaines.get(
-                        (d.cible.name, round(d.cible.x), round(d.cible.y)))
-                    if depart is not None:
-                        contexte["depart_du_flux"] = list(depart)
-                ecart = Ecart(d.action, attente.description, observe, d.cible, contexte)
-                self.ecarts.append(ecart)
-                self.journal.append(str(ecart))
-                if not self.remettre_en_etat(ecart):
-                    self.enqueter(ecart)
         return d, agi, self.observer()
 
     # ----- RÉPARER CE QU'ON A DIAGNOSTIQUÉ -----
