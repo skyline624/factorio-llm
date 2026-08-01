@@ -239,6 +239,12 @@ class EtatUsine:
     # Échecs consécutifs par (action, cible). Sans cette mémoire, une action impossible
     # est retentée indéfiniment : la boucle tourne sans avancer, ce qui ne se voit pas.
     echecs: dict = field(default_factory=dict)
+    # Le MÊME acharnement, compté par action SEULE. `echecs` est indexé par cible : une
+    # action épuise ses trois échecs sur une machine puis repart intacte sur la suivante,
+    # et avec vingt-neuf machines il reste toujours une cible neuve. Mesuré (A/B du
+    # 01/08/2026) : `evacuer` a tenu 51 tours sur 75 sans jamais être mise en cause,
+    # parce qu'aucun compteur ne regardait l'action elle-même.
+    acharnement: dict = field(default_factory=dict)
 
     @property
     def a_de_l_energie(self) -> bool:
@@ -673,6 +679,21 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
     # Tri STABLE par priorité décroissante : l'ordre relatif des réparations (déjà
     # trié par le diagnostic) est préservé, et la défense se glisse au bon rang.
     options.sort(key=lambda d: -d.priorite)
+
+    # CE QUI A DÉJÀ ÉTÉ JOUÉ EN VAIN SE LIT DANS L'OPTION, pas seulement dans son rang.
+    # Le déterministe survit à une ornière parce qu'il prend toujours la première option
+    # et qu'une action déclassée descend. L'arbitre LLM choisit dans la liste SANS égard
+    # au rang : il ne voit que « [i] action (priorité N) — raison », où rien ne disait
+    # qu'il venait de jouer celle-ci dix-sept fois pour rien.
+    #
+    # On inscrit le fait, et rien d'autre : ni priorité touchée, ni option retirée. La
+    # branche déterministe garde le comportement déjà mesuré, et le modèle décide de ce
+    # qu'il fait de l'information. Un fait montré, pas une consigne donnée.
+    for o in options:
+        vaines = etat.acharnement.get(o.action, 0)
+        if vaines >= SEUIL_ABANDON:
+            o.raison = (f"{o.raison} — déjà jouée {vaines} fois sans effet sur l'usine, "
+                        f"toutes cibles confondues")
     return options
 
 
@@ -793,6 +814,8 @@ class Coordinator:
         self._chaines: dict = {}
         # Échecs consécutifs par (action, cible) : la mémoire qui empêche l'acharnement.
         self._echecs: dict = {}
+        # Le même compte par ACTION seule — celui que les cibles successives masquaient.
+        self._acharnement: dict = {}
         # CE QU'IL REFAIT A LA MAIN. Un item qu'on fabrique encore et encore est un item
         # qu'aucune chaine ne produit : c'est le signal — mesurable, sans rien deviner —
         # qu'il faut industrialiser. Compter les fabrications REUSSIES le dit sans qu'on
@@ -869,6 +892,7 @@ class Coordinator:
         etat.ravitaillements = dict(self._ravitaillements)
         etat.evacuations = dict(self._evacuations)
         etat.echecs = dict(self._echecs)
+        etat.acharnement = dict(self._acharnement)
         etat.fabrications = dict(self._fabrications)
         etat.debit, etat.objectif = self._mesurer_debit(), self.objectif_par_s
         etat.objectif_item = self.objectif_item
@@ -3676,7 +3700,13 @@ class Coordinator:
 
         if servi:
             self._echecs.pop(cle, None)
+            self._acharnement.pop(d.action, None)
         else:
+            # DEUX compteurs, et c'est le second qui manquait. Celui par cible abandonne
+            # une action sur CETTE machine ; l'action, elle, repart intacte sur la
+            # suivante. Celui par action seule voit ce que les cibles successives
+            # masquaient — il ne déclasse rien, il se contente de savoir.
+            self._acharnement[d.action] = self._acharnement.get(d.action, 0) + 1
             self._echecs[cle] = self._echecs.get(cle, 0) + 1
             if self._echecs[cle] == SEUIL_ABANDON:
                 ou = (f" sur {d.cible.name}@({d.cible.x},{d.cible.y})"

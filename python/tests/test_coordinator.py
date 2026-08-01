@@ -821,6 +821,7 @@ class _CoordFactice:
         self.api = None
         self.ecarts: list = []
         self._echecs: dict = {}   # la mémoire d'acharnement, éprouvée à part
+        self._acharnement: dict = {}     # son pendant par action seule, idem
         self.run = Coordinator.run.__get__(self)
         self.tick = Coordinator.tick.__get__(self)
 
@@ -1011,7 +1012,7 @@ def test_ecart_journalise_quand_lattente_est_decue() -> None:
     c = _coord_mesure(api)
     c.journal, c.ecarts, c.arbitre = [], [], None
     c.constats, c.enqueteur = [], None      # l'enquête est éprouvée à part
-    c._echecs = {}
+    c._echecs, c._acharnement = {}, {}
     c.remettre_en_etat = lambda e: False    # la réparation aussi
     c.observer = lambda: EtatUsine()
     c.agir = lambda d: (True, "factice")
@@ -1173,7 +1174,7 @@ def test_une_action_sans_effet_compte_comme_un_echec() -> None:
     c = _coord_mesure(api)
     c.journal, c.ecarts, c.arbitre = [], [], None
     c.constats, c.enqueteur = [], None
-    c._echecs = {}
+    c._echecs, c._acharnement = {}, {}
     c.remettre_en_etat = lambda e: False     # la réparation ne rattrape rien
     c.observer = lambda: EtatUsine()
     c.agir = lambda d: (True, "posé sans broncher")   # l'action RÉUSSIT
@@ -1230,6 +1231,88 @@ def test_evacuer_est_juge_sur_son_effet() -> None:
     assert ok
 
 
+def test_lacharnement_se_compte_par_action_pas_seulement_par_cible() -> None:
+    """Vingt-neuf machines, et l'action n'est jamais en cause — seulement ses cibles.
+
+    `_echecs` est indexé par `(action, nom, x, y)` : `evacuer` épuise ses trois échecs
+    sur un four, puis repart INTACTE sur le suivant. Il reste toujours une cible neuve,
+    donc l'acharnement sur l'ACTION n'est jamais vu. Un second compteur, par action
+    seule, le voit.
+    """
+    from agents.coordinator import Coordinator, Decision, EtatUsine
+    from services.factory_doctor import Symptome
+    api = _ApiMesure([{"name": "stone-furnace", "x": 0.0, "y": 0.0,
+                       "status": "full_output"},
+                      {"name": "stone-furnace", "x": 9.0, "y": 0.0,
+                       "status": "full_output"}])
+    c = _coord_mesure(api)
+    c.journal, c.ecarts, c.arbitre = [], [], None
+    c.constats, c.enqueteur = [], None
+    c._echecs, c._acharnement = {}, {}
+    c.remettre_en_etat = lambda e: False
+    c.observer = lambda: EtatUsine()
+    c.agir = lambda d: (True, "vidée pour rien")
+    c.tick = Coordinator.tick.__get__(c)
+    c._attente = Coordinator._attente.__get__(c)
+    import agents.coordinator as mod
+    vrai_decide = mod.decide
+    try:
+        # DEUX cibles différentes : par cible, chaque compteur reste à 1.
+        for x in (0.0, 9.0):
+            cible = Symptome(name="stone-furnace", x=x, y=0.0, cause="sortie_bloquee",
+                             gravite=1, detail="pleine")
+            mod.decide = lambda etat, arbitre=None, _c=cible: Decision(
+                action="evacuer", raison="", cible=_c)
+            c.tick()
+    finally:
+        mod.decide = vrai_decide
+    par_cible = max(c._echecs.values()) if c._echecs else 0
+    ok = par_cible == 1 and c._acharnement.get("evacuer") == 2
+    rec("test_lacharnement_se_compte_par_action_pas_seulement_par_cible", ok,
+        f"par cible {par_cible} (jamais abandonnée) — par action "
+        f"{c._acharnement.get('evacuer')} (attendu 2)")
+    assert ok
+
+
+def test_lacharnement_est_inscrit_dans_la_raison_de_loption() -> None:
+    """Ce qui est joué en vain doit se LIRE, pas seulement se classer.
+
+    Le déterministe survit à l'ornière parce qu'il suit l'ORDRE des options : une option
+    déclassée descend, il prend la première. L'arbitre LLM, lui, choisit dans la liste
+    sans égard au rang — et rien dans le texte ne lui dit qu'il vient de jouer cette
+    action dix-sept fois pour rien. Il ne voit que « [i] evacuer (priorité N) — raison ».
+
+    Mesuré (A/B, trois manches par branche) : `evacuer` 51 tours sur 75, soit 68 %, et
+    ce APRÈS que la loi « réussir n'est pas servir » l'ait fait compter comme un échec.
+    Le compteur existait, le modèle ne le voyait pas.
+
+    On inscrit donc le fait, et RIEN d'autre : aucune priorité touchée, aucune option
+    retirée. Le déterministe garde le comportement déjà mesuré ; le modèle décide de ce
+    qu'il fait de l'information. C'est un fait montré, pas une consigne donnée.
+    """
+    from agents.coordinator import enumerer_options
+    lignes = [_m("stone-furnace", 0, 0, "no_fuel"),
+              _m("electric-furnace", 0, 8, "full_output")]
+    vierge = enumerer_options(_etat(lignes))
+    etat = _etat(lignes)
+    etat.acharnement = {"evacuer": 17}
+    options = enumerer_options(etat)
+    evac = next(o for o in options if o.action == "evacuer")
+    autre = next(o for o in options if o.action != "evacuer")
+
+    inscrit = "17" in evac.raison and "sans effet" in evac.raison
+    epargne = "17" not in autre.raison
+    # L'ordre et les priorités ne bougent PAS : la branche déterministe est déjà mesurée
+    # et ce changement ne doit rien lui coûter.
+    intact = ([o.action for o in options] == [o.action for o in vierge]
+              and [o.priorite for o in options] == [o.priorite for o in vierge]
+              and [o.faisable for o in options] == [o.faisable for o in vierge])
+    ok = inscrit and epargne and intact
+    rec("test_lacharnement_est_inscrit_dans_la_raison_de_loption", ok,
+        f"evacuer -> « {evac.raison[-60:]} » ; ordre et priorités intacts : {intact}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -1266,6 +1349,8 @@ def main() -> int:
         test_industrialiser_ce_quon_refait_a_la_main,
         test_une_action_sans_effet_compte_comme_un_echec,
         test_evacuer_est_juge_sur_son_effet,
+        test_lacharnement_se_compte_par_action_pas_seulement_par_cible,
+        test_lacharnement_est_inscrit_dans_la_raison_de_loption,
     ]
     for t in tests:
         t()
