@@ -3689,6 +3689,7 @@ class Coordinator:
         non-généré) et ne détruit rien. Le dégagement de la végétation, lui, reste à
         l'appelant : raser sans discernement détruit ce qu'on vient de bâtir.
         """
+        from services import knowledge
         from services.executor import execute_micro
         from services.micro_planner import MicroRequest, plan_micro
         from services.layout_planner import ResourcePatch
