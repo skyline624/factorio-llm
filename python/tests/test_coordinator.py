@@ -1377,6 +1377,105 @@ def test_un_abandon_se_perime_au_lieu_detre_definitif() -> None:
     assert ok
 
 
+class _ApiEnergie:
+    """Le strict nécessaire pour juger d'une cible : sa source d'énergie, et ce qu'on pose."""
+
+    def __init__(self, sources: dict):
+        self.sources = sources
+        self.poses: list = []
+
+    def describe(self, name):
+        return {"name": name, "entity": {"name": name,
+                                         "energySource": self.sources.get(name, "electric")}}
+
+    def place_entity_at(self, name, x, y, **kw):
+        self.poses.append((name, x, y))
+        return {"ok": True}
+
+    def run_action(self, fn, *a, **kw):
+        return fn(*a) if callable(fn) else {"ok": True}
+
+    def inspect_at(self, x, y, radius=0.5):
+        return {"entities": []}
+
+    def get_power_state(self, x, y, radius=4.0):
+        return {"networkId": None, "connected": False}
+
+
+def test_on_ne_tire_pas_de_ligne_vers_une_machine_a_charbon() -> None:
+    """UNE MACHINE BURNER NE SE BRANCHE PAS. Elle mange du charbon, pas des volts.
+
+    Mesuré en jeu le 02/08, premier rush en mode PRODUCTION sur carte vierge : quatre
+    tours, quatre `batir_production`, et au sol **90 poteaux électriques** pour 4
+    `burner-mining-drill` et 4 `stone-furnace` — sans un seul générateur, boiler ou
+    steam-engine. Personne ne consommait, rien ne produisait.
+
+    La cause est mécanique : après la pose, `batir_chaine` relie toute machine dont
+    `get_power_state` ne dit pas `connected`. Or une machine à charbon n'a AUCUNE
+    connexion électrique — elle ne sera donc jamais `connected`, et l'agent lui déroule
+    une ligne à chaque passage, indéfiniment.
+
+    Le jeu donne déjà la réponse : `describe(nom)["entity"]["energySource"]` vaut
+    « burner » ou « electric ». La garde va dans `relier` et non chez l'appelant : c'est
+    une loi — on ne raccorde pas ce qui ne se raccorde pas — et elle vaut pour tous ceux
+    qui relient, pas seulement pour la construction de chaîne.
+    """
+    from agents.coordinator import Coordinator
+    from services.factory_doctor import Symptome
+    api = _ApiEnergie({"burner-mining-drill": "burner", "stone-furnace": "burner",
+                       "electric-mining-drill": "electric"})
+    c = _coord_mesure(api)
+    c.journal = []
+    c.relier = Coordinator.relier.__get__(c)
+
+    ok_b, motif = c.relier(Symptome(name="burner-mining-drill", x=10.0, y=0.0,
+                                    cause="debranchee", gravite=1, detail=""))
+    poses_apres_burner = list(api.poses)
+    ok_f, _ = c.relier(Symptome(name="stone-furnace", x=14.0, y=0.0,
+                                cause="debranchee", gravite=1, detail=""))
+
+    refuse = (ok_b is False and ok_f is False)
+    rien_pose = not poses_apres_burner and not api.poses
+    ok = refuse and rien_pose and "burner" in motif.lower()
+    rec("test_on_ne_tire_pas_de_ligne_vers_une_machine_a_charbon", ok,
+        f"refusé : {refuse} — poteaux posés : {len(api.poses)} (attendu 0) — « {motif[:60]} »")
+    assert ok
+
+
+def test_lusine_est_aussi_grande_que_ce_quon_y_a_bati() -> None:
+    """L'AGENT NE VOYAIT PAS CE QU'IL VENAIT DE CONSTRUIRE.
+
+    `observer` compte les machines autour de `self.zone` dans `self.rayon` — tous deux
+    figés à la construction du Coordinator. En `test_mode` le personnage est téléporté et
+    bâtit près de son point de départ ; en PRODUCTION il marche vraiment jusqu'au
+    gisement, à bien plus de 25 tuiles. Mesuré : 8 machines en terre, `machines=0` à
+    chaque tour, donc l'agent rebâtit — quatre fois de suite.
+
+    L'usine n'est pas un disque décidé d'avance : elle est aussi grande que ce qu'on y a
+    bâti. Le rayon s'étend pour englober le chantier, le centre ne bouge pas (les bancs
+    qui vérifient autour de la zone gardent leur repère), et l'extension est bornée —
+    scanner sans limite coûterait plus cher que de ne rien voir.
+    """
+    from agents.coordinator import RAYON_USINE_MAX, Coordinator
+    c = _coord_mesure(_ApiMesure([]))
+    c.zone, c.rayon, c.journal = (0.0, 0.0), 25.0, []
+    c._englober = Coordinator._englober.__get__(c)
+
+    c._englober(10.0, 0.0)
+    proche = c.rayon                       # déjà dedans : rien ne doit bouger
+    c._englober(100.0, 0.0)
+    loin = c.rayon
+    c._englober(10_000.0, 0.0)
+    borne = c.rayon
+
+    ok = (proche == 25.0 and loin >= 100.0 and borne <= RAYON_USINE_MAX
+          and c.zone == (0.0, 0.0))
+    rec("test_lusine_est_aussi_grande_que_ce_quon_y_a_bati", ok,
+        f"25 -> {proche} (proche) -> {loin} (chantier à 100) -> {borne} "
+        f"(borné à {RAYON_USINE_MAX}), centre {c.zone}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -1416,6 +1515,8 @@ def main() -> int:
         test_lacharnement_se_compte_par_action_pas_seulement_par_cible,
         test_lacharnement_est_inscrit_dans_la_raison_de_loption,
         test_un_abandon_se_perime_au_lieu_detre_definitif,
+        test_on_ne_tire_pas_de_ligne_vers_une_machine_a_charbon,
+        test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
     ]
     for t in tests:
         t()

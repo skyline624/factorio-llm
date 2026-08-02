@@ -150,6 +150,20 @@ SEUIL_ABANDON = 3
 # action déjà jugée impossible. À comparer aux 46 % de chômage qu'on mesure sans lui.
 QUARANTAINE_TOURS = 8
 
+# JUSQU'OÙ « MON USINE » PEUT S'ÉTENDRE. `observer` compte les machines autour de `zone`
+# dans `rayon`, tous deux figés à la construction. En `test_mode` le personnage est
+# téléporté et bâtit près de son point de départ ; en PRODUCTION il MARCHE jusqu'au
+# gisement, à bien plus de 25 tuiles. Mesuré au premier rush live : 8 machines en terre,
+# `machines=0` à chaque tour — donc l'agent rebâtit, quatre fois de suite, en déroulant
+# une ligne de poteaux à chaque passe.
+#
+# L'usine n'est pas un disque décidé d'avance : elle est aussi grande que ce qu'on y a
+# bâti. Le rayon s'étend donc pour englober le chantier — le centre, lui, ne bouge pas.
+# La borne existe parce qu'un scan sans limite coûterait plus cher que de ne rien voir.
+RAYON_USINE_MAX = 250.0
+# De quoi couvrir la chaîne AUTOUR du point atteint, pas seulement le point.
+MARGE_USINE = 16.0
+
 # Le combustible du bootstrap, et le stock en dessous duquel on cesse de dépanner à la
 # main. Amorcer un foreur burner et ses deux bras coûte une trentaine d'unités : si on
 # descend sous ce seuil, on perd la capacité de bâtir la chaîne qui rendrait le
@@ -1623,6 +1637,12 @@ class Coordinator:
         #
         # On raccorde APRÈS la pose, pas avant : le réseau doit exister et les poteaux du
         # plan être en terre pour que la ligne trouve où s'accrocher.
+        # CE QU'ON VIENT DE BÂTIR DOIT ENTRER DANS CE QU'ON OBSERVE. Sans cela l'agent ne
+        # se voit pas construire — `machines=0` alors que huit sont en terre — et il
+        # rebâtit au tour suivant, une chaîne de plus à chaque passage.
+        for p in (getattr(rap, "placed", []) or []):
+            self._englober(p.x, p.y)
+
         branchees, echecs_r = 0, ""
         for p in (getattr(rap, "placed", []) or []):
             if getattr(p, "role", "") not in ("machine", "drill"):
@@ -3049,8 +3069,35 @@ class Coordinator:
         return (f"{poses} ramassage(s) posé(s)"
                 + (f", {deja} déjà servi(s)" if deja else ""))
 
+    def _englober(self, x: float, y: float) -> None:
+        """Étend l'usine jusqu'au chantier. Le centre ne bouge pas, le rayon suit.
+
+        Appelé après une pose : ce que l'agent vient de bâtir doit entrer dans ce qu'il
+        observe, sinon il ne se voit pas construire et recommence.
+        """
+        d = math.hypot(x - self.zone[0], y - self.zone[1])
+        if d <= self.rayon:
+            return
+        vise = min(d + MARGE_USINE, RAYON_USINE_MAX)
+        if vise > self.rayon:
+            self.journal.append(f"USINE élargie {self.rayon:.0f} -> {vise:.0f} tuiles "
+                                f"(chantier à {d:.0f})")
+            self.rayon = vise
+
     def relier(self, cible, pole: str = "small-electric-pole") -> tuple[bool, str]:
         """Rattache une machine au réseau — en tirant une LIGNE si le réseau est loin.
+
+        UNE MACHINE BURNER NE SE BRANCHE PAS : elle mange du charbon, pas des volts, et
+        n'a aucune connexion électrique — donc `get_power_state` ne la dira JAMAIS
+        `connected`. L'appelant qui relie « tout ce qui n'est pas connecté » lui déroule
+        alors une ligne à chaque passage. Mesuré au premier rush en production, sur carte
+        vierge : **90 poteaux** au sol pour 4 `burner-mining-drill` et 4 `stone-furnace`,
+        sans un seul générateur — personne ne consommait, rien ne produisait.
+
+        La garde est ici et non chez l'appelant : c'est une loi — on ne raccorde pas ce
+        qui ne se raccorde pas — et elle vaut pour tous ceux qui relient. Le jeu donne
+        déjà la réponse dans `describe(nom)["entity"]["energySource"]`. Si l'information
+        manque, on laisse passer : une garde ne doit pas bloquer sur son propre silence.
 
         Poser un poteau contre la machine suffit tant que le réseau est à portée de fil,
         et ne sert à rien dès qu'il ne l'est plus. C'est ce qui arrivait à chaque
@@ -3064,6 +3111,13 @@ class Coordinator:
         `place_pole_line`, déjà éprouvée sur 104 tuiles en E5, qui chaîne sur les
         positions réellement posées et refuse tout maillon au-delà de la portée de fil.
         """
+        source = ((((self.api.describe(getattr(cible, "name", "")) or {})
+                    .get("entity") or {}).get("energySource"))
+                  if hasattr(self.api, "describe") else None)
+        if source is not None and source != "electric":
+            return False, (f"{getattr(cible, 'name', '?')} est alimentée en "
+                           f"« {source} » : elle ne se raccorde à aucun réseau")
+
         from services import site_finder
 
         def _pose_confirmee(x: float, y: float) -> bool:
