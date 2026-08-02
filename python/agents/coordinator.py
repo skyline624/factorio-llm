@@ -164,6 +164,15 @@ RAYON_USINE_MAX = 250.0
 # De quoi couvrir la chaîne AUTOUR du point atteint, pas seulement le point.
 MARGE_USINE = 16.0
 
+# Les actions qui POSENT quelque chose. Après elles, et elles seules, l'usine s'étend
+# jusqu'où l'agent se trouve : marcher pour miner à la main ou pour aller chercher du
+# charbon ne fait pas de l'endroit un chantier.
+ACTIONS_QUI_BATISSENT = frozenset({
+    "batir_energie", "batir_production", "etendre_production", "produire",
+    "relier", "renforcer_energie", "defendre", "redeployer_foreur",
+    "batir_evacuation", "alimenter", "approvisionner", "evacuer",
+})
+
 # Le combustible du bootstrap, et le stock en dessous duquel on cesse de dépanner à la
 # main. Amorcer un foreur burner et ses deux bras coûte une trentaine d'unités : si on
 # descend sous ce seuil, on perd la capacité de bâtir la chaîne qui rendrait le
@@ -3738,6 +3747,25 @@ class Coordinator:
                           decide, etat, self.arbitre)
         agi, detail = self.agir(d)
         self.journal.append(f"{d} -> {'agi' if agi else 'sans effet'} ({detail})")
+
+        # L'AGENT BÂTISSAIT TROIS FOIS PLUS LOIN QU'IL NE REGARDAIT. Mesuré au rush en
+        # production sur carte vierge : 18 machines posées entre 69 et 84 tuiles du
+        # spawn, pour un rayon d'observation de 25. Il n'en a vu AUCUNE — d'où
+        # `machines=0` à chaque tour, aucun symptôme, jamais de `ravitailler` malgré sept
+        # foreuses à sec, et `batir_production` reproposée jusqu'à l'abandon : 66 tours
+        # de `rien` sur 120.
+        #
+        # `_englober` n'était appelé que dans `batir_chaine`, alors que `batir_production`
+        # passe par `batir()` : sur 40 constructions, zéro élargissement. L'ajouter aussi
+        # dans `batir()` ne ferait qu'attendre le prochain chemin oublié — on l'ancre donc
+        # ICI, où tous passent. En production l'agent doit s'approcher pour poser
+        # (`build_distance + 2`) : sa position EST le chantier.
+        if agi and d.action in ACTIONS_QUI_BATISSENT:
+            try:
+                from services import deplacement
+                self._englober(*deplacement.position(self.api))
+            except Exception:
+                pass          # une mesure de confort ne doit jamais arrêter la boucle
 
         # On RETIENT l'échec, par action et par cible. Un compteur remis à zéro au succès :
         # ce qui compte est l'acharnement, pas le total sur la partie.

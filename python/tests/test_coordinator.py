@@ -1476,6 +1476,57 @@ def test_lusine_est_aussi_grande_que_ce_quon_y_a_bati() -> None:
     assert ok
 
 
+def test_toute_construction_elargit_lusine_pas_seulement_les_chaines() -> None:
+    """L'AGENT BÂTISSAIT TROIS FOIS PLUS LOIN QU'IL NE REGARDAIT.
+
+    Mesuré au rush en production sur carte vierge : 18 machines posées entre 69 et 84
+    tuiles du spawn, pour un rayon d'observation de 25. L'agent n'en a vu AUCUNE — d'où
+    `machines=0` à chaque tour, aucun symptôme, jamais de `ravitailler` malgré sept
+    foreuses à sec, et `batir_production` reproposée jusqu'à l'abandon : 66 tours de
+    `rien` sur 120.
+
+    `_englober` existait déjà mais n'était appelé que dans `batir_chaine`. Or
+    `batir_production` passe par `batir()` : sur 40 constructions, zéro élargissement.
+    Ajouter l'appel dans `batir()` ne ferait qu'attendre le prochain chemin oublié — on
+    l'ancre donc là où TOUS passent, dans `tick`, sur la position du personnage. En
+    production il doit s'approcher pour poser : sa position EST le chantier.
+    """
+    from agents.coordinator import Coordinator, Decision, EtatUsine
+
+    class _ApiLoin(_ApiMesure):
+        """Un personnage à 80 tuiles — là où l'agent va réellement bâtir."""
+
+        def get_state(self):
+            return {"character": {"position": {"x": 80.0, "y": 0.0}}}
+
+    c = _coord_mesure(_ApiLoin([]))
+    c.zone, c.rayon = (0.0, 0.0), 25.0
+    c.journal, c.ecarts, c.arbitre = [], [], None
+    c.constats, c.enqueteur = [], None
+    c._echecs, c._acharnement = {}, {}
+    c._tour, c._quarantaine = 0, {}
+    c.remettre_en_etat = lambda e: False
+    c.observer = lambda: EtatUsine()
+    c.agir = lambda d: (True, "chaîne posée au loin")
+    c.tick = Coordinator.tick.__get__(c)
+    c._attente = Coordinator._attente.__get__(c)
+    c._englober = Coordinator._englober.__get__(c)
+
+    import agents.coordinator as mod
+    vrai_decide = mod.decide
+    mod.decide = lambda etat, arbitre=None: Decision(action="batir_production", raison="")
+    try:
+        c.tick()
+    finally:
+        mod.decide = vrai_decide
+
+    ok = c.rayon >= 80.0 and c.zone == (0.0, 0.0)
+    rec("test_toute_construction_elargit_lusine_pas_seulement_les_chaines", ok,
+        f"rayon 25 -> {c.rayon:.0f} après une construction à 80 tuiles "
+        f"(centre inchangé : {c.zone})")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -1517,6 +1568,7 @@ def main() -> int:
         test_un_abandon_se_perime_au_lieu_detre_definitif,
         test_on_ne_tire_pas_de_ligne_vers_une_machine_a_charbon,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
+        test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
     ]
     for t in tests:
         t()
