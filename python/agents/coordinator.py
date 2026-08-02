@@ -1207,8 +1207,24 @@ class Coordinator:
                 marche = next((m for m in recherche.lire(self.api).marches
                                if m.nom == entre), None)
                 if marche is not None and not marche.gratuite:
-                    self.automatiser_la_science()
-                    self.alimenter_la_science()
+                    # AUTOMATISER D'ABORD, PAYER À LA MAIN SINON. La première recherche
+                    # ne peut PAS s'automatiser, et l'agent refusait donc de la payer :
+                    # pour chercher il voulait une assembleuse, l'assembleuse exige
+                    # `automation`, et `automation` exige de chercher. Mesuré sur carte
+                    # vierge : `chercher` échouait 6 fois sur 6 puis était abandonné, et
+                    # l'arbre entier restait fermé.
+                    #
+                    # Le jeu ouvre pourtant le chemin : flacon, laboratoire, pompe,
+                    # chaudière et machine à vapeur sont tous fabricables d'office —
+                    # `assembling-machine-1` est le seul verrou. C'est le parcours de
+                    # n'importe quel joueur. La règle n'est pas « traiter le cas
+                    # automation » : une recherche se paie en flacons, qu'ils viennent
+                    # d'une chaîne ou de mes mains.
+                    auto, _ = self.automatiser_la_science()
+                    if auto:
+                        self.alimenter_la_science()
+                    else:
+                        self.payer_la_recherche(marche)
                 return self.chercher(entre)
             return False, "aucune technologie nommée dans la décision"
 
@@ -2334,6 +2350,60 @@ class Coordinator:
                       f"chargée de {', '.join(charges) or 'rien'}, "
                       f"{bras}@({pont[0]:.0f},{pont[1]:.0f}) verse dans le laboratoire "
                       f"({labo[0]:.0f},{labo[1]:.0f})")
+
+    def payer_la_recherche(self, marche) -> tuple[bool, str]:
+        """Fabrique les flacons de ses mains et les porte au laboratoire.
+
+        Le pendant manuel d'`automatiser_la_science`, pour le seul cas où celle-ci ne
+        peut pas aboutir : la PREMIÈRE recherche. Tant qu'`automation` n'est pas acquise
+        il n'existe aucune assembleuse, donc aucune chaîne de science possible — et
+        l'agent restait bloqué là, à réessayer d'automatiser ce qu'il fallait simplement
+        faire dix fois à la main.
+
+        Trois gestes, dans l'ordre où un joueur les ferait : avoir un laboratoire (le
+        fabriquer et le poser au besoin), fabriquer les flacons, les y déposer. Chacun
+        peut échouer pour une raison qu'on nomme — il manque du cuivre, il manque du
+        courant — plutôt que de rendre un « non » muet.
+
+        Ce qui suit reste préférable en régime établi : une science portée à la main
+        s'arrête dès que l'agent regarde ailleurs. Mais une usine qui ne démarre pas ne
+        s'automatise jamais.
+        """
+        besoins = list(getattr(marche, "cout", ()) or ())
+        if not besoins:
+            return False, f"{getattr(marche, 'nom', '?')} : aucun coût en flacons à payer"
+
+        # 1. UN LABORATOIRE, sans quoi les flacons n'ont nulle part où aller.
+        # `poser_le_laboratoire` sait déjà le trouver, le fabriquer, le poser ET le
+        # brancher — un laboratoire hors couverture consommerait des flacons sans jamais
+        # chercher. On ne réécrit pas ce qui existe.
+        pos, detail_labo = self.poser_le_laboratoire()
+        if pos is None:
+            return False, f"pas de laboratoire pour payer la recherche : {detail_labo}"
+        lx, ly = pos
+
+        # 2. LES FLACONS, fabriqués à la main, et seulement ce qui manque : l'agent en a
+        # peut-être déjà d'un tour précédent.
+        portes, manques = [], []
+        for nom, quantite in besoins:
+            besoin = int(quantite)
+            en_poche = perception.inventory(self.api).get(nom, 0)
+            if en_poche < besoin:
+                ok, detail = self.fabriquer(nom, besoin - en_poche)
+                if not ok:
+                    manques.append(f"{nom} : {detail}")
+                    continue
+            # 3. LES PORTER AU LABORATOIRE — `move_items_at` vise l'entité à cette
+            # position précise, et non « toutes les entités de ce nom à 32 tuiles ».
+            self.api.run_action(self.api.move_items_at, nom, "lab", lx, ly, besoin, True,
+                                timeout=20.0)
+            portes.append(f"{nom}×{besoin}")
+
+        if not portes:
+            return False, (f"aucun flacon porté au laboratoire : "
+                           f"{' ; '.join(manques) or 'raison inconnue'}")
+        return True, (f"{', '.join(portes)} porté(s) au laboratoire@({lx:.0f},{ly:.0f})"
+                      + (f" — manques : {' ; '.join(manques)}" if manques else ""))
 
     def alimenter_la_science(self, flacon: str = "automation-science-pack"
                              ) -> tuple[bool, str]:

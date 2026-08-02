@@ -1586,6 +1586,109 @@ def test_le_diagnostic_trouve_lusine_ou_quelle_soit() -> None:
     assert ok
 
 
+def test_une_recherche_qu_on_ne_peut_automatiser_se_paie_a_la_main() -> None:
+    """LA PREMIÈRE RECHERCHE NE PEUT PAS S'AUTOMATISER, ET L'AGENT REFUSAIT DE LA PAYER.
+
+    Mesuré en jeu sur carte vierge — `chercher` échoue 6 fois sur 6, puis est abandonné :
+
+        automatiser_la_science -> « pas d'assembleuse possible : assembling-machine-1
+        s'ouvre par "automation", qui se paie en science : 10 × automation-science-pack »
+
+    La boucle est fermée : pour chercher il veut automatiser la science ; pour automatiser
+    il faut une assembleuse ; l'assembleuse exige `automation` ; `automation` exige dix
+    flacons, donc de chercher. `alimenter_la_science` bute sur la même assembleuse — aucun
+    chemin manuel n'existait.
+
+    Or le jeu ouvre grand ce chemin, vérifié sur la carte : `automation-science-pack`,
+    `lab`, `iron-gear-wheel`, `electronic-circuit`, `offshore-pump`, `boiler`,
+    `steam-engine` sont TOUS fabricables d'office ; `assembling-machine-1` est le seul
+    verrou. C'est exactement le parcours d'un joueur : miner, fondre, fabriquer un
+    laboratoire, y déposer dix flacons faits à la main, lancer la première recherche.
+
+    La règle n'est pas « traiter le cas automation » mais : **une recherche se paie en
+    flacons, qu'ils viennent d'une chaîne ou de mes mains.** Automatiser reste préférable
+    — on n'y renonce que lorsque c'est impossible.
+    """
+    from agents.coordinator import Coordinator, Decision
+    from services import recherche as mod_recherche
+
+    class _Marche:
+        nom, gratuite = "automation", False
+
+    class _EtatRecherche:
+        marches = (_Marche(),)
+
+    c = _coord_mesure(_ApiMesure([]))
+    c.journal = []
+    appels: list[str] = []
+    c.automatiser_la_science = lambda *a, **k: (False, "pas d'assembleuse possible")
+    c.alimenter_la_science = lambda *a, **k: (False, "aucune assembleuse réglée")
+    c.payer_la_recherche = lambda marche: (appels.append(getattr(marche, "nom", "?"))
+                                           or (True, "10 flacons déposés au laboratoire"))
+    c.chercher = lambda t: (True, f"recherche {t} lancée")
+    c.agir = Coordinator.agir.__get__(c)
+
+    vrai_lire = mod_recherche.lire
+    mod_recherche.lire = lambda api: _EtatRecherche()
+    try:
+        ok, detail = c.agir(Decision(action="chercher", raison="", item="automation"))
+    finally:
+        mod_recherche.lire = vrai_lire
+
+    ok_test = ok and appels == ["automation"]
+    rec("test_une_recherche_qu_on_ne_peut_automatiser_se_paie_a_la_main", ok_test,
+        f"paiement manuel tenté pour {appels or 'AUCUNE techno'} — « {str(detail)[:60]} »")
+    assert ok_test
+
+
+def test_payer_la_recherche_fabrique_et_porte_les_flacons() -> None:
+    """La méthode elle-même, pas seulement son câblage.
+
+    Le test précédent remplace `payer_la_recherche` par un double : il prouve qu'on
+    l'appelle, jamais qu'elle marche. Celui-ci l'exécute — sans quoi une méthode qui
+    référence des fonctions inexistantes passerait tous les tests au vert.
+    """
+    from agents.coordinator import Coordinator
+
+    class _Marche:
+        nom = "automation"
+        cout = (("automation-science-pack", 10),)
+
+    class _ApiPorte(_ApiMesure):
+        def __init__(self):
+            super().__init__([])
+            self.portes: list = []
+
+        def move_items_at(self, item, entite, x, y, count=0, to=True):
+            self.portes.append((item, entite, round(x), round(y), count))
+            return {"ok": True}
+
+        def run_action(self, fn, *a, timeout=None):
+            return fn(*a) if callable(fn) else {"ok": True}
+
+    api = _ApiPorte()
+    c = _coord_mesure(api)
+    c.journal = []
+    crafts: list = []
+    c.poser_le_laboratoire = lambda: ((12.0, 8.0), "laboratoire posé")
+    c.fabriquer = lambda item, n=1: (crafts.append((item, n)) or (True, f"{item}×{n}"))
+    c.payer_la_recherche = Coordinator.payer_la_recherche.__get__(c)
+
+    import services.perception as perc
+    vrai_inv = perc.inventory
+    perc.inventory = lambda api: {}          # les mains vides : tout est à fabriquer
+    try:
+        ok, detail = c.payer_la_recherche(_Marche())
+    finally:
+        perc.inventory = vrai_inv
+
+    ok_test = (ok and crafts == [("automation-science-pack", 10)]
+               and api.portes == [("automation-science-pack", "lab", 12, 8, 10)])
+    rec("test_payer_la_recherche_fabrique_et_porte_les_flacons", ok_test,
+        f"fabriqué {crafts} — porté {api.portes} — « {str(detail)[:60]} »")
+    assert ok_test
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -1629,6 +1732,8 @@ def main() -> int:
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,
+        test_une_recherche_qu_on_ne_peut_automatiser_se_paie_a_la_main,
+        test_payer_la_recherche_fabrique_et_porte_les_flacons,
     ]
     for t in tests:
         t()
