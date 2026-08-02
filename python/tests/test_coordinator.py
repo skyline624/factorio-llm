@@ -1689,6 +1689,48 @@ def test_payer_la_recherche_fabrique_et_porte_les_flacons() -> None:
     assert ok_test
 
 
+def test_sans_combustible_pour_amorcer_on_va_en_chercher() -> None:
+    """IL REFUSAIT DE REMPLIR SA FOREUSE POUR GARDER UNE RÉSERVE QU'IL N'AVAIT PAS.
+
+    Observé en jeu sur carte vierge, kit vanilla (1 foreuse, 1 four, 8 plaques) :
+
+        burner-mining-drill -> no_fuel,  combustible dans la foreuse : 0
+        en poche : coal=4
+        l'agent mine 85 minerais de fer À LA MAIN pendant que sa chaîne dort
+
+    Le mécanisme, et il se défend en régime établi : ravitailler avec moins de
+    `RESERVE_AMORCE` (40) en poche devient `approvisionner` — « garder ce qui reste pour
+    amorcer une chaîne plutôt que le brûler en un plein ». Mais `approvisionner` exige
+    `AMORCE_CHAINE_BURNER` (20) pour amorcer justement cette chaîne. Avec 4 charbons, ni
+    l'un ni l'autre n'est possible, et RIEN ne dit d'aller simplement en miner.
+
+    L'agent sait pourtant le faire : `fabriquer` « se procure : miner, fondre, crafter »,
+    et `verify_bootstrap_craft` le voit chercher son charbon à deux cents tuiles. La
+    capacité existait, la décision manquait.
+
+    La règle : quand le stock ne suffit même pas à amorcer, on va en chercher — remplir
+    ou construire viendront après.
+    """
+    from agents.coordinator import (AMORCE_CHAINE_BURNER, COMBUSTIBLE, enumerer_options)
+    lignes = [_m("burner-mining-drill", 0, 0, "no_fuel")]
+
+    # Assez pour amorcer une chaîne : le comportement mesuré ne doit pas changer.
+    assez = enumerer_options(_etat(lignes, inventaire={COMBUSTIBLE: 25}))
+    a_assez = next((o for o in assez if o.cible is not None), None)
+
+    # Trop peu pour quoi que ce soit : il faut aller en chercher.
+    presque_rien = enumerer_options(_etat(lignes, inventaire={COMBUSTIBLE: 4}))
+    a_rien = next((o for o in presque_rien
+                   if o.action == "fabriquer" and o.item == COMBUSTIBLE), None)
+
+    ok = (a_assez is not None and a_assez.action == "approvisionner"
+          and a_rien is not None and a_rien.quantite >= AMORCE_CHAINE_BURNER)
+    rec("test_sans_combustible_pour_amorcer_on_va_en_chercher", ok,
+        f"25 en poche -> {a_assez.action if a_assez else 'AUCUNE'} ; "
+        f"4 en poche -> {a_rien.action + '×' + str(a_rien.quantite) if a_rien else 'AUCUNE'}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -1734,6 +1776,7 @@ def main() -> int:
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,
         test_une_recherche_qu_on_ne_peut_automatiser_se_paie_a_la_main,
         test_payer_la_recherche_fabrique_et_porte_les_flacons,
+        test_sans_combustible_pour_amorcer_on_va_en_chercher,
     ]
     for t in tests:
         t()

@@ -178,6 +178,13 @@ ACTIONS_QUI_BATISSENT = frozenset({
 # descend sous ce seuil, on perd la capacité de bâtir la chaîne qui rendrait le
 # dépannage inutile. La réserve est donc protégée, même au prix d'une machine à l'arrêt.
 COMBUSTIBLE = "coal"
+
+# Ce qu'il faut en poche pour AMORCER une chaîne burner : sa foreuse, son four et son
+# bras réclament chacun de quoi démarrer. En dessous, ni remplir ni construire n'est
+# possible — c'est le seuil au-delà duquel la seule chose sensée est d'aller en miner.
+# Remonté au niveau module (l'attribut de classe le reprend) : `enumerer_options` est une
+# fonction PURE et ne peut pas lire un attribut d'instance.
+AMORCE_CHAINE_BURNER = 20
 RESERVE_AMORCE = 40
 
 # Matériel indispensable à une action. Sans lui, elle échouera à l'exécution — la
@@ -526,6 +533,10 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
     # (gravité, puis conséquences en dernier) fixe l'ordre par défaut.
     for c in causes:
         action, explication = REPARATION.get(c.cause, ("inspecter", "cause inconnue"))
+        # Ce que l'action doit se procurer, quand elle en réclame. Une décision qui ne
+        # porte que le nom d'un item en demande une unité — mesuré, la chaîne n'était
+        # jamais alimentée parce que « huit en poche suffisaient toujours ».
+        item_voulu, quantite_voulue = None, 1
         # Un manque de combustible qui revient n'est pas un incident : c'est une chaîne
         # d'approvisionnement qui manque. On arrête de remplir et on construit.
         deja = etat.ravitaillements.get((c.name, round(c.x), round(c.y)), 0)
@@ -534,6 +545,24 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
             action = "approvisionner"
             explication = (f"déjà ravitaillée {deja} fois à la main — il lui faut une "
                            f"chaîne, pas un remplissage de plus")
+        elif action == "ravitailler" and stock < AMORCE_CHAINE_BURNER:
+            # ON NE GARDE PAS UNE RÉSERVE QU'ON N'A PAS. La règle ci-dessous — épargner
+            # le stock pour amorcer une chaîne — suppose qu'il reste de quoi amorcer.
+            # En dessous d'une amorce, elle enferme : remplir est refusé pour protéger un
+            # capital inexistant, et `approvisionner` réclame précisément ce qui manque.
+            #
+            # Mesuré sur carte vierge, kit vanilla : foreuse `no_fuel`, 0 combustible
+            # dedans, 4 charbons en poche — et l'agent minant 85 minerais de fer À LA
+            # MAIN pendant que sa chaîne dormait. Ni remplir ni construire n'était
+            # proposé, et rien ne disait d'aller simplement en miner.
+            #
+            # Il sait pourtant le faire : `fabriquer` « se procure : miner, fondre,
+            # crafter », et le bootstrap va chercher son charbon à deux cents tuiles. La
+            # capacité existait, la décision manquait.
+            action = "fabriquer"
+            item_voulu, quantite_voulue = COMBUSTIBLE, AMORCE_CHAINE_BURNER
+            explication = (f"{stock} {COMBUSTIBLE} en poche : trop peu pour remplir ou "
+                           f"pour amorcer quoi que ce soit — il faut aller en chercher")
         elif action == "ravitailler" and stock < RESERVE_AMORCE:
             # Mesuré : deux remplissages manuels ont vidé le stock, et la chaîne qui
             # aurait rendu la machine autonome n'a plus pu être amorcée — l'agent avait
@@ -562,7 +591,7 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
             raison=(f"{c.name} : {c.cause} — {explication}"
                     + (f" — ÉCHOUÉ {rates} fois, on n'insiste plus" if renonce else "")),
             priorite=0 if renonce else PRIORITE["reparer"], cible=c,
-            faisable=not renonce))
+            faisable=not renonce, item=item_voulu, quantite=quantite_voulue))
 
     # Défense : deux niveaux d'urgence, cf. PRIORITE. Le ThreatModel a déjà tranché
     # le « faut-il » (la pollution déclenche les vagues, pas la proximité des nids) ;
@@ -1398,7 +1427,7 @@ class Coordinator:
     # Ce qu'une chaîne tout-burner réclame en charbon pour démarrer : trois machines qui
     # brûlent, plus la marge que l'executor exige au pré-vol. Mesuré, il manquait 7
     # unités avec 8 en poche — 20 laisse de quoi poser sans revenir miner aussitôt.
-    AMORCE_CHAINE_BURNER = 20
+    AMORCE_CHAINE_BURNER = AMORCE_CHAINE_BURNER   # cf. constante de module
     # Débit visé par une chaîne NEUVE. Modeste et délibérément : ce qui compte est qu'elle
     # existe et tourne seule, pas qu'elle sature. Viser haut multiplie les machines, donc
     # les belts, donc les façons d'échouer à la pose — et l'agent sait déjà nourrir ce qui
