@@ -60,13 +60,33 @@ local STARTING_ITEMS = {
 }
 
 -- Donne le kit de depart a un character (idempotent : une seule fois via storage).
+--
+-- EN PRODUCTION, ON NE DONNE RIEN, et c'est le point. STARTING_ITEMS est un kit de
+-- VALIDATION : beacons, modules de niveau 3, raffinerie, fours electriques -- de quoi
+-- eprouver les planners S2/S3 sans passer trois heures a produire leurs entrees. Offert
+-- a un agent qui joue vraiment, il lui epargne tout le debut du jeu : il posait des
+-- machines qu'il n'avait jamais fabriquees, et le bootstrap n'etait jamais eprouve.
+--
+-- Le scenario freeplay donne DEJA son kit standard au joueur qui se connecte -- releve
+-- dans le jeu, pas suppose : burner-mining-drill=1, stone-furnace=1, iron-plate=8,
+-- wood=1, pistol=1, firearm-magazine=10 (remote.call("freeplay","get_created_items")).
+-- Le mod n'a donc rien a ajouter : recopier cette liste ici la ferait diverger du jeu au
+-- premier changement de version. Ce que le jeu fournit, le jeu le fournit.
+--
+-- Le kit riche reste au mode TEST, ou il a sa raison d'etre : les bancs eprouvent un
+-- planner, pas une montee en competence.
 local function give_kit(character)
   if storage.fl.kit_given then return end
+  if not (storage.fl and storage.fl.test_mode) then
+    storage.fl.kit_given = true
+    log("[fl] production : aucun kit ajoute (le scenario fournit le sien)")
+    return
+  end
   for _, item in ipairs(STARTING_ITEMS) do
     character.insert({name = item.name, count = item.count})
   end
   storage.fl.kit_given = true
-  log("[fl] kit de depart donne")
+  log("[fl] kit de depart donne (mode test)")
 end
 
 -- Cree (ou recree) un character headless sans associated_player (mode test).
