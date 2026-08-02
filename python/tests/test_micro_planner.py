@@ -67,6 +67,32 @@ def test_micro_3_entities() -> None:
     assert ok_tot
 
 
+def test_sans_fonte_ni_four_ni_inserteur() -> None:
+    """UN FOUR DERRIÈRE UN MINERAI QUI NE SE FOND PAS BOUCHE TOUTE LA CHAÎNE.
+
+    Mesuré en jeu sur un gisement de charbon : la foreuse
+    `waiting_for_space_in_destination` avec 33 charbons en sortie, l'inserteur bloqué
+    derrière, le four `full_output` — trois machines arrêtées en cascade, et 66 tours sur
+    120 passés à tenter de vider ce four.
+
+    L'inserteur part avec le four, et ce n'est pas un détail : sans destination il
+    pousserait dans le vide et bloquerait la foreuse tout aussi sûrement. Sans fonte, la
+    chaîne se réduit à EXTRAIRE — ce que devient le minerai regarde `approvisionner` et
+    `evacuer`, pas le planificateur.
+
+    `fondre=True` par défaut : tous les plans existants sont inchangés, ce que le test
+    voisin (`test_micro_3_entities`) continue de vérifier.
+    """
+    mp = plan_micro(MicroRequest(patch=_iron_patch(), facing=4, fondre=False))
+    roles = _roles(mp)
+    ok = (len(mp.entities) == 1 and roles == ["drill"]
+          and not mp.connections and set(mp.totals) == {"burner-mining-drill"})
+    rec("test_sans_fonte_ni_four_ni_inserteur", ok,
+        f"n={len(mp.entities)} roles={roles} totals={mp.totals} "
+        f"connexions={len(mp.connections)}")
+    assert ok
+
+
 def test_micro_facing_south_positions() -> None:
     # facing=4 (south, +y), drill/furnace 2×2 : drill(0,0) -> drop tile(0.5,1.5)
     # -> inserter(0.5,2.5) -> dépôt(0.5,3.5) -> furnace(0,4).
@@ -368,6 +394,7 @@ def main() -> int:
         test_ancres_multiples_pour_etendre,
         test_ancres_espacees_pour_ne_pas_reessayer_le_meme_endroit,
         test_aucune_tuile_aucune_ancre,
+        test_sans_fonte_ni_four_ni_inserteur,
     ]
     for t in tests:
         t()

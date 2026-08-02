@@ -1166,3 +1166,37 @@ def populate_geometry_fixture(names: list[str]) -> GeometryBase:
             distribution_effectivity=float(fix.get("distribution_effectivity", 0.0)),
         ))
     return gb
+
+def fond_en(api, minerai: str) -> Optional[str]:
+    """En quoi ce minerai se fond, ou None s'il ne se fond pas.
+
+    UN FOUR DERRIÈRE UNE FOREUSE À CHARBON BOUCHE TOUTE LA CHAÎNE. Observé en jeu sur un
+    gisement de charbon, kit vanilla : la foreuse `waiting_for_space_in_destination` avec
+    33 charbons en sortie, l'inserteur bloqué derrière, le four `full_output` — trois
+    machines arrêtées en cascade, et 66 tours sur 120 passés à tenter de vider ce four.
+
+    Le `MicroPlanner` appliquait le patron foreuse → inserteur → four à TOUTE extraction.
+    C'est vrai du fer et du cuivre, dont le produit est la plaque ; c'est faux du charbon,
+    qui ne se fond pas — l'inserteur y poussait un minerai dont le four ne ferait jamais
+    rien.
+
+    Le critère est demandé AU JEU, jamais écrit à la main : existe-t-il une recette de
+    catégorie « smelting » ayant ce minerai en ingrédient ? Relevé sur la carte —
+    `iron-ore` → iron-plate, `copper-ore` → copper-plate, `stone` → stone-brick, et
+    AUCUNE pour `coal`. Une liste en dur aurait vieilli au premier mod ou changement de
+    version ; cette question-là reste vraie.
+
+    Rend None sur une lecture impossible : on ne pose pas de four sur un doute, et une
+    chaîne sans four se contente d'extraire — ce qui n'a jamais bloqué personne.
+    """
+    try:
+        brut = api.rcon.query_lua(
+            f"local f = game.forces.player local trouve = '' "
+            f"for _, rc in pairs(f.recipes) do if rc.category == 'smelting' then "
+            f"  for _, i in pairs(rc.ingredients) do "
+            f"    if i.name == '{minerai}' then trouve = rc.products[1].name end end "
+            f"end end rcon.print(trouve)")
+    except Exception:
+        return None
+    nom = str(brut).strip()
+    return nom or None

@@ -187,7 +187,64 @@ def test_une_ressource_brute_reste_une_feuille() -> None:
                f"items={items} feuilles={feuilles}")
 
 
-TESTS = [test_chaine_complete_du_flacon_vert,
+def test_un_minerai_qui_ne_se_fond_pas_ne_veut_pas_de_four() -> None:
+    """UN FOUR DERRIÈRE UNE FOREUSE À CHARBON BOUCHE TOUTE LA CHAÎNE.
+
+    Observé en jeu, kit vanilla, chaîne bâtie sur un gisement de charbon :
+
+        burner-mining-drill  waiting_for_space_in_destination  [sort: coal×33]
+        burner-inserter      waiting_for_space_in_destination
+        stone-furnace        FULL_OUTPUT                       [iron-plate×70]
+
+    Le `MicroPlanner` applique le patron foreuse → inserteur → four à TOUTE extraction.
+    Vrai pour le fer et le cuivre, dont le produit est la plaque ; faux pour le charbon,
+    qui ne se fond pas — et l'inserteur y pousse un minerai dont le four ne fera jamais
+    rien. Les trois machines se bloquent en cascade, et l'agent a passé 66 tours sur 120
+    à tenter d'évacuer ce four sans y parvenir.
+
+    Le jeu donne la réponse, relevée et non supposée : une recette de catégorie
+    « smelting » ayant ce minerai en ingrédient existe pour `iron-ore` (-> iron-plate),
+    `copper-ore` (-> copper-plate) et `stone` (-> stone-brick) ; il n'y en a AUCUNE pour
+    `coal`. C'est ce fait qui décide, pas une liste écrite à la main.
+    """
+    from services.knowledge import fond_en
+
+    class _JeuFonte:
+        """Le jeu répond ce qu'il fond, comme le fait `perception.centrales`.
+
+        Duck-typing sur `api.rcon.query_lua`, patron déjà employé dans le dépôt : la
+        vérité vient du catalogue chargé, pas d'une liste écrite ici.
+        """
+
+        FONTES = {"iron-ore": "iron-plate", "copper-ore": "copper-plate",
+                  "stone": "stone-brick"}
+
+        class _Rcon:
+            def query_lua(self, code):
+                for minerai, produit in _JeuFonte.FONTES.items():
+                    if f"'{minerai}'" in code or f'"{minerai}"' in code:
+                        return produit
+                return ""          # rien ne fond ce minerai — le cas du charbon
+
+        def __init__(self):
+            self.rcon = self._Rcon()
+
+    jeu = _JeuFonte()
+
+    assert rec("un minerai qui se fond nomme son produit",
+               fond_en(jeu, "iron-ore") == "iron-plate",
+               f"iron-ore -> {fond_en(jeu, 'iron-ore')}")
+    assert rec("la pierre aussi", fond_en(jeu, "stone") == "stone-brick",
+               f"stone -> {fond_en(jeu, 'stone')}")
+    assert rec("le charbon ne se fond pas : aucun four",
+               fond_en(jeu, "coal") is None, f"coal -> {fond_en(jeu, 'coal')}")
+    assert rec("une recette de craft n'est pas une fonte",
+               fond_en(jeu, "iron-plate") is None,
+               f"iron-plate -> {fond_en(jeu, 'iron-plate')}")
+
+
+TESTS = [test_un_minerai_qui_ne_se_fond_pas_ne_veut_pas_de_four,
+         test_chaine_complete_du_flacon_vert,
          test_les_feuilles_sont_les_gisements,
          test_profondeur_complete,
          test_une_recette_qui_boucle_ne_tourne_pas_sans_fin,

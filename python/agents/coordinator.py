@@ -3759,13 +3759,25 @@ class Coordinator:
         # Le palier est CHOISI, pas imposé : sans recherche ni dotation, l'électrique
         # n'existe tout simplement pas (recettes `enabled=false`).
         t = self.tiers_micro()
+        # PAS DE FOUR DERRIÈRE UN MINERAI QUI NE SE FOND PAS. Le charbon est le cas qui
+        # l'a montré : la foreuse en sortait 33, l'inserteur les poussait dans un four
+        # qui n'en ferait jamais rien, et les trois machines se bloquaient en cascade —
+        # 66 tours sur 120 passés à tenter de vider ce four. On demande au jeu ce qui se
+        # fond plutôt que de le supposer ; sans fonte, la chaîne se réduit à extraire, et
+        # `evacuer`/`approvisionner` disposent du minerai comme de n'importe quel autre.
+        fondu = knowledge.fond_en(self.api, self.ressource)
+        sans_four = fondu is None
+        if sans_four:
+            self.journal.append(f"{self.ressource} ne se fond pas : chaîne d'extraction "
+                                f"seule, sans four")
         for ancre in candidats[:6]:
             preparer(ancre[0], ancre[1])
             mp = plan_micro(MicroRequest(
                 patch=ResourcePatch(resource=self.ressource, tiles=[], bbox=(0, 0, 0, 0)),
                 facing=4, anchor=ancre, drill_tier=t["drill"],
                 inserter_tier=t["inserter"], furnace_tier=t["furnace"],
-                drill_size=t["drill_size"], furnace_size=t["furnace_size"]))
+                drill_size=t["drill_size"], furnace_size=t["furnace_size"],
+                fondre=not sans_four))
             # `approach=True` : en production le mod refuse toute pose au-delà de
             # `build_distance` (« walk closer first », mesuré à 10 tuiles). Le foreur est
             # sur le gisement, donc à des dizaines de tuiles de la machine qu'on alimente

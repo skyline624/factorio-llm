@@ -80,6 +80,13 @@ class MicroRequest:
     drill_size: int = 2                               # emprise RÉELLE drill (mesurée 2×2)
     furnace_size: int = 2                             # emprise RÉELLE furnace (mesurée 2×2)
     anchor: Optional[tuple[float, float]] = None      # position drill ; None = 1re tuile ore du patch
+    # FAUT-IL UN FOUR ? Le patron drill → inserter → furnace vaut pour un minerai qui se
+    # FOND (fer, cuivre : le produit est la plaque). Appliqué au charbon, il bouche la
+    # chaîne : mesuré en jeu, l'inserteur poussait 33 charbons dans un four qui n'en
+    # ferait jamais rien, et les trois machines se bloquaient en cascade.
+    # L'appelant tranche avec `knowledge.fond_en`, qui demande au JEU ce qui se fond ;
+    # `True` par défaut préserve le comportement de tous les plans existants.
+    fondre: bool = True
 
 
 @dataclass
@@ -195,17 +202,23 @@ def plan_micro(request: MicroRequest, geometry: Optional[GeometryBase] = None) -
                      node_item=request.patch.resource)
     ins_idx = _add(entities, request.inserter_tier, ins_x, ins_y, ins_dir, "inserter",
                    node_item=request.patch.resource)
-    furnace_idx = _add(entities, request.furnace_tier, furnace_x, furnace_y, 0, "machine",
-                       node_item="")  # furnace = étage smelt (produit la plaque, pas le minerai)
-
-    # 6. Connections (graphe de flux : drill -> inserter -> furnace).
-    connections = [
-        (drill_idx, ins_idx, request.patch.resource),
-        (ins_idx, furnace_idx, request.patch.resource),
-    ]
-
-    # 7. Totals.
-    totals = {request.drill_tier: 1, request.inserter_tier: 1, request.furnace_tier: 1}
+    # SANS FONTE, PAS DE FOUR — et pas d'inserteur non plus : il n'aurait plus où
+    # déposer, et un bras qui pousse dans le vide bloque la foreuse aussi sûrement qu'un
+    # four bouché. La chaîne se réduit alors à EXTRAIRE ; ce que devient le minerai
+    # regarde `approvisionner` et `evacuer`, pas le planificateur.
+    if request.fondre:
+        furnace_idx = _add(entities, request.furnace_tier, furnace_x, furnace_y, 0,
+                           "machine", node_item="")  # étage smelt : produit la plaque
+        connections = [
+            (drill_idx, ins_idx, request.patch.resource),
+            (ins_idx, furnace_idx, request.patch.resource),
+        ]
+        totals = {request.drill_tier: 1, request.inserter_tier: 1,
+                  request.furnace_tier: 1}
+    else:
+        entities.pop(ins_idx)                    # l'inserteur suivait le four
+        connections = []
+        totals = {request.drill_tier: 1}
 
     # 8. Bbox (sur les centres ; l'executor affinera avec les collisions réelles).
     xs = [e.x for e in entities]
