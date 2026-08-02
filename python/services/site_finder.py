@@ -684,6 +684,26 @@ def place_inserter_vers(api, cible: tuple[float, float], source: tuple[float, fl
     return None
 
 
+def _consomme_du_courant(api, machine) -> bool:
+    """Cette machine mange-t-elle des volts ou du charbon ? Vrai si on l'ignore.
+
+    Une garde ne tranche pas sur son propre silence : sans `describe`, sans nom, ou sur
+    une entité inconnue du jeu, on laisse passer plutôt que de priver de courant une
+    chaîne qui en a besoin.
+    """
+    nom = getattr(machine, "name", None)
+    if nom is None and isinstance(machine, dict):
+        nom = machine.get("name")
+    if not nom or not hasattr(api, "describe"):
+        return True
+    try:
+        e = ((api.describe(nom) or {}).get("entity") or {})
+    except Exception:
+        return True
+    source = e.get("energySource")
+    return not source or source == "electric"
+
+
 def place_supply_poles(api, machines, ancrage: tuple[float, float],
                        pole: str = "small-electric-pole",
                        portee: float = POLE_PORTEE,
@@ -696,7 +716,18 @@ def place_supply_poles(api, machines, ancrage: tuple[float, float],
     Une machine doit être dans la ZONE DE FOURNITURE d'un poteau pour consommer ou
     injecter du courant — être « à côté » de la ligne ne suffit pas. Et le poteau de
     desserte doit lui-même rester relié, sinon la chaîne forme son propre réseau.
+
+    ON NE DESSERT QUE CE QUI CONSOMME. Troisième chemin par lequel des poteaux naissaient
+    sans raison : la garde d'E43 protège `relier`, celle d'E44 le plan du LayoutPlanner,
+    et celui-ci passait entre les deux. Observé en jeu sur une chaîne entièrement à
+    charbon — foreuse burner, four en pierre, bras burner : trois poteaux posés pour
+    desservir des machines dont aucune n'a de connexion électrique. Le jeu le dit dans
+    `describe(nom)["entity"]["energySource"]` ; il suffit de le lui demander.
+
+    Comme ailleurs, on ne renonce que si l'on SAIT : une information absente laisse le
+    comportement inchangé.
     """
+    machines = [m for m in machines if _consomme_du_courant(api, m)]
     poses: list[tuple[float, float]] = []
     for m in machines:
         mx = getattr(m, "x", None)

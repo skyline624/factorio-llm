@@ -901,8 +901,15 @@ class Coordinator:
         # Les centrales sont observées à part : elles se posent au bord de l'eau, donc
         # hors de la zone de l'usine, et le diagnostic ne les voyait jamais. Mesuré :
         # deux boilers à sec, quatre centrales muettes à cent tuiles, production nulle.
+        # LE PARC AVANT LA ZONE. `rows_sup` existait pour les centrales, posées au bord de
+        # l'eau donc hors du disque observé ; le même remède vaut pour les machines, qui
+        # se posent sur les GISEMENTS — c'est-à-dire là où le minerai se trouve, pas là
+        # où l'agent a commencé. Mesuré en production : 18 machines à 92-97 tuiles du
+        # spawn, `machines=0` à tous les rayons, donc aucun symptôme et jamais de
+        # `ravitailler` malgré sept foreuses à sec.
         diag = diagnose_zone(self.api, self.zone[0], self.zone[1], self.rayon,
-                             rows_sup=perception.centrales(self.api))
+                             rows_sup=(perception.centrales(self.api)
+                                       + perception.parc(self.api)))
         etat = EtatUsine(machines=diag.machines, diagnostic=diag)
         # Un point du réseau suffit à savoir s'il y a du courant : on interroge la
         # première machine observée plutôt que toutes (chaque appel est un aller-retour).

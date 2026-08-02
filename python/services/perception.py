@@ -88,6 +88,35 @@ def centrales(api: ModApi,
     return [e for e in lignes if e.get("type") in types]
 
 
+def parc(api: ModApi,
+         types: tuple[str, ...] = ("mining-drill", "furnace", "assembling-machine",
+                                   "inserter", "lab")) -> list[dict]:
+    """Les machines de production de l'agent, OÙ QU'ELLES SOIENT.
+
+    Même service que `centrales`, pour la même raison, et c'est cette raison qui compte :
+    un diagnostic centré sur un point ne trouve que ce qui est près de ce point.
+
+    Mesuré au rush en production sur carte vierge : 18 machines posées entre 92 et 97
+    tuiles du spawn, et `diagnose_zone(0, 0, r)` rendait `machines=0` POUR TOUT r — même
+    150. Deux plafonds s'y opposaient, et aucun n'était le rayon de l'usine :
+
+      - `inspect_at` borne son rayon à 64 tuiles (`mod/scripts/tools.lua`) ;
+      - au-delà d'une soixantaine de tuiles le scan est saturé par le décor — 269 arbres
+        sur 293 lignes rendues.
+
+    Élargir le rayon du Coordinator ne pouvait donc rien donner. Ce qui manquait n'était
+    pas de la portée mais un CENTRE : on demande au jeu où sont les machines (une requête
+    filtrée par type, que le décor n'encombre pas), puis on lit leurs lignes complètes là
+    où elles sont. Le diagnostic, lui, a toujours fonctionné : amené au bon endroit, il
+    nomme `sans_combustible` du premier coup.
+
+    LIMITE ASSUMÉE : une usine étalée sur plus de 128 tuiles dépasserait à nouveau le
+    plafond d'`inspect_at`. Le jour où cela se mesure, il faudra découper en plusieurs
+    lectures plutôt qu'agrandir le rayon — l'agrandir est justement ce qui ne marche pas.
+    """
+    return centrales(api, types=types)
+
+
 def compter_machines(api: ModApi, x: float, y: float, rayon: float,
                      types: tuple[str, ...] = ("mining-drill", "furnace",
                                                "assembling-machine")) -> int:

@@ -19,6 +19,7 @@ Lancement :
 
 from __future__ import annotations
 
+import math
 import sys
 
 from agents.coordinator import EtatUsine, decide
@@ -1527,6 +1528,64 @@ def test_toute_construction_elargit_lusine_pas_seulement_les_chaines() -> None:
     assert ok
 
 
+def test_le_diagnostic_trouve_lusine_ou_quelle_soit() -> None:
+    """L'AGENT REGARDAIT UN DISQUE, PAS SON USINE.
+
+    Mesuré au rush en production : 18 machines posées entre 92 et 97 tuiles du spawn, et
+    `diagnose_zone(0, 0, r)` rend `machines=0` POUR TOUT r — y compris 150. Ce n'est pas
+    le rayon du Coordinator qui est en cause : `inspect_at` PLAFONNE à 64 tuiles
+    (`mod/scripts/tools.lua`, `math.min(radius, 64)`), et au-delà d'une soixantaine de
+    tuiles le scan est de toute façon saturé par les arbres (269 arbres sur 293 lignes).
+    Élargir le rayon ne pouvait donc rien donner — mon premier correctif visait la
+    mauvaise cause.
+
+    Le diagnostic fonctionne parfaitement quand on l'amène au bon endroit :
+    `diagnose_zone(80, 46, 10)` rend 3 machines et nomme `sans_combustible`. Ce qui
+    manque n'est pas de la portée mais un CENTRE : il faut demander au jeu où sont les
+    machines avant de les inspecter.
+
+    Le précédent existe déjà pour les centrales (`perception.centrales`, qui les trouve
+    « OÙ QU'ELLES SOIENT » via `find_entities_filtered` puis les lit par `inspect_at`).
+    On généralise ce patron au parc de production.
+    """
+    from services import perception
+
+    class _ApiParc:
+        """Le jeu connaît la position de ses machines ; le scan aveugle, non."""
+
+        class _Rcon:
+            def query_lua(self, code):
+                # Le jeu répond la bbox du parc, loin du spawn.
+                return "80,45,82,49"
+
+        def __init__(self):
+            self.rcon = self._Rcon()
+            self.demandes: list = []
+
+        def inspect_at(self, x, y, radius=0.5):
+            self.demandes.append((round(x), round(y), round(radius)))
+            # Le plafond du mod : au-delà de 64, on ne rend rien d'utile.
+            if math.hypot(x, y) > 64 and radius > 64:
+                return {"entities": []}
+            return {"entities": [
+                {"name": "burner-mining-drill", "type": "mining-drill",
+                 "status": "no_fuel", "x": 81, "y": 45},
+                {"name": "stone-furnace", "type": "furnace",
+                 "status": "no_ingredients", "x": 81, "y": 49}]}
+
+    api = _ApiParc()
+    trouvees = perception.parc(api)
+    types = {e.get("type") for e in trouvees}
+    # On a bien interrogé AUTOUR DU PARC, pas autour du spawn.
+    centre_vise = api.demandes[0][:2] if api.demandes else (0, 0)
+    ok = (len(trouvees) == 2 and types == {"mining-drill", "furnace"}
+          and math.hypot(centre_vise[0] - 81, centre_vise[1] - 47) < 5)
+    rec("test_le_diagnostic_trouve_lusine_ou_quelle_soit", ok,
+        f"{len(trouvees)} machine(s) {sorted(types)} — inspection centrée sur "
+        f"{centre_vise} (le parc est en ~(81,47), le spawn en (0,0))")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -1569,6 +1628,7 @@ def main() -> int:
         test_on_ne_tire_pas_de_ligne_vers_une_machine_a_charbon,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
+        test_le_diagnostic_trouve_lusine_ou_quelle_soit,
     ]
     for t in tests:
         t()
