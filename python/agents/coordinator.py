@@ -131,8 +131,24 @@ SEUIL_AUTOMATISATION = 2
 # elle « fonctionnait », et c'est pire : elle occupait tout son temps à ne rien faire.
 #
 # L'option n'est pas SUPPRIMÉE mais déclassée, comme celles dont le matériel manque :
-# l'agent tente autre chose, et y reviendra si le contexte change.
+# l'agent tente autre chose, et y reviendra passé la quarantaine ci-dessous.
 SEUIL_ABANDON = 3
+
+# COMBIEN DE TOURS UN ABANDON DURE. Sans lui, l'abandon est ABSORBANT : on y entre et on
+# n'en sort jamais. La seule sortie est de réussir ; pour réussir il faut être choisie ;
+# pour être choisie il ne faut pas être abandonnée. Mesuré le 02/08 sur 60 tours — les
+# bancs s'arrêtaient à 25, soit sept tours trop tôt pour le voir : au tour 33 les cinq
+# actions sont abandonnées et l'agent passe les 28 suivants sur `rien`, trois options
+# proposées et zéro faisable. Défaut ANCIEN : avant E40 le mur tombait au tour 30 (51 %
+# de chômage contre 46 %) — les correctifs d'aujourd'hui l'ont retardé, pas causé.
+#
+# Périmer « quand l'état change » ne suffirait pas : un agent bloqué ne change plus rien,
+# donc rien ne se périmerait. La péremption vient donc du TEMPS.
+#
+# Le délai se déduit d'un coût, il n'est pas réglé à l'essai : à une tentative tous les
+# huit tours, l'agent ne consacre jamais plus d'UN TOUR SUR HUIT — 12 % au pire — à une
+# action déjà jugée impossible. À comparer aux 46 % de chômage qu'on mesure sans lui.
+QUARANTAINE_TOURS = 8
 
 # Le combustible du bootstrap, et le stock en dessous duquel on cesse de dépanner à la
 # main. Amorcer un foreur burner et ses deux bras coûte une trentaine d'unités : si on
@@ -816,6 +832,9 @@ class Coordinator:
         self._echecs: dict = {}
         # Le même compte par ACTION seule — celui que les cibles successives masquaient.
         self._acharnement: dict = {}
+        # Quand chaque abandon a été prononcé, pour qu'il se périme au lieu de durer.
+        self._tour: int = 0
+        self._quarantaine: dict = {}
         # CE QU'IL REFAIT A LA MAIN. Un item qu'on fabrique encore et encore est un item
         # qu'aucune chaine ne produit : c'est le signal — mesurable, sans rien deviner —
         # qu'il faut industrialiser. Compter les fabrications REUSSIES le dit sans qu'on
@@ -3645,6 +3664,20 @@ class Coordinator:
         L'état rendu est relu après l'action : une décision n'est jugée que sur son
         effet, jamais sur le fait qu'elle ait été prise.
         """
+        # LES ABANDONS SE PÉRIMENT, et la levée précède la décision — sinon l'action
+        # libérée attendrait un tour de plus pour rien. Une action re-tentée qui échoue
+        # encore repart de zéro et sera re-abandonnée après SEUIL_ABANDON : la quarantaine
+        # borne le gaspillage sans jamais fermer une porte pour de bon.
+        self._tour += 1
+        for cle, tour_abandon in list(self._quarantaine.items()):
+            if self._tour - tour_abandon >= QUARANTAINE_TOURS:
+                self._quarantaine.pop(cle, None)
+                self._echecs.pop(cle, None)
+                self._acharnement.pop(cle[0], None)
+                self.journal.append(f"QUARANTAINE levée sur « {cle[0]} »"
+                                    + (f" / {cle[1]}@({cle[2]},{cle[3]})" if cle[1] else "")
+                                    + f" après {QUARANTAINE_TOURS} tours")
+
         etat = self.observer()
         d = figer_pendant(getattr(self, "api", None),
                           getattr(self, "pause_reflexion", False),
@@ -3711,8 +3744,11 @@ class Coordinator:
             if self._echecs[cle] == SEUIL_ABANDON:
                 ou = (f" sur {d.cible.name}@({d.cible.x},{d.cible.y})"
                       if d.cible is not None else "")
+                # L'abandon est daté : c'est ce qui le rend temporaire.
+                self._quarantaine[cle] = self._tour
                 self.journal.append(f"ABANDON de « {d.action} »{ou} après "
-                                    f"{SEUIL_ABANDON} échecs : {detail}")
+                                    f"{SEUIL_ABANDON} échecs, repris dans "
+                                    f"{QUARANTAINE_TOURS} tours : {detail}")
         if not agi:
             return d, agi, etat
         return d, agi, self.observer()

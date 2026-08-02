@@ -822,6 +822,8 @@ class _CoordFactice:
         self.ecarts: list = []
         self._echecs: dict = {}   # la mémoire d'acharnement, éprouvée à part
         self._acharnement: dict = {}     # son pendant par action seule, idem
+        self._tour: int = 0              # la quarantaine des abandons, idem
+        self._quarantaine: dict = {}
         self.run = Coordinator.run.__get__(self)
         self.tick = Coordinator.tick.__get__(self)
 
@@ -1013,6 +1015,7 @@ def test_ecart_journalise_quand_lattente_est_decue() -> None:
     c.journal, c.ecarts, c.arbitre = [], [], None
     c.constats, c.enqueteur = [], None      # l'enquête est éprouvée à part
     c._echecs, c._acharnement = {}, {}
+    c._tour, c._quarantaine = 0, {}
     c.remettre_en_etat = lambda e: False    # la réparation aussi
     c.observer = lambda: EtatUsine()
     c.agir = lambda d: (True, "factice")
@@ -1175,6 +1178,7 @@ def test_une_action_sans_effet_compte_comme_un_echec() -> None:
     c.journal, c.ecarts, c.arbitre = [], [], None
     c.constats, c.enqueteur = [], None
     c._echecs, c._acharnement = {}, {}
+    c._tour, c._quarantaine = 0, {}
     c.remettre_en_etat = lambda e: False     # la réparation ne rattrape rien
     c.observer = lambda: EtatUsine()
     c.agir = lambda d: (True, "posé sans broncher")   # l'action RÉUSSIT
@@ -1249,6 +1253,7 @@ def test_lacharnement_se_compte_par_action_pas_seulement_par_cible() -> None:
     c.journal, c.ecarts, c.arbitre = [], [], None
     c.constats, c.enqueteur = [], None
     c._echecs, c._acharnement = {}, {}
+    c._tour, c._quarantaine = 0, {}
     c.remettre_en_etat = lambda e: False
     c.observer = lambda: EtatUsine()
     c.agir = lambda d: (True, "vidée pour rien")
@@ -1313,6 +1318,65 @@ def test_lacharnement_est_inscrit_dans_la_raison_de_loption() -> None:
     assert ok
 
 
+def test_un_abandon_se_perime_au_lieu_detre_definitif() -> None:
+    """L'ABANDON EST ABSORBANT : on y entre, on n'en sort jamais.
+
+    Une action atteint SEUIL_ABANDON echecs, elle est declassee (`faisable=False`). La
+    seule sortie est de REUSSIR — mais pour reussir il faut etre choisie, et pour etre
+    choisie il ne faut pas etre abandonnee. Aucune sortie n'existe.
+
+    Mesure du 02/08, partie de 60 tours (les bancs a 25 tours s'arretaient sept tours
+    trop tot pour le voir) : au tour 33 les cinq actions sont abandonnees, et l'agent
+    passe les 28 tours suivants sur `rien` — trois options proposees, zero faisable.
+    Defaut ANCIEN : avant E40 le mur tombait au tour 30, 51 % de chomage.
+
+    Perimer « quand l'etat change » ne suffirait pas : un agent bloque ne change plus
+    rien, donc rien ne se perimerait. La peremption doit venir du TEMPS. Un abandon met
+    l'action en QUARANTAINE, il ne la supprime pas.
+    """
+    from agents.coordinator import (QUARANTAINE_TOURS, SEUIL_ABANDON, Coordinator,
+                                    Decision, EtatUsine)
+    from services.factory_doctor import Symptome
+    cible = Symptome(name="boiler", x=0.0, y=0.0, cause="sans_combustible",
+                     gravite=2, detail="vide")
+    api = _ApiMesure([{"name": "boiler", "x": 0.0, "y": 0.0, "status": "no_fuel"}])
+    c = _coord_mesure(api)
+    c.journal, c.ecarts, c.arbitre = [], [], None
+    c.constats, c.enqueteur = [], None
+    c._echecs, c._acharnement = {}, {}
+    c._tour, c._quarantaine = 0, {}
+    c.remettre_en_etat = lambda e: False
+    c.observer = lambda: EtatUsine()
+    c.agir = lambda d: (False, "impossible")       # l'action ECHOUE, toujours
+    c.tick = Coordinator.tick.__get__(c)
+    c._attente = Coordinator._attente.__get__(c)
+    cle = ("ravitailler", "boiler", 0, 0)
+
+    import agents.coordinator as mod
+    vrai_decide = mod.decide
+    mod.decide = lambda etat, arbitre=None: Decision(action="ravitailler", raison="",
+                                                     cible=cible)
+    try:
+        for _ in range(SEUIL_ABANDON):
+            c.tick()
+        abandonnee = c._echecs.get(cle, 0) >= SEUIL_ABANDON
+        # L'agent continue de tourner. Aujourd'hui il retenterait indefiniment cette
+        # action et la garderait indefiniment abandonnee : les deux sont des impasses.
+        # Apres la quarantaine, le compteur doit avoir ete PURGE — l'action redevient
+        # tentable, une fois, et sera re-abandonnee si elle echoue encore.
+        for _ in range(QUARANTAINE_TOURS + 1):
+            c.tick()
+        levee = c._echecs.get(cle, 0) < SEUIL_ABANDON
+    finally:
+        mod.decide = vrai_decide
+
+    ok = abandonnee and levee
+    rec("test_un_abandon_se_perime_au_lieu_detre_definitif", ok,
+        f"abandonnée après {SEUIL_ABANDON} échecs : {abandonnee} — "
+        f"levée après {QUARANTAINE_TOURS} tours : {levee} (compteur {c._echecs.get(cle)})")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -1351,6 +1415,7 @@ def main() -> int:
         test_evacuer_est_juge_sur_son_effet,
         test_lacharnement_se_compte_par_action_pas_seulement_par_cible,
         test_lacharnement_est_inscrit_dans_la_raison_de_loption,
+        test_un_abandon_se_perime_au_lieu_detre_definitif,
     ]
     for t in tests:
         t()
