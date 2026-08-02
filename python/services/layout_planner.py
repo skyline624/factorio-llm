@@ -1074,8 +1074,23 @@ def _place_stage(node, geometry, constraints, belt_speed, inserter_tp, inserter_
         u_beacon_pos = u_machine + offset_out_u + 1.0 + beacon_half_u
 
     # --- Poles : un tous les K machines (couverture supply_area) + un en fin ---
+    #
+    # UN POTEAU N'A DE SENS QUE S'IL ALIMENTE QUELQUE CHOSE. Observé en jeu : une chaîne
+    # entièrement à charbon — foreuses burner, fours en pierre, bras burner — se voyait
+    # doter de 21 poteaux. Il n'y avait pas de générateur, mais surtout pas un seul
+    # CONSOMMATEUR : la ligne n'aurait rien alimenté même reliée à une centrale. C'est le
+    # consommateur qui la justifie, pas la source.
+    #
+    # On ne renonce QUE si l'on sait : une géométrie dont aucune entité ne déclare sa
+    # source d'énergie laisse le comportement inchangé. Une garde ne tranche pas sur son
+    # propre silence — et les plans construits hors RCON n'ont pas cette information.
+    sources = [getattr(geometry.geometry(e.name), "energy_source", "") or ""
+               for e in entities if getattr(e, "role", "") in ("machine", "drill")]
+    renseignees = [s for s in sources if s]
+    aucun_consommateur = bool(renseignees) and not any(s == "electric" for s in renseignees)
+
     n_poles = 0
-    if gpole is not None and N > 0:
+    if gpole is not None and N > 0 and not aucun_consommateur:
         supply = gpole.supply_area
         if supply > 0:
             K = max(1, int(math.ceil((supply * 2.0) / (size_v + gap))))

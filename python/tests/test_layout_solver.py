@@ -203,6 +203,76 @@ def _gears_plan(rate: float = 5.0, terrain: Terrain | None = None,
 
 # ===== Tests =====
 
+def _geometrie_dont_energie(sources: dict):
+    """La géométrie de référence, avec la source d'énergie renseignée par entité."""
+    import dataclasses
+    geo = sample_geometry()
+    for nom, source in sources.items():
+        g = geo.geometry(nom)
+        if g is not None:
+            geo.set_geometry(dataclasses.replace(g, energy_source=source))
+    return geo
+
+
+def _plan_avec(geo, rate: float = 5.0):
+    from services.layout_planner import LayoutRequest, plan
+    from services.production_solver import ProductionRequest, solve
+    splan = solve(ProductionRequest("iron-gear-wheel", rate), sample_kb())
+    return plan(LayoutRequest(plan=splan, terrain=sample_terrain("iron-ore", 20),
+                              anchor=(0.0, 10.0), facing=2,
+                              constraints=LayoutConstraints()), geo)
+
+
+def test_pas_de_poteaux_quand_rien_ne_consomme() -> None:
+    """UN POTEAU N'A DE SENS QUE S'IL ALIMENTE QUELQUE CHOSE.
+
+    Observé en jeu le 02/08, second rush en production sur carte vierge : 21 poteaux au
+    sol pour une chaîne entièrement à charbon — foreuses burner, fours en pierre, bras
+    burner. Aucun générateur, et surtout AUCUN CONSOMMATEUR : le poteau n'aurait rien à
+    alimenter même si une centrale existait. C'est le consommateur qui justifie la ligne,
+    pas la source.
+
+    La garde posée dans `relier` (E43) ne couvrait que le raccordement après coup ; le
+    PLAN lui-même contient des poteaux, et l'executor les pose sans consulter personne.
+    Le vrai correctif est donc ici, un cran plus haut — et il se vérifie hors ligne.
+
+    Prudence assumée : on ne retire les poteaux que si l'on SAIT que rien ne consomme.
+    Une géométrie sans `energy_source` renseigné laisse le comportement inchangé — une
+    garde ne doit pas trancher sur son propre silence.
+    """
+    geo = _geometrie_dont_energie({
+        "assembling-machine-1": "burner", "stone-furnace": "burner",
+        "electric-mining-drill": "burner", "burner-inserter": "burner",
+        "transport-belt": "burner", "small-electric-pole": "electric"})
+    lp = _plan_avec(geo)
+    poteaux = [e for e in lp.entities if getattr(e, "role", "") == "pole"]
+    ok = not poteaux and lp.totals.get("small-electric-pole", 0) == 0
+    rec("aucun poteau quand aucune machine n'est électrique", ok,
+        f"{len(poteaux)} poteau(x) placé(s), totals="
+        f"{lp.totals.get('small-electric-pole', 0)} (attendu 0)")
+    assert ok
+
+
+def test_un_seul_consommateur_suffit_a_justifier_les_poteaux() -> None:
+    """Une seule machine électrique et la ligne redevient nécessaire — pour elle.
+
+    Le pendant du test précédent : la garde doit être exacte, pas prudente au point de
+    priver de courant une chaîne qui en a besoin. Elle vérifie aussi la back-compat, le
+    fixture d'origine ne renseignant aucune source d'énergie.
+    """
+    melange = _geometrie_dont_energie({
+        "assembling-machine-1": "electric", "stone-furnace": "burner",
+        "electric-mining-drill": "burner", "burner-inserter": "burner"})
+    avec = _plan_avec(melange)
+    muet = _plan_avec(sample_geometry())          # aucune source renseignée : inchangé
+    ok = (avec.totals.get("small-electric-pole", 0) > 0
+          and muet.totals.get("small-electric-pole", 0) > 0)
+    rec("un consommateur suffit, et le silence ne change rien", ok,
+        f"une machine électrique -> {avec.totals.get('small-electric-pole', 0)} poteau(x) ; "
+        f"géométrie muette -> {muet.totals.get('small-electric-pole', 0)} (back-compat)")
+    assert ok
+
+
 def test_five_gears_layout() -> None:
     print("\n[test] === 5 iron-gear-wheel/s : dimensionnement logistique + blueprint ===")
     lp = _gears_plan(5.0)
@@ -1806,6 +1876,8 @@ def main() -> int:
         test_replan_no_infinite_loop,
         test_back_compat_s3d_no_terrain_check,
         test_back_compat_s3d_empty_terrain,
+        test_pas_de_poteaux_quand_rien_ne_consomme,
+        test_un_seul_consommateur_suffit_a_justifier_les_poteaux,
     ]
     for t in tests:
         t()

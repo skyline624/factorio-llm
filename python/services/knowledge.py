@@ -1059,6 +1059,12 @@ class EntityGeometry:
     # Défauts 0 -> entités non-beacon inchangées (back-compat).
     module_slots: int = 0
     distribution_effectivity: float = 0.0
+    # « burner » | « electric » | "" si inconnu. UN POTEAU N'A DE SENS QUE S'IL ALIMENTE
+    # QUELQUE CHOSE : mesuré en jeu, une chaîne entièrement à charbon se voyait doter de
+    # 21 poteaux — aucun générateur, et surtout aucun CONSOMMATEUR. C'est le consommateur
+    # qui justifie la ligne, pas la source. Vide = on ne sait pas, et le planificateur
+    # garde alors son comportement : une garde ne tranche pas sur son propre silence.
+    energy_source: str = ""
 
 
 class GeometryBase:
@@ -1092,6 +1098,7 @@ class GeometryBase:
             w = fix.get("w", 1)
             h = fix.get("h", 1)
             fluid_boxes: list[dict] = []
+            energy_source = ""
             d = api.describe(name)
             if isinstance(d, dict) and isinstance(d.get("entity"), dict):
                 e = d["entity"]
@@ -1099,6 +1106,9 @@ class GeometryBase:
                 if isinstance(size, dict):
                     w = int(size.get("w", w) or w)
                     h = int(size.get("h", h) or h)
+                # Le jeu sait déjà si l'entité mange du charbon ou des volts ; sans cette
+                # lecture, le planificateur dote de poteaux une chaîne tout-burner.
+                energy_source = str(e.get("energySource") or "")
                 # S2a : fluid_boxes lues via RCON (source de vérité) pour validation live.
                 fb = e.get("fluid_boxes")
                 if isinstance(fb, list):
@@ -1129,6 +1139,7 @@ class GeometryBase:
                 output_port_dv=dict(fix.get("output_port_dv") or {}),
                 module_slots=module_slots,
                 distribution_effectivity=distribution_effectivity,
+                energy_source=energy_source,
             )
 
 
