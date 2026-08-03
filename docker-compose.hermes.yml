@@ -1,0 +1,38 @@
+# Hermes Agent — le JOUEUR, dans un conteneur jetable.
+#
+# Tout ce qui compte vit dans le DÉPÔT (`./hermes` : identité, config, skills, mémoire) ;
+# le conteneur ne contient rien de nous. Réinstaller la machine se réduit à cloner le
+# dépôt, installer Docker et relancer ce fichier — c'est la raison d'être du montage.
+#
+# Le serveur MCP tourne sur l'HÔTE, pas ici : il a besoin du Python du projet, du client
+# RCON et d'un accès au serveur Factorio. L'embarquer rendrait l'image non jetable, ce
+# qu'on veut précisément éviter. Le conteneur l'atteint par `host.docker.internal`, tout
+# comme il atteint Ollama.
+#
+#   docker compose -f docker-compose.hermes.yml run --rm hermes setup   # 1re fois
+#   docker compose -f docker-compose.hermes.yml run --rm hermes chat    # jouer
+#   docker compose -f docker-compose.hermes.yml up -d                   # mode passerelle
+
+services:
+  hermes:
+    image: nousresearch/hermes-agent:latest
+    container_name: factorio-hermes
+    stdin_open: true          # `chat` est interactif
+    tty: true
+    volumes:
+      # HERMES_HOME. Le conteneur écrit ici : config.yaml, SOUL.md, skills/, sessions/,
+      # mémoire. C'est versionné (sauf ce que .gitignore écarte), donc portable.
+      - ./hermes:/opt/data
+    extra_hosts:
+      # Sans cela, `host.docker.internal` ne résout pas sous Linux ; sous Docker Desktop
+      # c'est déjà le cas, mais l'écrire rend le fichier vrai sur les deux.
+      - "host.docker.internal:host-gateway"
+    ports:
+      # API compatible OpenAI + sonde de santé de la passerelle. Inutile en mode `chat`,
+      # nécessaire au tableau de bord et aux outils externes.
+      - "8642:8642"
+    environment:
+      # Ollama et le serveur MCP tournent sur l'hôte, pas dans le conteneur.
+      OLLAMA_HOST: "http://host.docker.internal:11434"
+    restart: unless-stopped
+    command: gateway run

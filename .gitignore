@@ -42,3 +42,16 @@ Thumbs.db
 *.swp
 # Reglages locaux de l'assistant CLI (permissions, agents) : propres au poste.
 .claude/
+# ===== Hermes Agent (le JOUEUR, conteneur jetable) =====
+# Ce qui est VERSIONNE : SOUL.md (son identite), config.yaml (modele + serveur MCP),
+# skills/ (ce qu'on lui enseigne et ce qu'il apprend). C'est ce qui rend le depot
+# portable : reinstaller la machine = cloner + `docker compose up`.
+#
+# Ce qui reste LOCAL : les secrets, et l'etat d'execution qui se recree.
+hermes/.env
+hermes/sessions/
+hermes/pending/
+hermes/logs/
+hermes/*.db
+hermes/*.db-*
+hermes/.no-bundled-skills
