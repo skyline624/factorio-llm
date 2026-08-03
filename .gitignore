@@ -81,3 +81,4 @@ hermes/skills/*
 hermes/cache/
 hermes/.skills_prompt_snapshot.json
 hermes/context_length_cache.yaml
+hermes/*.bak-*
