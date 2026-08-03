@@ -857,6 +857,14 @@ class Coordinator:
             except Exception:
                 arbitre = None      # pas de modèle : la boucle tourne quand même
         self.arbitre = arbitre
+        # L'ARBITRE PEUT REGARDER, à condition qu'on lui donne de quoi. `decide` est pure
+        # et n'a pas d'API à lui passer ; on la lui confie donc ici, une fois. S'il en a
+        # déjà une (test, sonde), on n'y touche pas. Sans elle il décide comme avant, sur
+        # ce qu'on lui pousse — c'était le cas jusqu'ici, et cela se voyait : on lui
+        # proposait de payer une recherche en lui cachant les flacons qu'il avait.
+        for cible in (arbitre, getattr(arbitre, "arbitre", None)):
+            if cible is not None and getattr(cible, "api", "absent") is None:
+                cible.api = api
         self.tourelle = tourelle
         self.munition = munition
         self.derniere_menace: Optional[Menace] = None

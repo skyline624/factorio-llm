@@ -287,6 +287,115 @@ def test_le_resume_ne_cache_rien_de_ce_qui_est_en_poche() -> None:
     assert ok
 
 
+class _ApiSonde:
+    """Une API de lecture, qui note ce qu'on lui demande."""
+
+    def __init__(self):
+        self.appels: list = []
+
+    def inspect_at(self, x, y, radius=0.5):
+        self.appels.append(("inspect_at", round(x), round(y)))
+        return {"entities": [{"name": "stone-furnace", "status": "full_output",
+                              "x": x, "y": y}]}
+
+    def get_power_state(self, x, y, radius=4.0):
+        self.appels.append(("get_power_state", round(x), round(y)))
+        return {"networkId": None, "connected": False}
+
+    def mine_entity(self, x, y):                      # DESTRUCTIF : hors liste blanche
+        self.appels.append(("mine_entity", round(x), round(y)))
+        return {"ok": True}
+
+
+class _ClientOutille:
+    """Demande d'abord une mesure, puis choisit — comme le ferait un modèle outillé."""
+
+    def __init__(self, scenario):
+        self.scenario, self.tour, self.vus = scenario, 0, []
+        client = self
+
+        class _Completions:
+            def create(self, **kw):
+                client.vus.append(kw)
+                r = client.scenario[min(client.tour, len(client.scenario) - 1)]
+                client.tour += 1
+                return r
+
+        self.chat = type("Chat", (), {"completions": _Completions()})()
+
+
+def _appel(nom, args, ident="c1"):
+    f = type("F", (), {"name": nom, "arguments": args})()
+    return type("A", (), {"id": ident, "type": "function", "function": f})()
+
+
+def test_larbitre_peut_mesurer_avant_de_choisir() -> None:
+    """L'AGENT QUI CONSTATE A SIX SONDES ; CELUI QUI DÉCIDE N'EN AVAIT AUCUNE.
+
+    Relevé : `Enqueteur` expose `inspect_at`, `get_power_state`, `can_place_check`,
+    `get_tile`, `scan_patch`, `suivre_flux` — et trouve cinq pannes sur six sans fausse
+    piste. `LLMArbitre` n'exposait que `choisir` : il recevait un résumé poussé par le
+    code et ne pouvait rien regarder. Impossible de lui demander « qu'y a-t-il dans ce
+    four ? » avant de trancher entre le vider et bâtir autre chose.
+
+    Le patron de l'enquêteur est repris tel quel — liste blanche, arguments filtrés,
+    sortie tronquée — et les sondes restent en LECTURE SEULE : un arbitre qui minerait
+    des entités ne serait plus un arbitre.
+    """
+    api = _ApiSonde()
+    scenario = [
+        _Reponse([_appel("inspect_at", '{"x": 10, "y": 4}')]),
+        _Reponse([_appel("choisir", '{"indice": 1, "raison": "le four est plein"}')]),
+    ]
+    c = _ClientOutille(scenario)
+    a = LLMArbitre(cfg=_Cfg(), client=c)
+    i = a(_Etat(), _options(), api=api)
+
+    mesure_faite = ("inspect_at", 10, 4) in api.appels
+    resultat_rendu = any(
+        any(m.get("role") == "tool" for m in kw.get("messages", []))
+        for kw in c.vus)
+    ok = i == 1 and mesure_faite and resultat_rendu and c.tour == 2
+    rec("test_larbitre_peut_mesurer_avant_de_choisir", ok,
+        f"mesures={api.appels} — résultat renvoyé au modèle={resultat_rendu} — indice={i}")
+    assert ok
+
+
+def test_un_outil_hors_liste_blanche_est_refuse_sans_etre_execute() -> None:
+    """Une sonde est une LECTURE. Miner, poser, régler une recette n'en sont pas.
+
+    Le modèle propose un nom d'outil ; rien ne garantit qu'il s'en tienne à ceux qu'on
+    lui a décrits. Le refus doit précéder l'exécution — pas la constater après coup.
+    """
+    api = _ApiSonde()
+    scenario = [
+        _Reponse([_appel("mine_entity", '{"x": 3, "y": 3}')]),
+        _Reponse([_appel("choisir", '{"indice": 0, "raison": "faute de mieux"}')]),
+    ]
+    a = LLMArbitre(cfg=_Cfg(), client=_ClientOutille(scenario))
+    i = a(_Etat(), _options(), api=api)
+    ok = i == 0 and api.appels == [] and any("refus" in j.lower() for j in a.journal)
+    rec("test_un_outil_hors_liste_blanche_est_refuse_sans_etre_execute", ok,
+        f"appels sur l'API={api.appels} (attendu aucun) — journal={a.journal[-1:]}")
+    assert ok
+
+
+def test_les_mesures_sont_bornees_et_le_repli_tient() -> None:
+    """Un modèle qui mesure sans fin bloquerait la boucle.
+
+    Le budget épuisé n'est pas une panne : on retombe sur `options[0]`, la décision du
+    moteur seul — la règle « toute défaillance rend 0 » vaut aussi ici.
+    """
+    api = _ApiSonde()
+    boucle = [_Reponse([_appel("inspect_at", '{"x": 1, "y": 1}')])] * 20
+    a = LLMArbitre(cfg=_Cfg(), client=_ClientOutille(boucle), budget=3)
+    i = a(_Etat(), _options(), api=api)
+    ok = i == 0 and len(api.appels) <= 3 and a.replis == 1
+    rec("test_les_mesures_sont_bornees_et_le_repli_tient", ok,
+        f"{len(api.appels)} mesure(s) pour un budget de 3 — indice={i} replis={a.replis}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_choix_valide_est_suivi,
@@ -300,6 +409,9 @@ def main() -> int:
         test_le_taux_ne_compte_que_les_tours_prononces,
         test_resumes_lisibles,
         test_le_resume_ne_cache_rien_de_ce_qui_est_en_poche,
+        test_larbitre_peut_mesurer_avant_de_choisir,
+        test_un_outil_hors_liste_blanche_est_refuse_sans_etre_execute,
+        test_les_mesures_sont_bornees_et_le_repli_tient,
     ]
     for t in tests:
         t()

@@ -32,6 +32,8 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+from services.outils_llm import mesurer, schema_outils
+
 SYSTEM_PROMPT = (
     "Tu arbitres les décisions d'un agent autonome qui construit une usine Factorio.\n"
     "On te donne l'état de l'usine et une liste d'actions DÉJÀ VALIDÉES par le moteur "
@@ -50,6 +52,53 @@ SYSTEM_PROMPT = (
 # de contenu : un prompt a ses limites, mais c'est au plus abondant de rester, pas à une
 # liste de noms décidée d'avance de choisir ce que le modèle a le droit de savoir.
 MAX_ITEMS_RESUMES = 25
+
+# LES SONDES DE L'ARBITRE — en LECTURE SEULE, et c'est la condition pour qu'il reste un
+# arbitre : il désigne une option, il ne va pas miner de son propre chef.
+#
+# Relevé avant de les ajouter : l'agent qui CONSTATE (`Enqueteur`) disposait de six
+# sondes et trouvait cinq pannes sur six ; celui qui DÉCIDE n'en avait aucune. On lui
+# demandait de trancher entre vider une machine, bâtir une chaîne ou aller miner, sans
+# qu'il puisse regarder ce que cette machine contenait — « des plaques dorment dans ce
+# four » lui était invisible.
+#
+# On reste au strict nécessaire : chaque sonde coûte un aller-retour (~3 s). Ce sont les
+# questions qu'un joueur se pose avant d'agir — qu'y a-t-il là, y a-t-il du courant, ce
+# gisement est-il encore bon, qu'ai-je produit, que sais-je faire.
+SONDES: dict[str, dict] = {
+    "inspect_at": {
+        "description": "Ce qui est POSÉ à une position : nom, type, statut, direction. "
+                       "Sert à voir ce qu'une machine contient ou pourquoi elle est "
+                       "arrêtée avant de décider quoi faire d'elle.",
+        "params": {"x": "number", "y": "number", "radius": "number"},
+        "requis": ["x", "y"],
+    },
+    "get_power_state": {
+        "description": "État électrique autour d'une position : networkId (absent = "
+                       "personne ne l'a reliée), production et consommation.",
+        "params": {"x": "number", "y": "number", "radius": "number"},
+        "requis": ["x", "y"],
+    },
+    "scan_patch": {
+        "description": "Gisements d'une ressource : count, bbox et un échantillon de "
+                       "tuiles trié du plus proche au plus lointain. Pour savoir si "
+                       "aller extraire vaut le déplacement.",
+        "params": {"resource": "string", "radius": "number"},
+        "requis": ["resource"],
+    },
+    "production_stats": {
+        "description": "Ce que l'usine a réellement produit et consommé. Distingue une "
+                       "chaîne qui tourne d'une chaîne qui a l'air de tourner.",
+        "params": {"item": "string"},
+        "requis": [],
+    },
+    "get_technologies": {
+        "description": "Technologies acquises et recherches disponibles avec leur coût. "
+                       "Pour savoir ce qu'une recherche ouvrirait avant de la payer.",
+        "params": {},
+        "requis": [],
+    },
+}
 
 CHOISIR_TOOL = {
     "type": "function",
@@ -134,7 +183,33 @@ class LLMArbitre:
     `client` est injectable : les tests n'ont besoin ni de réseau ni de clé.
     """
 
-    def __init__(self, cfg=None, client=None):
+    # Mesures autorisées avant de rendre la main. L'enquêteur s'en accorde huit ; un
+    # arbitrage est plus pressé — la boucle attend, et chaque aller-retour coûte trois
+    # secondes réelles.
+    BUDGET = 4
+
+    def _sonde_demandee(self, resp):
+        """(nom, args, id) si le modèle réclame une MESURE, None s'il choisit.
+
+        `choisir` traverse : c'est la réponse attendue, pas une sonde.
+        """
+        try:
+            appels = getattr(resp.choices[0].message, "tool_calls", None) or []
+        except (AttributeError, IndexError, TypeError):
+            return None
+        for a in appels:
+            nom = getattr(getattr(a, "function", None), "name", "")
+            if not nom or nom == "choisir":
+                return None
+            brut = getattr(a.function, "arguments", "{}")
+            try:
+                args = json.loads(brut) if isinstance(brut, str) else (brut or {})
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            return nom, (args if isinstance(args, dict) else {}), getattr(a, "id", "m")
+        return None
+
+    def __init__(self, cfg=None, client=None, budget: Optional[int] = None, api=None):
         # La construction est partagée avec l'enquêteur : deux composants ont besoin d'un
         # modèle, et deux copies du même code garantiraient que la prochaine correction
         # n'en atteigne qu'une.
@@ -146,6 +221,14 @@ class LLMArbitre:
         # ce compteur, un modèle injoignable se lit « le modèle est d'accord », c'est-à-dire
         # la conclusion la plus flatteuse pour ce qu'on essaie de mesurer.
         self.replis = 0
+        # Combien de fois il a REGARDÉ avant de trancher. Un arbitre qui ne mesure jamais
+        # décide sur ce qu'on lui pousse ; le savoir change la lecture d'une A/B.
+        self.mesures = 0
+        self.budget = budget if budget is not None else self.BUDGET
+        # `decide` est PURE : elle n'a pas d'API à passer. L'arbitre porte donc la sienne,
+        # que le Coordinator lui confie à la construction. Sans elle, il décide comme
+        # avant — sur ce qu'on lui pousse, sans rien pouvoir regarder.
+        self.api = api
         self._client, self.cfg = construire_client(cfg, client, self.journal)
 
     def _repli(self, motif: str) -> int:
@@ -153,27 +236,63 @@ class LLMArbitre:
         self.journal.append(f"repli : {motif}")
         return 0
 
-    def __call__(self, etat, options) -> int:
+    def __call__(self, etat, options, api=None) -> int:
+        """Choisit une option. Avec `api`, le modèle peut MESURER avant de trancher.
+
+        Sans `api` le comportement est celui d'avant — un aller-retour, un choix : les
+        appelants qui n'ont rien à sonder ne paient rien de plus.
+        """
         if not options:
             return 0
         if self._client is None:
             return self._repli("aucun client LLM")
-        try:
-            resp = self._client.chat.completions.create(
-                model=getattr(self.cfg, "openai_model", "gpt-4o-mini"),
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content":
-                        f"État de l'usine :\n{resumer_etat(etat)}\n\n"
-                        f"Options possibles :\n{resumer_options(options)}\n\n"
-                        f"Choisis l'option à exécuter maintenant."},
-                ],
-                tools=[CHOISIR_TOOL],
-                tool_choice="auto",
-                max_tokens=getattr(self.cfg, "llm_max_tokens", 512),
-            )
-        except Exception as e:
-            return self._repli(f"modèle injoignable ({type(e).__name__})")
+        api = api if api is not None else self.api
+
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content":
+                f"État de l'usine :\n{resumer_etat(etat)}\n\n"
+                f"Options possibles :\n{resumer_options(options)}\n\n"
+                + ("Tu peux d'abord MESURER ce qui te manque, puis choisir.\n"
+                   if api is not None else "")
+                + "Choisis l'option à exécuter maintenant."},
+        ]
+        outils = (schema_outils(SONDES, CHOISIR_TOOL) if api is not None
+                  else [CHOISIR_TOOL])
+
+        # UNE MESURE, PUIS UNE AUTRE, PUIS LE CHOIX — et un budget, sans quoi un modèle
+        # qui mesure sans fin bloquerait la boucle. Le budget épuisé n'est pas une panne :
+        # on retombe sur `options[0]`, la décision du moteur seul.
+        resp = None
+        for _ in range(max(1, self.budget) + 1):
+            try:
+                resp = self._client.chat.completions.create(
+                    model=getattr(self.cfg, "openai_model", "gpt-4o-mini"),
+                    messages=messages,
+                    tools=outils,
+                    tool_choice="auto",
+                    max_tokens=getattr(self.cfg, "llm_max_tokens", 512),
+                )
+            except Exception as e:
+                return self._repli(f"modèle injoignable ({type(e).__name__})")
+
+            appel = self._sonde_demandee(resp) if api is not None else None
+            if appel is None:
+                break
+            if self.mesures >= self.budget:
+                # Le budget est un plafond de MESURES, pas d'allers-retours : une de plus
+                # serait exactement ce que le plafond doit empêcher.
+                return self._repli(f"budget de {self.budget} mesure(s) épuisé sans choix")
+            nom, args, ident = appel
+            resultat = mesurer(api, SONDES, nom, args, self.journal)
+            self.mesures += 1
+            self.journal.append(f"mesure {nom}({args}) -> {resultat[:70]}")
+            messages.append({"role": "assistant", "tool_calls": [
+                {"id": ident, "type": "function",
+                 "function": {"name": nom, "arguments": json.dumps(args)}}]})
+            messages.append({"role": "tool", "tool_call_id": ident, "content": resultat})
+        else:
+            return self._repli(f"budget de {self.budget} mesure(s) épuisé sans choix")
 
         indice, raison = self._lire(resp)
         if indice is None:
