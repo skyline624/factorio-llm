@@ -50,8 +50,29 @@ Thumbs.db
 # Ce qui reste LOCAL : les secrets, et l'etat d'execution qui se recree.
 hermes/.env
 hermes/sessions/
+# Les skills FOURNIES avec l'image sont redeployees a chaque `hermes update` : les
+# versionner ajoute 160 000 lignes de contenu tiers a notre historique sans rien rendre
+# plus portable. Seules les NOTRES sont suivies (voir l'exception plus bas).
+hermes/skills/
+hermes/backups/
+hermes/lazy-packages/
+hermes/skins/
+hermes/workspace/
+hermes/home/
+hermes/memories/
+hermes/plans/
+hermes/platforms/
+hermes/cron/
+hermes/hooks/
+hermes/pairing/
 hermes/pending/
 hermes/logs/
 hermes/*.db
 hermes/*.db-*
 hermes/.no-bundled-skills
+
+# EXCEPTION : ce qu'on ecrit nous-memes pour apprendre a Hermes a jouer. C'est la seule
+# partie de skills/ qui compte pour la portabilite du depot.
+!hermes/skills/
+hermes/skills/*
+!hermes/skills/factorio/
