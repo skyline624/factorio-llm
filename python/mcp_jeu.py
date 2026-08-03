@@ -34,17 +34,43 @@ import os
 from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from services.outils_llm import tronquer
 
-HOTE = os.environ.get("FL_MCP_HOST", "127.0.0.1")
+# `0.0.0.0` et non `127.0.0.1` : le conteneur Hermes atteint l'hôte par
+# `host.docker.internal`, ce qui n'est PAS la loopback. Écouter seulement sur 127.0.0.1
+# rend le serveur invisible depuis le conteneur — il répond parfaitement aux essais
+# locaux et Hermes ne voit aucun outil.
+#
+# Conséquence assumée : le port est ouvert sur le réseau local. Ce serveur pilote un jeu,
+# sans secret ni accès disque arbitraire, et la machine de développement n'est pas
+# exposée — mais si elle l'était, il faudrait le refermer par `FL_MCP_HOST=127.0.0.1` et
+# passer par un réseau Docker dédié.
+HOTE = os.environ.get("FL_MCP_HOST", "0.0.0.0")
 PORT = int(os.environ.get("FL_MCP_PORT", "8765"))
 RCON_HOTE = os.environ.get("FL_RCON_HOST", "127.0.0.1")
 RCON_PORT = int(os.environ.get("FL_RCON_PORT", "27015"))
 RCON_MDP = os.environ.get("FL_RCON_PASSWORD", "factoriollm")
 
+# LE CONTENEUR N'ARRIVE PAS PAR LA LOOPBACK. Le SDK refuse par défaut tout en-tête `Host`
+# inconnu — une protection contre le DNS rebinding, saine dans un navigateur. Depuis
+# Docker, l'appel arrive avec `Host: host.docker.internal` et se voit répondre
+# « HTTP 421 Misdirected Request » : la connexion aboutit, le serveur la rejette, et
+# Hermes ne voit simplement aucun outil sans qu'aucune erreur ne l'explique.
+#
+# On autorise donc explicitement les hôtes par lesquels on sait qu'on sera appelé, plutôt
+# que de désactiver la protection.
+_SECURITE = TransportSecuritySettings(
+    allowed_hosts=[f"host.docker.internal:{PORT}", f"127.0.0.1:{PORT}",
+                   f"localhost:{PORT}", f"host.docker.internal", "127.0.0.1",
+                   "localhost"],
+    allowed_origins=["*"],
+)
+
 mcp = FastMCP(
     "factorio",
+    transport_security=_SECURITE,
     instructions=(
         "Les mains d'un joueur de Factorio. Tu demandes des RÉSULTATS — « bâtis une "
         "chaîne de fer », « diagnostique cette zone » — jamais des positions : le "

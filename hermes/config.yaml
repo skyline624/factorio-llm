@@ -1686,3 +1686,18 @@ updates:
 #     command: "cat /run/user/1000/hermes-secrets.env"
 #     helper_timeout_seconds: 3
 #     override_existing: false             # .env/shell win by default
+
+# ===== Les mains du joueur (factorio-llm) =====
+# Le serveur MCP tourne sur l'HOTE, pas dans ce conteneur : il lui faut le Python du
+# projet, le client RCON et un acces au serveur Factorio. L'embarquer dans l'image la
+# rendrait non jetable, ce qu'on veut precisement eviter -- le depot porte tout, le
+# conteneur n'est qu'un moteur interchangeable.
+#
+# Le lancer AVANT Hermes, depuis le depot :
+#     cd python && python mcp_jeu.py
+#
+# `host.docker.internal` est resolu par `extra_hosts` dans docker-compose.hermes.yml.
+mcp_servers:
+  factorio:
+    url: http://host.docker.internal:8765/mcp
+    timeout: 180
