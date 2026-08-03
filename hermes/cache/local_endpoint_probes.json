@@ -1,0 +1,10 @@
+{
+"server_type:http://host.docker.internal:11434":{
+"value":"ollama",
+"ts":1785770301.4622161
+},
+"ollama_num_ctx:http://host.docker.internal:11434|glm-5.2:cloud":{
+"value":1000000,
+"ts":1785770306.0449288
+}
+}
