@@ -76,3 +76,8 @@ hermes/.no-bundled-skills
 !hermes/skills/
 hermes/skills/*
 !hermes/skills/factorio/
+# Caches d'execution recrees par Hermes a chaque demarrage (sondes de point de
+# terminaison, schemas MCP, longueurs de contexte, empreinte du prompt de skills).
+hermes/cache/
+hermes/.skills_prompt_snapshot.json
+hermes/context_length_cache.yaml
