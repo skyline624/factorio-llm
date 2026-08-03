@@ -1731,6 +1731,76 @@ def test_sans_combustible_pour_amorcer_on_va_en_chercher() -> None:
     assert ok
 
 
+def test_evacuer_s_approche_avant_de_vider() -> None:
+    """ON NE VIDE PAS UNE MACHINE À TRENTE TUILES, ET LE MODE TEST LE CACHAIT.
+
+    Le mod refuse toute interaction au-delà de `reach_distance + 2` — sauf en test :
+
+        local function out_of_reach(char, target, kind)
+          if player_mod.is_test_mode() then return false end   -- aucune portée
+          max_d = p.reach_distance + 2                          -- ~10 tuiles en prod
+
+    `evacuer` appelait `empty_output_at` sans jamais s'approcher. `verify_evacuation_e21`
+    passe donc 7/7 en test, et en production l'action échoue à chaque fois : mesuré au
+    rush, **66 tours sur 120** passés à tenter de vider un four hors de portée, jusqu'à
+    l'abandon. Quatrième défaut que `test_mode` masque, après la portée de pose, le
+    diagnostic et le plafond d'`inspect_at`.
+
+    Le remède est celui que la pose applique depuis longtemps (`execute_micro(...,
+    approach=True)`) : s'approcher d'abord. On ne marche que si c'est nécessaire — une
+    machine déjà à portée ne doit pas coûter un déplacement.
+    """
+    from agents.coordinator import Coordinator, Decision
+    from services import deplacement as mod_depl
+    from services.factory_doctor import Symptome
+
+    class _ApiVide(_ApiMesure):
+        def __init__(self):
+            super().__init__([])
+            self.vidages: list = []
+
+        def empty_output_at(self, x, y, nom):
+            self.vidages.append((round(x), round(y), nom))
+            return {"ok": True}
+
+        def run_action(self, fn, *a, timeout=None):
+            return fn(*a) if callable(fn) else {"ok": True}
+
+    marches: list = []
+    vrai_pos, vrai_marcher = mod_depl.position, mod_depl.marcher_vers
+    mod_depl.position = lambda api: (0.0, 0.0)          # l'agent est au spawn
+    mod_depl.marcher_vers = lambda api, x, y, **k: (marches.append((x, y)) or (x, y))
+    try:
+        # Cible LOINTAINE : il faut y aller.
+        api = _ApiVide()
+        c = _coord_mesure(api)
+        c.journal, c._evacuations = [], {}
+        c.agir = Coordinator.agir.__get__(c)
+        loin = Symptome(name="stone-furnace", x=80.0, y=45.0, cause="sortie_bloquee",
+                        gravite=1, detail="pleine")
+        ok_loin, _ = c.agir(Decision(action="evacuer", raison="", cible=loin))
+        marche_faite = list(marches)
+
+        # Cible PROCHE : marcher serait du temps perdu.
+        marches.clear()
+        api2 = _ApiVide()
+        c2 = _coord_mesure(api2)
+        c2.journal, c2._evacuations = [], {}
+        c2.agir = Coordinator.agir.__get__(c2)
+        pres = Symptome(name="stone-furnace", x=3.0, y=2.0, cause="sortie_bloquee",
+                        gravite=1, detail="pleine")
+        ok_pres, _ = c2.agir(Decision(action="evacuer", raison="", cible=pres))
+    finally:
+        mod_depl.position, mod_depl.marcher_vers = vrai_pos, vrai_marcher
+
+    ok = (ok_loin and marche_faite == [(80.0, 45.0)] and api.vidages
+          and ok_pres and not marches and api2.vidages)
+    rec("test_evacuer_s_approche_avant_de_vider", ok,
+        f"cible à 92 tuiles -> marche {marche_faite or 'AUCUNE'} ; "
+        f"cible à 4 tuiles -> marche {marches or 'aucune (correct)'}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -1777,6 +1847,7 @@ def main() -> int:
         test_une_recherche_qu_on_ne_peut_automatiser_se_paie_a_la_main,
         test_payer_la_recherche_fabrique_et_porte_les_flacons,
         test_sans_combustible_pour_amorcer_on_va_en_chercher,
+        test_evacuer_s_approche_avant_de_vider,
     ]
     for t in tests:
         t()

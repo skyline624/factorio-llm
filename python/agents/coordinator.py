@@ -185,6 +185,13 @@ COMBUSTIBLE = "coal"
 # Remonté au niveau module (l'attribut de classe le reprend) : `enumerer_options` est une
 # fonction PURE et ne peut pas lire un attribut d'instance.
 AMORCE_CHAINE_BURNER = 20
+
+# Portée d'INTERACTION du personnage (`reach_distance + 2` côté mod). Au-delà, le jeu
+# refuse de vider, remplir, miner ou régler une recette — mais `out_of_reach` rend
+# toujours faux en `test_mode`, si bien que les bancs passent et que les mêmes gestes
+# échouent en jeu. On prend une marge : arriver pile à la limite laisserait la moindre
+# dérive de position hors de portée.
+PORTEE_INTERACTION = 8.0
 RESERVE_AMORCE = 40
 
 # Matériel indispensable à une action. Sans lui, elle échouera à l'exécution — la
@@ -1276,6 +1283,13 @@ class Coordinator:
 
         c = d.cible
         if d.action == "ravitailler":
+            # Même contrainte que pour `evacuer` : remplir est un geste de la MAIN, et le
+            # mod le refuse au-delà de la portée d'interaction. La machine à ravitailler
+            # est sur son gisement, donc loin — sans approche, l'action échoue toujours en
+            # production et toujours pas en test.
+            if not self._approcher(c.x, c.y):
+                return False, (f"{c.name}@({c.x},{c.y}) : impossible de s'en approcher "
+                               f"assez pour la ravitailler")
             r = self.api.run_action(self.api.move_items_at, self.combustible, c.name,
                                     c.x, c.y, 50, True, timeout=30.0)
             ok = isinstance(r, dict) and r.get("ok") is True
@@ -1325,6 +1339,11 @@ class Coordinator:
             # Dépannage : on enlève ce qui bouche. Chaque vidage est COMPTÉ, car c'est
             # sa répétition qui distingue l'incident du manque structurel — au-delà de
             # SEUIL_AUTOMATISATION, `enumerer_options` propose `batir_evacuation`.
+            # S'APPROCHER D'ABORD : le mod refuse au-delà de la portée d'interaction, et
+            # le four à vider est sur le gisement, donc à des dizaines de tuiles.
+            if not self._approcher(c.x, c.y):
+                return False, (f"sortie de {c.name}@({c.x},{c.y}) : impossible de "
+                               f"s'en approcher assez pour la vider")
             r = self.api.run_action(self.api.empty_output_at, c.x, c.y, c.name,
                                     timeout=20.0)
             ok = isinstance(r, dict) and r.get("ok") is True
@@ -3183,6 +3202,30 @@ class Coordinator:
             poses += 1 if ok else 0
         return (f"{poses} ramassage(s) posé(s)"
                 + (f", {deja} déjà servi(s)" if deja else ""))
+
+    def _approcher(self, x: float, y: float, portee: float = PORTEE_INTERACTION) -> bool:
+        """Va jusqu'à (x, y) si c'est hors de portée d'interaction. Vrai si on y est.
+
+        LE MOD REFUSE TOUTE INTERACTION AU-DELÀ DE `reach_distance + 2` — sauf en test,
+        où `out_of_reach` rend toujours faux. C'est ce qui fait passer les bancs et échouer
+        les mêmes gestes en jeu : mesuré au rush, `evacuer` a occupé 66 tours sur 120 à
+        tenter de vider un four hors de portée, jusqu'à l'abandon.
+
+        La pose applique ce remède depuis longtemps (`execute_micro(..., approach=True)`) ;
+        il manquait aux gestes de la main. On ne marche que si c'est nécessaire — une
+        machine déjà à portée ne doit pas coûter un déplacement.
+        """
+        from services import deplacement
+        try:
+            cx, cy = deplacement.position(self.api)
+            if math.hypot(x - cx, y - cy) <= portee:
+                return True
+            ax, ay = deplacement.marcher_vers(self.api, x, y)
+            return math.hypot(x - ax, y - ay) <= portee
+        except Exception as e:
+            self.journal.append(f"approche de ({x:.0f},{y:.0f}) impossible : "
+                                f"{type(e).__name__}")
+            return False
 
     def _englober(self, x: float, y: float) -> None:
         """Étend l'usine jusqu'au chantier. Le centre ne bouge pas, le rayon suit.
