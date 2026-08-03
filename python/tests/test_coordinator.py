@@ -721,8 +721,14 @@ def test_options_une_par_cause() -> None:
                   _m("electric-mining-drill", 0, 12, "full_output")])
     options = enumerer_options(etat)
     actions = [o.action for o in options]
-    ok = (len(options) == 3 and set(actions) == {"ravitailler", "regler_recette", "evacuer"}
-          # L'ordre par défaut reste le curriculum : les pannes graves d'abord.
+    # Une réparation par cause, PLUS les voies concurrentes du combustible — remplir,
+    # bâtir la chaîne, aller extraire — qui sont un choix et non un verdict. Elles
+    # n'apparaissent qu'UNE fois quel que soit le nombre de machines à sec, sans quoi dix
+    # pannes donneraient trente options et noieraient l'arbitre.
+    ok = (set(actions) >= {"ravitailler", "regler_recette", "evacuer"}
+          and len(actions) == len(set(actions))          # aucun doublon
+          # L'ordre par défaut reste le curriculum : les pannes graves d'abord, et la
+          # conséquence (`evacuer`) en dernier.
           and options[-1].action == "evacuer")
     rec("test_options_une_par_cause", ok, f"{actions}")
     assert ok
@@ -750,7 +756,10 @@ def test_arbitre_choisit_une_autre_option() -> None:
                   _m("assembling-machine-1", 0, 6, "no_recipe")])
     options = enumerer_options(etat)
     d = decide(etat, arbitre=lambda e, opts: 1)
-    ok = (len(options) == 2 and d.action == options[1].action
+    # `>= 2` et non `== 2` : une machine à sec ouvre désormais trois voies (remplir,
+    # bâtir la chaîne, aller extraire) au lieu d'une seule tranchée par un seuil. Ce
+    # que ce test protège est que l'arbitre L'EMPORTE sur le défaut, pas le compte.
+    ok = (len(options) >= 2 and d.action == options[1].action
           and d.action != options[0].action)
     rec("test_arbitre_choisit_une_autre_option", ok,
         f"défaut={options[0].action} -> arbitre={d.action}")
@@ -795,7 +804,11 @@ def test_arbitre_non_appele_sans_choix() -> None:
         return 0
 
     decide(_etat([_m("electric-furnace", 0, 0, "working")]), arbitre=_compte)  # « rien »
-    decide(_etat([_m("electric-furnace", 0, 0, "no_fuel")]), arbitre=_compte)  # 1 panne
+    # `no_recipe` et non `no_fuel` : depuis que le combustible ouvre trois voies
+    # (remplir / bâtir la chaîne / aller extraire), une machine à sec n'est plus un
+    # cas « sans choix ». La propriété testée — pas d'appel quand il n'y a rien à
+    # arbitrer — est inchangée ; c'est la mise en scène qui devait suivre.
+    decide(_etat([_m("assembling-machine-1", 0, 0, "no_recipe")]), arbitre=_compte)
     sans_choix = len(appels)
     decide(_etat([_m("electric-furnace", 0, 0, "no_fuel"),
                   _m("assembling-machine-1", 0, 6, "no_recipe")]), arbitre=_compte)
@@ -1062,9 +1075,13 @@ def test_acharnement_declasse_apres_trois_echecs() -> None:
     d_apres = decide(etat)
     relegue = next(o for o in apres if o.action == "ravitailler")
 
+    # Le COMPTE d'options n'est plus le critère : le combustible en ouvre plusieurs.
+    # Ce qui doit tenir est que l'option ratée soit DÉCLASSÉE sans disparaître —
+    # priorité nulle, `faisable=False`, et le moteur choisit autre chose.
     ok = (avant[0].action == "ravitailler" and d_avant.action == "ravitailler"
-          and apres[-1].action == "ravitailler" and d_apres.action == "evacuer"
-          and not relegue.faisable and len(apres) == len(avant))
+          and not relegue.faisable and relegue.priorite == 0
+          and d_apres.action != "ravitailler"
+          and len(apres) == len(avant))
     rec("test_acharnement_declasse_apres_trois_echecs", ok,
         f"{d_avant.action} -> {d_apres.action} après {SEUIL_ABANDON} échecs ; "
         f"l'option reste proposée en dernier ({len(apres)} options)")
@@ -1078,8 +1095,10 @@ def test_arbitrage_trace_meme_sans_arbitre() -> None:
     rien : `decide` n'appelle pas l'arbitre quand il n'y a qu'une option, et l'on
     conclurait « le modèle n'apporte pas » sans le lui avoir demandé une seule fois.
     """
-    seule = decide(_etat([_m("stone-furnace", 0, 0, "no_fuel")]))
-    deux = decide(_etat([_m("stone-furnace", 0, 0, "no_fuel"),
+    # Une panne SANS voie concurrente : le combustible en ouvre trois depuis qu'on
+    # énumère au lieu de trancher, il ne peut donc plus illustrer « une seule option ».
+    seule = decide(_etat([_m("assembling-machine-1", 0, 0, "no_recipe")]))
+    deux = decide(_etat([_m("assembling-machine-1", 0, 0, "no_recipe"),
                          _m("electric-furnace", 0, 8, "full_output")]))
     ok = (seule.arbitrage is not None and seule.arbitrage.options == 1
           and not seule.arbitrage.arbitrable and not seule.arbitrage.appele
@@ -1714,20 +1733,19 @@ def test_sans_combustible_pour_amorcer_on_va_en_chercher() -> None:
     from agents.coordinator import (AMORCE_CHAINE_BURNER, COMBUSTIBLE, enumerer_options)
     lignes = [_m("burner-mining-drill", 0, 0, "no_fuel")]
 
-    # Assez pour amorcer une chaîne : le comportement mesuré ne doit pas changer.
-    assez = enumerer_options(_etat(lignes, inventaire={COMBUSTIBLE: 25}))
-    a_assez = next((o for o in assez if o.cible is not None), None)
+    # LES MAINS VIDES, REMPLIR N'EST PAS UNE OPTION LÉGALE. Le déterministe garde la main
+    # sur le POSSIBLE — c'est la part qui ne se délègue pas : proposer « remplir » sans
+    # rien en poche ferait perdre un tour à l'arbitre, quel que soit son jugement.
+    rien = enumerer_options(_etat(lignes, inventaire={COMBUSTIBLE: 0}))
+    remplir_propose = any(o.action == "ravitailler" for o in rien)
+    chercher = next((o for o in rien
+                     if o.action == "fabriquer" and o.item == COMBUSTIBLE), None)
 
-    # Trop peu pour quoi que ce soit : il faut aller en chercher.
-    presque_rien = enumerer_options(_etat(lignes, inventaire={COMBUSTIBLE: 4}))
-    a_rien = next((o for o in presque_rien
-                   if o.action == "fabriquer" and o.item == COMBUSTIBLE), None)
-
-    ok = (a_assez is not None and a_assez.action == "approvisionner"
-          and a_rien is not None and a_rien.quantite >= AMORCE_CHAINE_BURNER)
+    ok = (not remplir_propose and chercher is not None
+          and chercher.quantite >= AMORCE_CHAINE_BURNER)
     rec("test_sans_combustible_pour_amorcer_on_va_en_chercher", ok,
-        f"25 en poche -> {a_assez.action if a_assez else 'AUCUNE'} ; "
-        f"4 en poche -> {a_rien.action + '×' + str(a_rien.quantite) if a_rien else 'AUCUNE'}")
+        f"0 en poche -> remplir proposé : {remplir_propose} (attendu False) ; "
+        f"{chercher.action + '×' + str(chercher.quantite) if chercher else 'AUCUNE extraction'}")
     assert ok
 
 
@@ -1801,6 +1819,51 @@ def test_evacuer_s_approche_avant_de_vider() -> None:
     assert ok
 
 
+def test_le_combustible_offre_un_choix_au_lieu_dun_verdict() -> None:
+    """ON NE LAISSAIT RIEN À CHOISIR, PUIS ON REPROCHAIT AU MODÈLE DE MAL CHOISIR.
+
+    « J'ai 37 charbons, ma foreuse est à sec : je remplis, ou je garde pour amorcer une
+    chaîne ? » est un ARBITRAGE. Le code y répondait par des seuils empilés — 20, puis 40
+    — et ne proposait qu'une seule option, déjà tranchée. Le modèle ne voyait jamais
+    l'alternative : ce n'est pas qu'il choisissait mal, on ne lui laissait rien.
+
+    C'est contraire au contrat du projet — *le déterministe énumère les options légales,
+    le modèle en désigne une* — et c'est une des raisons pour lesquelles l'A/B ne
+    départageait rien (+2 % en médiane, dans le bruit).
+
+    Mesuré en jeu, le blocage que produisait le seuil : 37 charbons en poche, foreuse à
+    `fuel:0`, et `fabriquer` joué 108 tours sur 120 parce que remplir était refusé pour
+    épargner une réserve... qu'il avait.
+
+    Le déterministe garde la main sur le POSSIBLE — faisabilité, matériel, abandons — et
+    l'ORDRE reste le sien : sans arbitre, `decide` choisit exactement comme avant.
+    """
+    from agents.coordinator import COMBUSTIBLE, enumerer_options
+    lignes = [_m("burner-mining-drill", 0, 0, "no_fuel")]
+
+    riche = _etat(lignes, inventaire={COMBUSTIBLE: 37})
+    options = enumerer_options(riche)
+    actions = [o.action for o in options if o.cible is not None or o.item == COMBUSTIBLE]
+
+    a_remplir = any(o.action == "ravitailler" for o in options)
+    a_batir = any(o.action == "approvisionner" for o in options)
+    a_miner = any(o.action == "fabriquer" and o.item == COMBUSTIBLE for o in options)
+
+    # Les faits doivent voyager avec l'option : un arbitre ne juge pas sur un verbe.
+    chiffre = any("37" in (o.raison or "") for o in options)
+
+    # SANS ARBITRE, RIEN NE CHANGE : la branche déterministe est déjà mesurée, ce
+    # chantier ne doit pas lui coûter un point.
+    d = decide(riche)
+    ordre_tenu = d.action == options[0].action
+
+    ok = a_remplir and a_batir and a_miner and chiffre and ordre_tenu
+    rec("test_le_combustible_offre_un_choix_au_lieu_dun_verdict", ok,
+        f"options={actions} — remplir={a_remplir} bâtir={a_batir} miner={a_miner} — "
+        f"stock cité={chiffre} — déterministe inchangé={ordre_tenu} ({d.action})")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -1848,6 +1911,7 @@ def main() -> int:
         test_payer_la_recherche_fabrique_et_porte_les_flacons,
         test_sans_combustible_pour_amorcer_on_va_en_chercher,
         test_evacuer_s_approche_avant_de_vider,
+        test_le_combustible_offre_un_choix_au_lieu_dun_verdict,
     ]
     for t in tests:
         t()

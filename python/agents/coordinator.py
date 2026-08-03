@@ -540,6 +540,9 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
     # (gravité, puis conséquences en dernier) fixe l'ordre par défaut.
     for c in causes:
         action, explication = REPARATION.get(c.cause, ("inspecter", "cause inconnue"))
+        # Les VOIES CONCURRENTES pour la même panne, ajoutées après l'option principale
+        # afin de ne pas déplacer celle que le déterministe préfère.
+        alternatives: list[Decision] = []
         # Ce que l'action doit se procurer, quand elle en réclame. Une décision qui ne
         # porte que le nom d'un item en demande une unité — mesuré, la chaîne n'était
         # jamais alimentée parce que « huit en poche suffisaient toujours ».
@@ -548,36 +551,55 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
         # d'approvisionnement qui manque. On arrête de remplir et on construit.
         deja = etat.ravitaillements.get((c.name, round(c.x), round(c.y)), 0)
         stock = etat.inventaire.get(COMBUSTIBLE, 0)
+        # ÉNUMÉRER, NE PAS TRANCHER. « J'ai 37 charbons, ma foreuse est à sec : je
+        # remplis, ou je garde pour amorcer une chaîne ? » est un ARBITRAGE, pas un fait.
+        # Le code y répondait par des seuils empilés (20, puis 40) et ne proposait qu'une
+        # option déjà choisie : le modèle ne voyait jamais l'alternative. Ce n'est pas
+        # qu'il choisissait mal — on ne lui laissait rien à choisir.
+        #
+        # Mesuré : 37 charbons en poche, foreuse à `fuel:0`, et `fabriquer` joué 108 tours
+        # sur 120 parce que remplir était refusé pour épargner une réserve qu'il avait.
+        #
+        # Le déterministe garde ce qui lui revient — ce qui est POSSIBLE, et l'ORDRE de
+        # préférence : `ravitailler` reste en tête par `PRIORITE["reparer"]`, donc sans
+        # arbitre la branche déterministe est inchangée. Les faits voyagent dans la
+        # raison : un arbitre ne juge pas sur un verbe.
         if action == "ravitailler" and deja >= SEUIL_AUTOMATISATION:
+            # CECI N'EST PAS UN ARBITRAGE, c'est un fait appris : après deux pleins à la
+            # main sur la MÊME machine, un troisième ne répare rien. Mesuré en partie
+            # longue — 4 vidages manuels sur un four en 952 tours, la chaîne bouchée à
+            # chaque fois entre-temps. La bascule reste donc déterministe ; ce qui suit,
+            # en revanche, est un vrai choix.
             action = "approvisionner"
             explication = (f"déjà ravitaillée {deja} fois à la main — il lui faut une "
                            f"chaîne, pas un remplissage de plus")
-        elif action == "ravitailler" and stock < AMORCE_CHAINE_BURNER:
-            # ON NE GARDE PAS UNE RÉSERVE QU'ON N'A PAS. La règle ci-dessous — épargner
-            # le stock pour amorcer une chaîne — suppose qu'il reste de quoi amorcer.
-            # En dessous d'une amorce, elle enferme : remplir est refusé pour protéger un
-            # capital inexistant, et `approvisionner` réclame précisément ce qui manque.
-            #
-            # Mesuré sur carte vierge, kit vanilla : foreuse `no_fuel`, 0 combustible
-            # dedans, 4 charbons en poche — et l'agent minant 85 minerais de fer À LA
-            # MAIN pendant que sa chaîne dormait. Ni remplir ni construire n'était
-            # proposé, et rien ne disait d'aller simplement en miner.
-            #
-            # Il sait pourtant le faire : `fabriquer` « se procure : miner, fondre,
-            # crafter », et le bootstrap va chercher son charbon à deux cents tuiles. La
-            # capacité existait, la décision manquait.
-            action = "fabriquer"
-            item_voulu, quantite_voulue = COMBUSTIBLE, AMORCE_CHAINE_BURNER
-            explication = (f"{stock} {COMBUSTIBLE} en poche : trop peu pour remplir ou "
-                           f"pour amorcer quoi que ce soit — il faut aller en chercher")
-        elif action == "ravitailler" and stock < RESERVE_AMORCE:
-            # Mesuré : deux remplissages manuels ont vidé le stock, et la chaîne qui
-            # aurait rendu la machine autonome n'a plus pu être amorcée — l'agent avait
-            # brûlé en dépannage le combustible qui le libérait. Ce qui reste vaut plus
-            # comme amorce que comme dernier plein.
-            action = "approvisionner"
-            explication = (f"il ne reste que {stock} {COMBUSTIBLE} : les garder pour "
-                           f"amorcer une chaîne plutôt que les brûler en un plein")
+        elif action == "ravitailler":
+            explication = (f"{explication} ({stock} {COMBUSTIBLE} en poche, "
+                           f"amorcer une chaîne en coûte {AMORCE_CHAINE_BURNER})")
+            if stock <= 0:
+                # Sans rien en poche, remplir n'est pas une option légale : le
+                # déterministe garde la main sur le POSSIBLE.
+                action, item_voulu, quantite_voulue = ("fabriquer", COMBUSTIBLE,
+                                                       AMORCE_CHAINE_BURNER)
+                explication = (f"{c.name} est à sec et il ne reste aucun {COMBUSTIBLE} : "
+                               f"il faut aller en chercher avant tout")
+            else:
+                # Les deux AUTRES voies, proposées à côté — pas à la place.
+                alternatives.append(Decision(
+                    action="approvisionner",
+                    raison=(f"{c.name} : bâtir la chaîne de {COMBUSTIBLE} plutôt que la "
+                            f"remplir encore — amorce {AMORCE_CHAINE_BURNER}, "
+                            f"{stock} en poche"),
+                    priorite=PRIORITE["reparer"], cible=c))
+                # SANS CIBLE : aller extraire du combustible ne vise aucune machine en
+                # particulier, il remplit la poche. Lui coller une cible brouillerait
+                # l'association cible → action dont la mémoire d'échecs dépend.
+                alternatives.append(Decision(
+                    action="fabriquer",
+                    raison=(f"aller extraire du {COMBUSTIBLE} pour tenir la durée "
+                            f"({stock} en poche)"),
+                    priorite=PRIORITE["reparer"],
+                    item=COMBUSTIBLE, quantite=AMORCE_CHAINE_BURNER))
         # Le même raisonnement à l'autre bout de la machine. Une sortie qu'on vide sans
         # cesse n'est pas un incident qui se répète : c'est un ramassage qui manque.
         # Mesuré : 4 vidages manuels sur le même four en 952 tours, et la chaîne bouchée
@@ -599,6 +621,23 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
                     + (f" — ÉCHOUÉ {rates} fois, on n'insiste plus" if renonce else "")),
             priorite=0 if renonce else PRIORITE["reparer"], cible=c,
             faisable=not renonce, item=item_voulu, quantite=quantite_voulue))
+        # Les alternatives suivent, et portent la MÊME mémoire d'échecs : proposer en
+        # deuxième ce qui a échoué trois fois tromperait l'arbitre autant qu'en premier.
+        #
+        # UNE SEULE FOIS, quel que soit le nombre de machines à sec : « remplir, bâtir la
+        # chaîne, ou aller miner » est un choix GLOBAL sur le combustible. Le répéter par
+        # foreuse donnerait trente options pour dix pannes et noierait l'arbitre — le
+        # contraire de ce qu'on cherche.
+        for autre in alternatives:
+            if any(o.action == autre.action for o in options):
+                continue
+            cle = ((autre.action, c.name, round(c.x), round(c.y)) if autre.cible is not None
+                   else (autre.action, "", 0, 0))
+            autre.faisable = etat.echecs.get(cle, 0) < SEUIL_ABANDON
+            if not autre.faisable:
+                autre.priorite = 0
+                autre.raison += f" — ÉCHOUÉ {etat.echecs[cle]} fois, on n'insiste plus"
+            options.append(autre)
 
     # Défense : deux niveaux d'urgence, cf. PRIORITE. Le ThreatModel a déjà tranché
     # le « faut-il » (la pollution déclenche les vagues, pas la proximité des nids) ;
