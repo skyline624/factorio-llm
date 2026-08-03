@@ -137,8 +137,13 @@ def test_le_prompt_contient_letat_et_les_options_numerotees() -> None:
     p = c.dernier_prompt
     ok = ("[0] ravitailler" in p and "[1] defendre" in p and "[2] batir_production" in p
           and "machines en service : 3" in p and "coal=42" in p
-          # Ce qui n'aide pas à choisir n'a rien à faire dans le prompt.
-          and "bois-inutile" not in p)
+          # CE TEST EXIGEAIT L'INVERSE, et c'était le défaut : il vérifiait que
+          # « bois-inutile » soit ABSENT, c'est-à-dire que le résumé filtre l'inventaire
+          # sur une liste de noms écrite d'avance. Mesuré en jeu, cette liste a caché au
+          # modèle les dix flacons qui payaient précisément la recherche qu'on lui
+          # proposait. On ne décide pas à sa place de ce qui « aide à choisir » : il voit
+          # ce qu'il a, et trie lui-même.
+          and "bois-inutile=3" in p)
     rec("test_le_prompt_contient_letat_et_les_options_numerotees", ok,
         f"{len(p)} caractères, options numérotées={'[1] defendre' in p}")
     assert ok
@@ -232,6 +237,56 @@ def test_resumes_lisibles() -> None:
     assert ok
 
 
+def test_le_resume_ne_cache_rien_de_ce_qui_est_en_poche() -> None:
+    """UNE LISTE EN DUR DÉCIDE DE CE QUE LE MODÈLE PEUT SAVOIR.
+
+    Relevé en jeu, dernier rush : l'option proposée était « chercher automation — coût
+    10 × automation-science-pack », l'agent en avait EXACTEMENT dix en poche, et son
+    inventaire affiché s'arrêtait à `coal=37`. Le modèle ne pouvait pas savoir qu'il
+    tenait déjà de quoi payer.
+
+    La cause était six mots écrits il y a des semaines :
+
+        utiles = ("coal", "gun-turret", "firearm-magazine", "iron-plate",
+                  "small-electric-pole", "electric-mining-drill")
+
+    Quand le modèle « choisit mal » dans ces conditions, on ne mesure pas son jugement :
+    on mesure cette liste. C'est aussi ce qui rendait l'A/B de ce matin muette (+2 % en
+    médiane, dans le bruit).
+
+    La règle : **ce qu'une option met en jeu doit figurer dans l'état.** On montre donc
+    l'inventaire tel qu'il est. Tronquer par QUANTITÉ reste permis — un écran a ses
+    limites — mais jamais par une liste de noms choisie d'avance.
+    """
+    class _EtatRiche:
+        machines = 3
+        reseau = None
+        production_kw = 0.0
+        diagnostic = None
+        menace = None
+        # Le cas réel : les flacons qui paient la recherche, et le laboratoire.
+        inventaire = {"coal": 37, "automation-science-pack": 10, "lab": 1,
+                      "copper-plate": 3, "iron-gear-wheel": 24}
+
+    texte = resumer_etat(_EtatRiche())
+    montres = [n for n in _EtatRiche.inventaire if n in texte]
+    ok_inv = set(montres) == set(_EtatRiche.inventaire)
+
+    # Et le module lui-même ne doit plus porter de liste d'items en dur.
+    import inspect as _inspect
+
+    import services.arbitre as _arb
+    src = _inspect.getsource(_arb)
+    en_dur = [n for n in ("gun-turret", "firearm-magazine", "small-electric-pole",
+                          "electric-mining-drill") if f'"{n}"' in src or f"'{n}'" in src]
+
+    ok = ok_inv and not en_dur
+    rec("test_le_resume_ne_cache_rien_de_ce_qui_est_en_poche", ok,
+        f"{len(montres)}/{len(_EtatRiche.inventaire)} item(s) visible(s) ; "
+        f"noms en dur restants : {en_dur or 'aucun'}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_choix_valide_est_suivi,
@@ -244,6 +299,7 @@ def main() -> int:
         test_un_repli_nest_pas_un_accord,
         test_le_taux_ne_compte_que_les_tours_prononces,
         test_resumes_lisibles,
+        test_le_resume_ne_cache_rien_de_ce_qui_est_en_poche,
     ]
     for t in tests:
         t()

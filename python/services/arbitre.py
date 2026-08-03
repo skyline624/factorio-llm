@@ -46,6 +46,11 @@ SYSTEM_PROMPT = (
     "En cas de doute, choisis l'option 0."
 )
 
+# Combien d'items de l'inventaire tiennent dans le résumé. Une borne de TAILLE, jamais
+# de contenu : un prompt a ses limites, mais c'est au plus abondant de rester, pas à une
+# liste de noms décidée d'avance de choisir ce que le modèle a le droit de savoir.
+MAX_ITEMS_RESUMES = 25
+
 CHOISIR_TOOL = {
     "type": "function",
     "function": {
@@ -82,12 +87,39 @@ def resumer_etat(etat) -> str:
     menace = getattr(etat, "menace", None)
     if menace is not None:
         lignes.append(f"menace : {menace}")
-    inv = getattr(etat, "inventaire", None) or {}
-    utiles = ("coal", "gun-turret", "firearm-magazine", "iron-plate",
-              "small-electric-pole", "electric-mining-drill")
-    notables = {k: v for k, v in inv.items() if k in utiles and v}
-    if notables:
-        lignes.append("inventaire : " + ", ".join(f"{k}={v}" for k, v in notables.items()))
+    # CE QUE L'ÉTAT PORTE DÉJÀ ET QU'ON JETAIT. Ces champs sont collectés à chaque
+    # observation ; les taire revient à demander un arbitrage en cachant l'enjeu.
+    marche = getattr(etat, "marche", None)
+    if marche:
+        cout = getattr(etat, "marche_cout", "")
+        lignes.append(f"recherche visée : {marche}" + (f" (coût : {cout})" if cout else ""))
+    manque = getattr(etat, "a_fournir", ()) or ()
+    if manque:
+        lignes.append("rien ne produit encore : " + ", ".join(str(m) for m in manque))
+    debit, objectif = getattr(etat, "debit", None), getattr(etat, "objectif", None)
+    if debit is not None and objectif is not None:
+        lignes.append(f"débit {debit:.2f}/s pour {objectif:.2f} demandés")
+    besoins = getattr(etat, "besoins_production", ()) or ()
+    if besoins:
+        lignes.append("pour bâtir une chaîne il faut : "
+                      + ", ".join(f"{n}×{q}" for n, q in besoins))
+
+    # L'INVENTAIRE ENTIER, sans liste de noms choisie d'avance. Mesuré en jeu : l'option
+    # proposée était « chercher automation — coût 10 × automation-science-pack », l'agent
+    # en avait EXACTEMENT dix en poche, et le résumé s'arrêtait à `coal=37` parce que les
+    # flacons ne figuraient pas dans une liste de six mots écrite des semaines plus tôt.
+    # Le modèle ne pouvait pas savoir qu'il tenait déjà de quoi payer.
+    #
+    # Ce qu'une option met en jeu doit figurer dans l'état. On tronque donc par QUANTITÉ
+    # — un prompt a ses limites — jamais par nom : le plus abondant d'abord, et le compte
+    # de ce qui déborde plutôt qu'un silence.
+    inv = {k: v for k, v in (getattr(etat, "inventaire", None) or {}).items() if v}
+    if inv:
+        tries = sorted(inv.items(), key=lambda kv: (-kv[1], kv[0]))
+        montres = tries[:MAX_ITEMS_RESUMES]
+        reste = len(tries) - len(montres)
+        lignes.append("inventaire : " + ", ".join(f"{k}={v}" for k, v in montres)
+                      + (f" (+{reste} autre(s))" if reste > 0 else ""))
     return "\n".join(lignes)
 
 
