@@ -74,6 +74,29 @@ fabriquant les flacons À LA MAIN — `chercher_une_technologie` le fait pour to
 
 Un bras ou un convoyeur n'est jamais une cause racine : ce sont des organes de transit.
 
+## `se_procurer` débloque, il ne produit pas
+
+`se_procurer` mine, fond et fabrique **à ta place, à la main**. C'est ce qu'il faut pour
+sortir du néant — obtenir le premier inserteur, les premières plaques, de quoi poser une
+machine. Ce n'est **jamais** une façon de produire.
+
+Mesuré à la première partie : 60 plaques de fer obtenues ainsi, et pas une seule machine
+au sol. Soixante plaques faites à la main ne valent pas une foreuse qui tourne : la
+première fois qu'un produit t'est demandé en quantité, la réponse est
+`batir_une_chaine`, pas `se_procurer`.
+
+La règle : `se_procurer` pour ce qui **manque une fois** ; `batir_une_chaine` pour ce qui
+doit **continuer d'arriver**.
+
+## Bâtir prend du temps — ce n'est pas une panne
+
+`batir_une_chaine` marche jusqu'au gisement (parfois cent tuiles), pose, amorce, raccorde
+et met en route. Plusieurs minutes de temps réel peuvent s'écouler sans réponse.
+
+Mesuré : un appel coupé trop tôt s'est lu comme « le serveur est tombé » alors qu'il
+construisait. Si un appel de construction est long, il travaille — attends-le. Ne conclus
+à une panne que si un appel de LECTURE (`etat_du_jeu`, `regarder`) échoue lui aussi.
+
 ## Ce qui trompe
 
 **Une action « réussie » n'a pas forcément servi.** Poser un coffre rend `OK` même si la

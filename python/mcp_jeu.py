@@ -87,14 +87,27 @@ _ETAT: dict[str, Any] = {"api": None, "coord": None}
 def _api():
     """Le lien vers le jeu, ouvert à la première demande et gardé ensuite.
 
-    Ouvrir une connexion RCON par appel d'outil coûterait plus cher que l'outil lui-même,
-    et le singleton du projet garde une connexion morte après un redémarrage du serveur —
-    on le reconstruit donc si le lien ne répond plus.
+    LE LIEN SURVIT MAL AUX REDÉMARRAGES. Restaurer une carte relance le serveur Factorio,
+    et le singleton RCON garde alors une connexion morte : tous les outils répondent
+    « connexion refusée » jusqu'à ce qu'on relance le serveur MCP à la main. Comme une
+    partie commence justement par une carte neuve, le cas est la règle, pas l'exception.
+    On sonde donc le lien et on le rouvre s'il est tombé — une seule fois, sans boucler.
     """
     from core.mod_api import ModApi
     from core.rcon import get_rcon
+
+    def _neuf():
+        return ModApi(get_rcon(RCON_HOTE, RCON_PORT, RCON_MDP))
+
     if _ETAT["api"] is None:
-        _ETAT["api"] = ModApi(get_rcon(RCON_HOTE, RCON_PORT, RCON_MDP))
+        _ETAT["api"] = _neuf()
+        return _ETAT["api"]
+    try:
+        _ETAT["api"].rcon.query_lua("rcon.print(1)")
+    except Exception:
+        # Le serveur a redémarré sous nos pieds : on repart d'un lien neuf, et le
+        # Coordinator qui tenait l'ancien doit être reconstruit avec lui.
+        _ETAT["api"], _ETAT["coord"] = _neuf(), None
     return _ETAT["api"]
 
 

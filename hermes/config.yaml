@@ -163,7 +163,13 @@ updates:
 mcp_servers:
   factorio:
     url: http://host.docker.internal:8765/mcp
-    timeout: 180
+    # 180 s NE SUFFISENT PAS. Batir une chaine, en production, c'est marcher jusqu'au
+    # gisement (parfois cent tuiles), poser, amorcer, raccorder, evacuer : plusieurs
+    # minutes de temps reel. Mesure a la premiere partie : l'appel a ete coupe a 180 s,
+    # Hermes a vu « transport is down » et a conclu que le serveur etait tombe -- alors
+    # qu'il tournait toujours et construisait. Un timeout trop court ne se lit pas comme
+    # un timeout : il se lit comme une panne.
+    timeout: 900
 plugins:
   enabled: []
 
