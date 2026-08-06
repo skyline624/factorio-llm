@@ -3757,7 +3757,16 @@ class Coordinator:
                 return False, (f"aucun bras disponible pour évacuer {cible.name}, "
                                f"et « {bras} » n'a pas pu être fabriqué")
         if not inv.get(coffre, 0):
-            return False, f"aucun {coffre} pour recevoir la sortie de {cible.name}"
+            # TROISIÈME PIÈCE DE LA MÊME FAMILLE. Après la foreuse (H15) et le bras
+            # (H20), le coffre : on LIT l'inventaire et on renonce, alors qu'un
+            # `wooden-chest` coûte deux bûches et que le bois est récoltable depuis H11.
+            # Mesuré en direct partie 11 — Hermes bâtit, diagnostique, appelle
+            # `reparer('batir_evacuation')` de lui-même, et reçoit « aucun wooden-chest ».
+            self._assurer_stock(coffre, 1)
+            inv = (self.api.get_state() or {}).get("inventory", {}) or {}
+            if not inv.get(coffre, 0):
+                return False, (f"aucun {coffre} pour recevoir la sortie de {cible.name}, "
+                               f"et il n'a pas pu être fabriqué")
 
         essais: list[str] = []
         # Les distances croissent parce que l'emprise varie : un four 2×2 et une

@@ -2359,6 +2359,50 @@ def test_l_evacuation_fabrique_le_bras_qui_lui_manque() -> None:
     assert ok
 
 
+def test_l_evacuation_fabrique_le_coffre_qui_lui_manque() -> None:
+    """TROISIÈME FOIS LE MÊME DÉFAUT : on LIT l'inventaire au lieu de FORGER.
+
+    Partie 11 d'Hermes, en direct. Il bâtit sa chaîne (29 entités, 10 machines en
+    service, 200 plaques), diagnostique 4 machines sur 10 en panne, et appelle
+    `reparer('batir_evacuation')` de lui-même — le comportement qu'on visait depuis le
+    début. Réponse :
+
+        ÉCHEC — aucun wooden-chest pour recevoir la sortie de machine
+
+    Après la foreuse (H15) et le bras (H20), c'est le coffre. Le même schéma à chaque
+    fois : une pièce absente, une méthode qui lit l'inventaire et renonce, alors que
+    l'agent sait la fabriquer. Un `wooden-chest` coûte deux bûches, et le bois est
+    récoltable depuis H11 — mesuré 5/5 en jeu le jour même.
+
+    Ce que ça coûte : la machine de tête se remplit, `full_output`, et toute la mine
+    s'arrête derrière elle.
+    """
+    from agents.coordinator import Coordinator
+
+    demandes = []
+
+    class _ApiVide:
+        def get_state(self):
+            return {"inventory": {"burner-inserter": 1}, "tick": 1, "ready": True}
+
+    c = _coord_mesure(_ApiVide())
+    c.journal = []
+    c.fabriquer = lambda item, combien=1: (demandes.append((item, combien)),
+                                           (False, "pas de bois"))[1]
+    c._assurer_stock = Coordinator._assurer_stock.__get__(c)
+    c.batir_evacuation = Coordinator.batir_evacuation.__get__(c)
+
+    from services.factory_doctor import Symptome
+    _, motif = c.batir_evacuation(
+        Symptome(name="stone-furnace", x=0.0, y=0.0, cause="sortie_pleine",
+                 gravite=1, detail=""))
+
+    ok = any(str(i).endswith("chest") for i, _ in demandes)
+    rec("test_l_evacuation_fabrique_le_coffre_qui_lui_manque", ok,
+        f"tentative(s) : {demandes} — motif « {str(motif)[:55]} »")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2406,6 +2450,7 @@ def main() -> int:
         test_on_gave_les_bruleurs_avant_de_leur_batir_une_belt,
         test_gaver_va_miner_le_charbon_qui_manque,
         test_l_evacuation_fabrique_le_bras_qui_lui_manque,
+        test_l_evacuation_fabrique_le_coffre_qui_lui_manque,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,
