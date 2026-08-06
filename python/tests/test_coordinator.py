@@ -2114,6 +2114,43 @@ def test_une_evacuation_qui_echoue_dit_pourquoi() -> None:
     assert ok
 
 
+def test_la_portee_d_alimentation_se_chiffre_en_plaques() -> None:
+    """« TROP LOIN » DOIT ÊTRE UN CALCUL, PAS UN NOMBRE ROND.
+
+    Banc H15 en jeu : l'alimentation refuse avec « aucun gisement de coal à moins de
+    60 tuiles : c'est un problème de train, pas de belt ». Mesuré ensuite sur la carte :
+    le charbon est à **65 tuiles** de l'usine. Il manquait cinq tuiles, soit 8 % — et
+    toute l'usine s'est éteinte sur ce seuil frôlé.
+
+    Le seuil de 60 n'était justifié que par « au-delà, une belt coûte plus qu'elle ne
+    rapporte », sans chiffre. Or une belt vaut 1 plaque + 1 engrenage, soit **3 plaques
+    de fer par tuile**. Les 65 tuiles coûtaient 195 plaques, que cette usine produit en
+    cinq minutes à 0,66 plaque/s : très au-dessus du point de rentabilité.
+
+    La portée est donc adossée à un COÛT explicite, et le nombre de belts nécessaires
+    se calcule depuis la distance — sinon on étend la portée pour poser une ligne qu'on
+    n'a pas de quoi fabriquer.
+    """
+    from agents.coordinator import Coordinator
+
+    c = _coord_mesure(None)
+    # La distance mesurée en jeu doit passer, avec de la marge.
+    couvre_le_cas_mesure = Coordinator.PORTEE_APPRO >= 65.0
+    # Et rester bornée par ce qu'un bootstrap peut payer.
+    cout_max = Coordinator.PORTEE_APPRO * Coordinator.PLAQUES_PAR_BELT
+    reste_payable = cout_max <= 400.0
+
+    c._belts_pour = Coordinator._belts_pour.__get__(c)
+    assez = c._belts_pour(65.0) >= 65        # jamais moins que la distance
+    marge = c._belts_pour(65.0) <= 65 + 20   # ni un stock déraisonnable
+
+    ok = couvre_le_cas_mesure and reste_payable and assez and marge
+    rec("test_la_portee_d_alimentation_se_chiffre_en_plaques", ok,
+        f"portée {Coordinator.PORTEE_APPRO:.0f} tuiles = {cout_max:.0f} plaques ; "
+        f"65 tuiles -> {c._belts_pour(65.0)} belt(s)")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2157,6 +2194,7 @@ def main() -> int:
         test_une_chaine_burner_est_approvisionnee_pas_branchee,
         test_l_alimentation_fabrique_le_foreur_qui_lui_manque,
         test_une_evacuation_qui_echoue_dit_pourquoi,
+        test_la_portee_d_alimentation_se_chiffre_en_plaques,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,

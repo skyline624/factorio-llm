@@ -1496,10 +1496,21 @@ class Coordinator:
 
     # ----- APPROVISIONNER (automatiser ce qu'on remplissait à la main) -----
 
+    # Ce que coûte une tuile de belt : 1 plaque de fer + 1 engrenage (lui-même 2
+    # plaques). Le chiffre transforme « trop loin » en calcul plutôt qu'en nombre rond.
+    PLAQUES_PAR_BELT = 3.0
+
     # Au-delà, une belt d'approvisionnement coûte plus qu'elle ne rapporte : c'est un
     # problème de transport longue distance (trains), pas de logistique locale. Le dire
     # vaut mieux que poser 200 belts qui traverseront lacs et falaises.
-    PORTEE_APPRO = 60.0
+    #
+    # LE SEUIL ÉTAIT ARBITRAIRE, ET IL A COÛTÉ L'USINE. Banc H15 : l'alimentation refuse
+    # sur « aucun gisement de coal à moins de 60 tuiles » ; le charbon était à 65 —
+    # cinq tuiles, 8 %. Chiffré, le calcul dit l'inverse de l'intuition : 65 tuiles
+    # valent 195 plaques, soit cinq minutes de production à 0,66 plaque/s (mesuré). On
+    # borne donc par le COÛT, pas par une distance ronde : 100 tuiles = 300 plaques,
+    # ce qu'un bootstrap peut avancer. Au-delà, c'est bien un problème de train.
+    PORTEE_APPRO = 100.0
 
     # Un stack plein dans le foreur. Le bras de RETOUR, qui rendrait la chaîne
     # réellement perpétuelle, n'est pas toujours plaçable : la belt part du bord même du
@@ -1856,6 +1867,15 @@ class Coordinator:
             motif = (f" — aucune des {len(finales)} machine(s) de tête n'a été posée : "
                      f"rien à évacuer")
         return vidées, motif
+
+    def _belts_pour(self, distance: float) -> int:
+        """Combien de belts pour couvrir `distance`, marge comprise.
+
+        Une tuile, une belt — plus de quoi contourner un obstacle et raccorder les deux
+        extrémités. Sans ce calcul, étendre la portée ne servait à rien : `place_belt_line`
+        pose ce qu'il trouve en inventaire et s'arrête là, silencieusement.
+        """
+        return int(math.ceil(distance)) + 8
 
     def _assurer_stock(self, nom: str, combien: int = 1) -> tuple[bool, str]:
         """Garantit `combien` exemplaires de `nom` en poche, en les fabriquant au besoin.
@@ -3765,8 +3785,11 @@ class Coordinator:
         # DE QUOI POSER, AVANT DE POSER. La chaîne qu'on vient de bâtir a pu consommer
         # la dernière foreuse : sans ce pré-vol, l'alimentation rend « foreur non posé »
         # sur un manque d'UNE pièce que l'agent sait forger, et toute l'usine s'éteint.
+        # Les belts comptent autant : `place_belt_line` pose ce qu'elle trouve et
+        # s'arrête là, sans le dire — une ligne interrompue ne transporte rien.
         self._assurer_stock(foreur, 1)
         self._assurer_stock(bras, 1)
+        self._assurer_stock("transport-belt", self._belts_pour(distance))
 
         self.api.generate_terrain(ancre[0], ancre[1], 25.0)
         mp = plan_micro(MicroRequest(
