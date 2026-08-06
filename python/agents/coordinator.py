@@ -1500,16 +1500,26 @@ class Coordinator:
     # plaques). Le chiffre transforme « trop loin » en calcul plutôt qu'en nombre rond.
     PLAQUES_PAR_BELT = 3.0
 
+    # Combien de belts on accepte de FABRIQUER d'un coup. Mesuré : demander 73 belts
+    # lance le minage et la fonte de 219 plaques à la main — 217 tâches, une heure de
+    # jeu, l'usine toujours éteinte pendant ce temps. Vingt belts (60 plaques) restent
+    # dans l'ordre de la minute ; au-delà, on prend ce qu'on a déjà en stock plutôt que
+    # de suspendre l'usine à un atelier de forge.
+    BELTS_FABRICABLES = 20
+
     # Au-delà, une belt d'approvisionnement coûte plus qu'elle ne rapporte : c'est un
     # problème de transport longue distance (trains), pas de logistique locale. Le dire
     # vaut mieux que poser 200 belts qui traverseront lacs et falaises.
     #
     # LE SEUIL ÉTAIT ARBITRAIRE, ET IL A COÛTÉ L'USINE. Banc H15 : l'alimentation refuse
     # sur « aucun gisement de coal à moins de 60 tuiles » ; le charbon était à 65 —
-    # cinq tuiles, 8 %. Chiffré, le calcul dit l'inverse de l'intuition : 65 tuiles
-    # valent 195 plaques, soit cinq minutes de production à 0,66 plaque/s (mesuré). On
-    # borne donc par le COÛT, pas par une distance ronde : 100 tuiles = 300 plaques,
-    # ce qu'un bootstrap peut avancer. Au-delà, c'est bien un problème de train.
+    # cinq tuiles, 8 %.
+    #
+    # CE PLAFOND N'EST PAS LA PORTÉE, c'est sa borne de sécurité. La portée réelle se
+    # CALCULE (`_portee_appro`) : elle vaut ce qu'on peut payer en belts, stock plus
+    # forge. Un nombre rond ici et un plafond de fabrication ailleurs se
+    # contredisaient — 100 tuiles annoncées, 20 belts fabricables, donc 20 tuiles
+    # réelles. Au-delà de cette borne, c'est bien un problème de train.
     PORTEE_APPRO = 100.0
 
     # Un stack plein dans le foreur. Le bras de RETOUR, qui rendrait la chaîne
@@ -1868,6 +1878,42 @@ class Coordinator:
                      f"rien à évacuer")
         return vidées, motif
 
+    def _gaver_les_bruleurs(self, poses) -> int:
+        """Répartit le charbon en poche entre les brûleurs qu'on vient de poser.
+
+        L'ORDRE COMPTE. `AMORCE_BRAS` (5 charbons) tient quatre-vingt-dix secondes —
+        mesuré trois bancs de suite : l'usine démarre à 0,66 plaque/s puis s'éteint. La
+        réponse structurelle est une belt de charbon, mais elle coûte 3 plaques la
+        tuile, soit 195 plaques pour les 65 tuiles mesurées. Les faire miner et fondre à
+        la main AVANT d'allumer l'usine est un ordre impossible : c'est l'usine qui
+        produit les plaques. Banc H17, arrêté à la main : 217 tâches, 18 belts sur 73,
+        et trois foreuses toujours à sec avec quarante charbons dans les poches.
+
+        Un joueur verse d'abord ce qu'il a. Dix minutes d'autonomie suffisent à ce que
+        la chaîne paye sa propre logistique. On garde `AMORCE` de côté : la foreuse à
+        charbon devra elle aussi démarrer.
+        """
+        bruleurs = [p for p in poses
+                    if getattr(p, "role", "") in ("machine", "drill")
+                    and not _consomme_du_courant(self.api, p)]
+        if not bruleurs:
+            return 0
+        stock = perception.inventory(self.api).get(self.combustible, 0)
+        # LA RÉSERVE EST UNE AMORCE, PAS UN PLEIN. Garder `AMORCE` (50) ne laissait rien
+        # aux machines qui meurent — le stock typique après une pose est de quarante
+        # unités. Une foreuse à charbon n'a besoin que de DÉMARRER : elle produit son
+        # propre combustible ensuite. On ne lui met donc de côté qu'une amorce de bras.
+        disponible = max(0, stock - self.AMORCE_BRAS)
+        part = disponible // len(bruleurs)
+        if part < self.AMORCE_BRAS:
+            return 0            # rien de mieux à offrir que l'amorce déjà versée
+        verses = 0
+        for p in bruleurs:
+            self.api.run_action(self.api.move_items_at, self.combustible, p.name,
+                                p.x, p.y, part, True, timeout=20.0)
+            verses += 1
+        return verses
+
     def _belts_pour(self, distance: float) -> int:
         """Combien de belts pour couvrir `distance`, marge comprise.
 
@@ -1876,6 +1922,21 @@ class Coordinator:
         pose ce qu'il trouve en inventaire et s'arrête là, silencieusement.
         """
         return int(math.ceil(distance)) + 8
+
+    def _portee_appro(self) -> float:
+        """Jusqu'où l'on peut tirer une belt : ce qu'on a en poche, plus ce qu'on forge.
+
+        LA PORTÉE N'EST PAS UN NOMBRE, C'EST CE QU'ON PEUT PAYER. Deux constantes
+        réglées à la main se contredisaient : cent tuiles annoncées et vingt belts
+        fabricables, donc vingt tuiles réelles — un refus « trop loin » sur une distance
+        que la portée déclarait couvrir. En la dérivant du stock, la question disparaît :
+        l'agent tire la ligne s'il a de quoi, et le dit clairement sinon.
+
+        Le plafond `PORTEE_APPRO` reste, mais comme borne de sécurité — au-delà c'est un
+        problème de train, quel que soit le stock.
+        """
+        stock = perception.inventory(self.api).get("transport-belt", 0)
+        return float(min(stock + self.BELTS_FABRICABLES, self.PORTEE_APPRO))
 
     def _assurer_stock(self, nom: str, combien: int = 1) -> tuple[bool, str]:
         """Garantit `combien` exemplaires de `nom` en poche, en les fabriquant au besoin.
@@ -1916,6 +1977,13 @@ class Coordinator:
         de train, pas de belt »), donc l'appeler ici ne risque pas de dérouler une
         ceinture interminable.
         """
+        # D'ABORD ALLUMER, ENSUITE CÂBLER. Le charbon en poche donne dix minutes de
+        # marche à la chaîne ; la belt de charbon, elle, coûte 3 plaques la tuile et ne
+        # devient payable QUE si l'usine tourne. Inverser les deux, c'est demander à
+        # l'usine de financer sa logistique avant d'exister (banc H17 : 217 tâches,
+        # 18 belts sur 73, trois foreuses à sec avec quarante charbons dans les poches).
+        self._gaver_les_bruleurs(poses)
+
         branchees, ravitaillees, echecs = 0, 0, ""
         restant = self.ALIMENTATIONS_MAX
         for p in poses:
@@ -3726,11 +3794,17 @@ class Coordinator:
         from services.executor import execute_micro
 
         # Quel gisement : une décision, pas un calcul. Cf. `choisir_gisement`.
+        # La portée se CALCULE : elle vaut ce qu'on peut payer en belts (cf.
+        # `_portee_appro`). Un refus doit donc nommer le stock, pas un nombre rond —
+        # sinon « trop loin » masque « pas de quoi ».
+        portee = self._portee_appro()
         choix = self.sans_ecoulement(self.choisir_gisement, item, (cible.x, cible.y),
-                                     self.PORTEE_APPRO)
+                                     portee)
         if choix is None:
-            return False, (f"aucun gisement de {item} à moins de {self.PORTEE_APPRO:.0f} "
-                           f"tuiles : c'est un problème de train, pas de belt")
+            en_poche = perception.inventory(self.api).get("transport-belt", 0)
+            return False, (f"aucun gisement de {item} à moins de {portee:.0f} tuiles "
+                           f"({en_poche} belt(s) en poche + {self.BELTS_FABRICABLES} "
+                           f"forgeable(s)) : c'est un problème de train, pas de belt")
         # On s'ancre sur une TUILE réelle du gisement retenu, jamais sur son centre : le
         # centre d'une boîte peut tomber sur un trou (piège déjà payé avec `scan_patch`).
         sp = self.builder._scan_patch_local(item)

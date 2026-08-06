@@ -1408,6 +1408,11 @@ class _ApiEnergie:
         self.sources = sources
         self.poses: list = []
 
+    def get_state(self):
+        # Le vrai jeu répond toujours à `get_state` : sans lui, `perception.inventory`
+        # lève, et la mise en service ne peut plus juger de ce qu'elle a en poche.
+        return {"inventory": {}, "tick": 1, "ready": True}
+
     def describe(self, name):
         return {"name": name, "entity": {"name": name,
                                          "energySource": self.sources.get(name, "electric")}}
@@ -2151,6 +2156,69 @@ def test_la_portee_d_alimentation_se_chiffre_en_plaques() -> None:
     assert ok
 
 
+def test_on_gave_les_bruleurs_avant_de_leur_batir_une_belt() -> None:
+    """L'ORDRE ÉTAIT INVERSÉ : on payait la belt avant d'allumer l'usine.
+
+    Banc H17 : `_assurer_stock('transport-belt', 73)` lance la fabrication de 73 belts
+    — 219 plaques à miner et fondre à la main. Mesuré en jeu : 217 tâches exécutées,
+    18 belts sur 73, l'usine toujours éteinte. Une heure de jeu pour une ligne, pendant
+    que trois foreuses sont en `no_fuel` avec quarante charbons dans les poches.
+
+    Or c'est l'usine qui produit les plaques : lui faire payer sa belt AVANT de tourner
+    est un ordre impossible. Un joueur verse d'abord ce qu'il a en poche — l'usine
+    tourne, elle produit, et la belt devient payable.
+
+    `AMORCE_BRAS` (5 charbons) tient 90 secondes, mesuré trois bancs de suite. Le stock
+    en poche, lui, tient dix minutes : assez pour que la chaîne paye sa propre
+    logistique. On répartit donc le charbon disponible entre les brûleurs posés, en
+    gardant de quoi amorcer la foreuse à charbon elle-même.
+    """
+    from agents.coordinator import Coordinator
+
+    versements = []
+
+    class _ApiGave:
+        def __init__(self, charbon):
+            self.charbon = charbon
+
+        def get_state(self):
+            return {"inventory": {"coal": self.charbon}, "tick": 1, "ready": True}
+
+        def describe(self, name):
+            # Le vrai jeu répond « burner » ou « electric » ici, et la garde ne tranche
+            # pas sur son propre silence : sans `describe`, TOUT passe pour électrique.
+            source = "burner" if ("burner" in name or "stone-furnace" == name) else "electric"
+            return {"name": name, "entity": {"name": name, "energySource": source}}
+
+        def run_action(self, fn, *a, **kw):
+            versements.append(a)
+            return {"ok": True}
+
+        def move_items_at(self, *a, **kw):
+            return {"ok": True}
+
+    class _Pose:
+        def __init__(self, name, x, y):
+            self.name, self.x, self.y, self.role = name, x, y, "drill"
+
+    c = _coord_mesure(_ApiGave(40))
+    c.journal = []
+    c._gaver_les_bruleurs = Coordinator._gaver_les_bruleurs.__get__(c)
+    poses = [_Pose("burner-mining-drill", 0.0, 0.0),
+             _Pose("burner-mining-drill", 2.0, 0.0),
+             _Pose("stone-furnace", 4.0, 0.0)]
+
+    verses = c._gaver_les_bruleurs(poses)
+    parts = [a[4] for a in versements if len(a) > 4]
+    total = sum(parts)
+    ok = (verses == 3 and len(parts) == 3 and total <= 40
+          and total > 3 * 5                      # nettement plus que l'amorce
+          and all(q >= 5 for q in parts))        # jamais moins qu'avant
+    rec("test_on_gave_les_bruleurs_avant_de_leur_batir_une_belt", ok,
+        f"{verses} brûleur(s) gavé(s), parts {parts} sur 40 charbons")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2195,6 +2263,7 @@ def main() -> int:
         test_l_alimentation_fabrique_le_foreur_qui_lui_manque,
         test_une_evacuation_qui_echoue_dit_pourquoi,
         test_la_portee_d_alimentation_se_chiffre_en_plaques,
+        test_on_gave_les_bruleurs_avant_de_leur_batir_une_belt,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,
