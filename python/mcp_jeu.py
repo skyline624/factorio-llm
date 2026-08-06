@@ -170,7 +170,7 @@ def _debut(nom: str, args: dict) -> None:
 def _fin(nom: str, reponse: str, duree: float) -> None:
     import datetime
     _tracer(f"{datetime.datetime.now():%H:%M:%S} << {nom:26s} {duree:6.1f}s "
-            f"{str(reponse)[:110]}")
+            f"{str(reponse)[:400]}")
 
 
 def outil(fn):

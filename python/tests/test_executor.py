@@ -593,6 +593,57 @@ def test_build_micro_sans_sample_refuse_de_planifier() -> None:
     assert ok, f"feas={plan.feasibility}"
 
 
+def test_executor_se_rapproche_de_chaque_pose_lointaine() -> None:
+    """UNE SEULE APPROCHE NE SUFFIT PAS POUR UN PLAN ÉTALÉ.
+
+    L'executor marchait une fois vers le CENTRE du plan, puis posait toutes les entités
+    sans bouger. En `test_mode` c'est indifférent — aucune portée n'est vérifiée. En
+    PRODUCTION le mod refuse toute pose au-delà de `build_distance`, et une chaîne plus
+    large que cette portée devient impossible à bâtir.
+
+    Mesuré à la septième partie d'Hermes, sur carte vierge : 650 secondes
+    d'approvisionnement impeccable, `missing={}`, `can_place` répondant True sur le
+    gisement — et pourtant :
+
+        blocked=[(0, 'burner-mining-drill', -55.0, -91.0, 'walk closer first')]
+
+    Le joueur était en (-43,-86), la foreuse à poser en (-55,-91) : treize tuiles, au-delà
+    de la portée. Sixième défaut de la famille « sain en test, bloquant en jeu ».
+
+    On s'approche donc AVANT CHAQUE POSE qui l'exige — et seulement celles-là : une
+    entité déjà à portée ne doit pas coûter un déplacement.
+    """
+    api = FakeApi(FULL_KIT)
+    api.pos = (0.0, 0.0)                      # loin des entités du plan
+
+    def _walk(x, y):
+        api.calls.append(("walk_to", x, y))
+        api.pos = (float(x), float(y))        # la marche aboutit
+        return {"ok": True}
+
+    def _etat():
+        return {"tick": 1, "ready": True, "test_mode": False,
+                "character": {"position": {"x": api.pos[0], "y": api.pos[1]}},
+                "inventory": dict(api.inv), "task": {}}
+
+    api.walk_to, api.get_state = _walk, _etat
+    plan = _micro(facing=4)
+    # On éloigne la dernière entité au-delà de toute portée raisonnable.
+    plan.entities[-1].x, plan.entities[-1].y = 60.0, 60.0
+
+    execute_micro(api, plan, generate=False, approach=True, verify=False)
+
+    marches = api.named("walk_to")
+    # Au moins une marche VERS la zone de l'entité lointaine, en plus de l'approche
+    # initiale : sans elle, le mod répondrait « walk closer first ».
+    vers_loin = [c for c in marches if abs(c[1] - 60.0) < 12 and abs(c[2] - 60.0) < 12]
+    ok = len(marches) >= 2 and bool(vers_loin)
+    rec("test_executor_se_rapproche_de_chaque_pose_lointaine", ok,
+        f"{len(marches)} marche(s) : {[(round(c[1]), round(c[2])) for c in marches]} — "
+        f"approche de l'entité lointaine : {bool(vers_loin)}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_executor_pose_les_3_entites,
@@ -602,6 +653,7 @@ def main() -> int:
         test_executor_decalage_solidaire,
         test_executor_verifie_toutes_les_positions_avant_de_poser,
         test_executor_pose_fantome_rejetee,
+        test_executor_se_rapproche_de_chaque_pose_lointaine,
         test_executor_verify_desactivable,
         test_executor_retries_epuises_bloque_et_arrete,
         test_executor_echec_pose_malgre_can_place,

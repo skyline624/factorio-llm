@@ -66,7 +66,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from services import perception
+from services import deplacement, perception
 
 
 # Directions Factorio : 0=N(-Y), 2=E(+X), 4=S(+Y), 6=W(-X). `place_entity_at` et
@@ -74,6 +74,11 @@ from services import perception
 # que les planners produisent l'entier. Table unique du projet (remplace les copies
 # locales des scripts verify_*).
 DIR_TO_STR: dict[int, str] = {0: "north", 2: "east", 4: "south", 6: "west"}
+
+# Portee de CONSTRUCTION du personnage (`build_distance + 2` cote mod). Au-dela, la pose
+# est refusee : « walk closer first ». On garde une marge -- arriver pile a la limite
+# laisserait la moindre derive de position hors de portee.
+PORTEE_POSE = 8.0
 
 # Candidats de repli quand `can_place_check` refuse la position calculée. Bornés et
 # ordonnés du plus proche au plus éloigné : l'executor absorbe l'imprécision du bbox de
@@ -419,6 +424,25 @@ def execute_micro(api, plan, *, fuel: str = "coal", fuel_count: int = 5,
                                               getattr(e, "role", ""), offset))
             report.steps.append(f"pose {e.name}@({px},{py}) dir={d} [dry_run]")
             continue
+
+        # S'APPROCHER DE CHAQUE POSE QUI L'EXIGE. Une seule marche vers le centre du plan
+        # ne suffit pas : le mod refuse toute pose au-delà de `build_distance`, et une
+        # chaîne plus large que cette portée devient impossible à bâtir. En `test_mode`
+        # rien ne le montre — aucune portée n'y est vérifiée.
+        #
+        # Mesuré en jeu (7e partie Hermes) : 650 s d'approvisionnement, `missing={}`,
+        # `can_place` à True sur le gisement, et pourtant
+        # « blocked=[(0,'burner-mining-drill',-55,-91,'walk closer first')] » — le joueur
+        # était à treize tuiles. On ne marche que si c'est nécessaire : une entité déjà à
+        # portée ne doit pas coûter un déplacement.
+        if approach and not dry_run:
+            try:
+                if deplacement.distance(api, px, py) > PORTEE_POSE:
+                    ax, ay = deplacement.marcher_vers(api, px, py)
+                    report.steps.append(f"approche {e.name}@({px},{py}) -> "
+                                        f"({ax:.0f},{ay:.0f})")
+            except Exception as exc:
+                report.steps.append(f"approche impossible : {type(exc).__name__}")
 
         res = api.run_action(api.place_entity_at, e.name, px, py, d, _place_opts(e),
                              timeout=timeout)
