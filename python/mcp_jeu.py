@@ -386,6 +386,29 @@ def chercher_une_technologie(nom: str) -> str:
     return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
 
 
+# Ce qui peut tomber en panne, par opposition aux organes de TRANSIT qui les longent.
+# Même règle que `factory_doctor`, qui n'accuse jamais une belt ni un inserter d'être
+# une cause : quand plusieurs entités se touchent, on répare la machine.
+_TYPES_REPARABLES = ("mining-drill", "furnace", "assembling-machine", "boiler",
+                     "generator", "lab", "pumpjack", "offshore-pump")
+
+
+def _machine_a(api, x: float, y: float) -> str:
+    """Le nom RÉEL de la machine à cette position, ou "" si l'on ne sait pas.
+
+    L'agent désigne ce qu'il voit par sa POSITION ; il n'a pas à connaître le nom du
+    prototype. Le jeu, lui, le sait — il suffit de le lui demander.
+    """
+    try:
+        proches = ((api.inspect_at(x, y, 1.5) or {}).get("entities") or [])
+    except Exception:
+        return ""
+    for e in proches:
+        if str(e.get("type", "")) in _TYPES_REPARABLES:
+            return str(e.get("name") or "")
+    return str(proches[0].get("name") or "") if proches else ""
+
+
 @outil
 def reparer(quoi: str, x: float, y: float, nom_machine: str = "") -> str:
     """Répare une machine nommée par le diagnostic.
@@ -393,11 +416,17 @@ def reparer(quoi: str, x: float, y: float, nom_machine: str = "") -> str:
     `quoi` : « ravitailler » (combustible), « evacuer » (sortie pleine), « relier »
     (courant), « approvisionner » (bâtir sa desserte), « batir_evacuation » (ramassage
     permanent). L'agent s'approche avant d'agir — le jeu refuse au-delà de dix tuiles.
+
+    `nom_machine` est FACULTATIF : sans lui, on lit sur place ce qui s'y trouve. Le
+    remplacer par le mot « machine » — ce que faisait cet outil — envoyait
+    `move_items_at` chercher une entité de ce nom, qui n'existe dans aucun prototype :
+    le versement échouait toujours, avec du combustible en poche et la machine à portée
+    (partie 11, foreuse en `no_fuel` sur 495 minerais).
     """
     from agents.coordinator import Decision
     from services.factory_doctor import Symptome
-    cible = Symptome(name=nom_machine or "machine", x=x, y=y,
-                     cause="demandé", gravite=1, detail="")
+    cible = Symptome(name=nom_machine or _machine_a(_api(), x, y) or "machine",
+                     x=x, y=y, cause="demandé", gravite=1, detail="")
     ok, detail = _coord().agir(Decision(action=quoi, raison="demandé", cible=cible))
     return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
 
