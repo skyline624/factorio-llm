@@ -18,10 +18,21 @@ setlocal
 
 set "ROOT=%~dp0.."
 
-REM FACTORIO_EXE : auto-detection parmi les emplacements Steam courants.
+REM FACTORIO_EXE : auto-detection. On PREFERE une installation autonome (factorio.com)
+REM a celle de Steam : elle ne depend d'aucun client tiers, et surtout elle vit a un
+REM chemin qui n'appartient qu'a nous. Une variable d'environnement FACTORIO_EXE la
+REM remplace -- c'est ce qui rend le depot portable d'une machine a l'autre.
+REM
+REM ELLE DOIT PORTER LES DLC. Verifie ici : sans space-age/quality/elevated-rails dans
+REM son dossier data, le binaire refuse nos sauvegardes (dont fl-reference.zip, socle
+REM des douze verifications) -- elles ont ete creees avec. Une installation autonome
+REM telechargee sans DLC ne convient donc pas, meme en 2.0.77.
+REM
 REM NB : chemins avec "Program Files (x86)" -> PAS de bloc if(...) (les parentheses
 REM ferment le bloc meme entre guillemets) ; on enchaene des if exist simples.
-set "FACTORIO_EXE="
+if defined FACTORIO_EXE goto :exefound
+if exist "%USERPROFILE%\Downloads\Factorio_2.0.77\bin\x64\factorio.exe" set "FACTORIO_EXE=%USERPROFILE%\Downloads\Factorio_2.0.77\bin\x64\factorio.exe"
+if defined FACTORIO_EXE goto :exefound
 if exist "C:\Program Files (x86)\Steam\steamapps\common\Factorio\bin\x64\factorio.exe" set "FACTORIO_EXE=C:\Program Files (x86)\Steam\steamapps\common\Factorio\bin\x64\factorio.exe"
 if defined FACTORIO_EXE goto :exefound
 if exist "D:\SteamLibrary\steamapps\common\Factorio\bin\x64\factorio.exe" set "FACTORIO_EXE=D:\SteamLibrary\steamapps\common\Factorio\bin\x64\factorio.exe"

@@ -29,7 +29,12 @@ set "ROOT=%~dp0.."
 REM FACTORIO_EXE : auto-detection parmi les emplacements Steam courants (meme liste
 REM que le serveur dedie). NB : chemins avec "Program Files (x86)" -> PAS de bloc if(...)
 REM (les parentheses ferment le bloc meme entre guillemets) ; on enchaene des if exist.
-set "FACTORIO_EXE="
+REM Meme ordre que le serveur dedie : autonome d'abord (avec ses DLC), Steam ensuite,
+REM et FACTORIO_EXE l'emporte sur tout. Client et serveur DOIVENT sortir du meme
+REM binaire, sinon le client refuse la connexion sur un ecart de version.
+if defined FACTORIO_EXE goto :exefound
+if exist "%USERPROFILE%\Downloads\Factorio_2.0.77\bin\x64\factorio.exe" set "FACTORIO_EXE=%USERPROFILE%\Downloads\Factorio_2.0.77\bin\x64\factorio.exe"
+if defined FACTORIO_EXE goto :exefound
 if exist "C:\Program Files (x86)\Steam\steamapps\common\Factorio\bin\x64\factorio.exe" set "FACTORIO_EXE=C:\Program Files (x86)\Steam\steamapps\common\Factorio\bin\x64\factorio.exe"
 if defined FACTORIO_EXE goto :exefound
 if exist "D:\SteamLibrary\steamapps\common\Factorio\bin\x64\factorio.exe" set "FACTORIO_EXE=D:\SteamLibrary\steamapps\common\Factorio\bin\x64\factorio.exe"
