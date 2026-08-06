@@ -1531,6 +1531,12 @@ class Coordinator:
     AMORCE = 50
     AMORCE_BRAS = 5
 
+    # Ce qu'on verse par brûleur pour qu'il tienne le temps de financer sa belt. Une
+    # foreuse burner consomme environ 0,04 charbon/s : vingt-cinq unités valent donc une
+    # dizaine de minutes, quand l'amorce de cinq en tient quatre-vingt-dix secondes —
+    # mesuré trois bancs de suite, l'usine s'éteignant toujours entre T2 et T3.
+    CHARBON_PAR_BRULEUR = 25
+
     # Combien de brûleurs on relie au charbon après une pose. Chaque alimentation est
     # une chaîne complète — marche jusqu'au gisement, foreuse, belt, bras — donc une
     # minute ou deux. Les borner évite qu'une chaîne de trente entités passe une heure
@@ -1898,7 +1904,26 @@ class Coordinator:
                     and not _consomme_du_courant(self.api, p)]
         if not bruleurs:
             return 0
+        # ON VA CHERCHER CE QUI MANQUE PLUTÔT QUE DE RENONCER. Le gavage calculait sa
+        # part, la trouvait trop maigre et rendait 0 sans un mot : l'usine mourait trois
+        # minutes après la pose. Le charbon miné pendant la construction avait déjà été
+        # réparti en amorces de cinq par l'exécuteur, il n'en restait presque rien.
+        #
+        # Aucune sortie automatique n'existe à ce stade — le gisement est à des dizaines
+        # de tuiles et il ne reste pas une belt en poche. Mais un joueur, lui, va
+        # simplement en miner : c'est déjà l'étape zéro d'`approvisionner`. Ce que ça
+        # achète, c'est le temps de tourner assez longtemps pour financer la belt.
+        vise = self.CHARBON_PAR_BRULEUR * len(bruleurs) + self.AMORCE_BRAS
         stock = perception.inventory(self.api).get(self.combustible, 0)
+        if stock < vise:
+            gisement = self.api.find_nearest(self.combustible) or {}
+            if gisement.get("x") is not None:
+                self.api.run_action(self.api.walk_to, gisement["x"], gisement["y"],
+                                    timeout=180.0)
+                self.api.run_action(self.api.mine_entity, self.combustible,
+                                    vise - stock, timeout=240.0)
+                stock = perception.inventory(self.api).get(self.combustible, 0)
+
         # LA RÉSERVE EST UNE AMORCE, PAS UN PLEIN. Garder `AMORCE` (50) ne laissait rien
         # aux machines qui meurent — le stock typique après une pose est de quarante
         # unités. Une foreuse à charbon n'a besoin que de DÉMARRER : elle produit son

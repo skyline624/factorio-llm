@@ -1430,6 +1430,19 @@ class _ApiEnergie:
     def get_power_state(self, x, y, radius=4.0):
         return {"networkId": None, "connected": False}
 
+    def find_nearest(self, name):
+        # Le vrai jeu répond toujours : sans cela le gavage ne peut pas aller miner.
+        return {"name": name, "x": 40.0, "y": 0.0, "distance": 40}
+
+    def walk_to(self, *a, **kw):
+        return {"ok": True}
+
+    def mine_entity(self, *a, **kw):
+        return {"ok": True}
+
+    def move_items_at(self, *a, **kw):
+        return {"ok": True}
+
 
 def test_on_ne_tire_pas_de_ligne_vers_une_machine_a_charbon() -> None:
     """UNE MACHINE BURNER NE SE BRANCHE PAS. Elle mange du charbon, pas des volts.
@@ -2191,7 +2204,20 @@ def test_on_gave_les_bruleurs_avant_de_leur_batir_une_belt() -> None:
             return {"name": name, "entity": {"name": name, "energySource": source}}
 
         def run_action(self, fn, *a, **kw):
-            versements.append(a)
+            nom = getattr(fn, "__name__", "")
+            if nom == "mine_entity":
+                self.charbon += int(a[1]) if len(a) > 1 else 0
+            elif nom == "move_items_at":
+                versements.append(a)
+            return {"ok": True}
+
+        def find_nearest(self, name):
+            return {"name": name, "x": 40.0, "y": 0.0, "distance": 40}
+
+        def walk_to(self, *a, **kw):
+            return {"ok": True}
+
+        def mine_entity(self, *a, **kw):
             return {"ok": True}
 
         def move_items_at(self, *a, **kw):
@@ -2211,11 +2237,82 @@ def test_on_gave_les_bruleurs_avant_de_leur_batir_une_belt() -> None:
     verses = c._gaver_les_bruleurs(poses)
     parts = [a[4] for a in versements if len(a) > 4]
     total = sum(parts)
-    ok = (verses == 3 and len(parts) == 3 and total <= 40
+    ok = (verses == 3 and len(parts) == 3
           and total > 3 * 5                      # nettement plus que l'amorce
           and all(q >= 5 for q in parts))        # jamais moins qu'avant
     rec("test_on_gave_les_bruleurs_avant_de_leur_batir_une_belt", ok,
         f"{verses} brûleur(s) gavé(s), parts {parts} sur 40 charbons")
+    assert ok
+
+
+def test_gaver_va_miner_le_charbon_qui_manque() -> None:
+    """RENONCER EN SILENCE FAUTE DE CHARBON, C'EST LAISSER MOURIR L'USINE.
+
+    Banc H18 : le gavage calcule `part = disponible // brûleurs`, trouve moins que
+    l'amorce et rend 0 sans un mot. Mesuré : l'usine monte à 6 machines en service,
+    +51 plaques sur la deuxième fenêtre, puis s'éteint entre T2 et T3 — trois minutes.
+    Le rapport disait pourtant « 50 coal » minés pendant la construction : l'exécuteur
+    les avait déjà répartis en amorces de cinq à la pose.
+
+    Le charbon est à 65 tuiles, il n'y a plus une seule belt en poche après la pose, et
+    l'usine produit 159 plaques quand une ligne en coûte 195. Aucune sortie automatique
+    n'existe à ce stade — mais un joueur, lui, va simplement en miner. C'est ce que fait
+    déjà `approvisionner` à son étape zéro (« si la réserve a fondu, on va la reprendre
+    à la main sur le gisement »), et c'est exactement ce qui manquait ici.
+
+    Ce que ça achète : de quoi tourner assez longtemps pour financer la belt, au lieu de
+    mourir trois minutes après la pose.
+    """
+    from agents.coordinator import Coordinator
+
+    mines = []
+
+    class _ApiSec:
+        def __init__(self, charbon):
+            self.charbon = charbon
+
+        def get_state(self):
+            return {"inventory": {"coal": self.charbon}, "tick": 1, "ready": True}
+
+        def describe(self, name):
+            source = "burner" if ("burner" in name or name == "stone-furnace") else "electric"
+            return {"name": name, "entity": {"name": name, "energySource": source}}
+
+        def run_action(self, fn, *a, **kw):
+            if getattr(fn, "__name__", "") == "mine_entity":
+                mines.append(a)
+                self.charbon += int(a[1]) if len(a) > 1 else 0
+            return {"ok": True}
+
+        def mine_entity(self, *a, **kw):
+            return {"ok": True}
+
+        def move_items_at(self, *a, **kw):
+            return {"ok": True}
+
+        def walk_to(self, *a, **kw):
+            return {"ok": True}
+
+        def find_nearest(self, name):
+            return {"name": name, "x": 60.0, "y": 0.0, "distance": 60}
+
+    class _Pose:
+        def __init__(self, name, x, y):
+            self.name, self.x, self.y, self.role = name, x, y, "drill"
+
+    api = _ApiSec(6)                       # presque rien : l'amorce a tout consommé
+    c = _coord_mesure(api)
+    c.journal = []
+    c._gaver_les_bruleurs = Coordinator._gaver_les_bruleurs.__get__(c)
+    poses = [_Pose("burner-mining-drill", 0.0, 0.0),
+             _Pose("burner-mining-drill", 2.0, 0.0),
+             _Pose("stone-furnace", 4.0, 0.0)]
+
+    verses = c._gaver_les_bruleurs(poses)
+    ok = bool(mines) and verses == 3
+    rec("test_gaver_va_miner_le_charbon_qui_manque", ok,
+        f"{len(mines)} minage(s) déclenché(s) -> {verses} brûleur(s) gavé(s) "
+        f"(stock initial 6)")
     assert ok
 
 
@@ -2264,6 +2361,7 @@ def main() -> int:
         test_une_evacuation_qui_echoue_dit_pourquoi,
         test_la_portee_d_alimentation_se_chiffre_en_plaques,
         test_on_gave_les_bruleurs_avant_de_leur_batir_une_belt,
+        test_gaver_va_miner_le_charbon_qui_manque,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,
