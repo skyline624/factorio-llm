@@ -965,6 +965,10 @@ class Coordinator:
         # qu'il faut industrialiser. Compter les fabrications REUSSIES le dit sans qu'on
         # ait a nommer un seul produit.
         self._fabrications: dict = {}
+        # Une seule récolte par partie : vider les fours à chaque craft coûterait plus
+        # que cela ne rapporte. La première suffit à débloquer le cercle vicieux, et
+        # l'évacuation permanente prend le relais ensuite.
+        self._recolte_faite = False
         self.journal: list[str] = []
         # Les actions menées à leur terme sans produire leur effet. C'est le signal sur
         # lequel une enquête pourra être déclenchée ; sans lui, l'agent est aveugle à
@@ -2424,6 +2428,20 @@ class Coordinator:
         from services.knowledge import ProductionGoal, plan_production, plan_summary
 
         inv = perception.inventory(self.api)
+        # RÉCOLTER D'ABORD, PLANIFIER ENSUITE. Ce qu'on fabrique se paie en plaques, et
+        # l'usine en a souvent produit des centaines — enfermées dans ses fours faute
+        # d'évacuation. Mesuré partie 14 : 395 plaques produites, ZÉRO en poche, et une
+        # foreuse qu'on n'arrive pas à forger en vingt-trois étapes de minage.
+        #
+        # ICI ET NON DANS `_assurer_stock` : `batir_chaine` se procure ce qui lui manque
+        # en appelant `fabriquer` directement, si bien que la récolte n'était jamais
+        # atteinte sur le seul chemin qui en avait besoin. Même erreur que H10 — un
+        # correctif juste, posé sur une branche que le cas réel n'emprunte pas.
+        if inv.get(item, 0) < combien and not getattr(self, "_recolte_faite", False):
+            self._recolte_faite = True
+            for matiere in self.MATIERES_RECOLTABLES:
+                self._recolter_la_production(matiere)
+            inv = perception.inventory(self.api)
         try:
             steps = plan_production(ProductionGoal(item, combien), inv,
                                     lambda x: perception.recipe_of(self.api, x))

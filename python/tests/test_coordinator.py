@@ -2461,6 +2461,49 @@ def test_on_recolte_l_usine_avant_de_miner_a_la_main() -> None:
     assert ok
 
 
+def test_fabriquer_recolte_avant_de_planifier() -> None:
+    """LE CORRECTIF ÉTAIT SUR LA BRANCHE QUE PERSONNE NE PRENAIT — deuxième fois.
+
+    H23 branchait la récolte dans `_assurer_stock`. Or `batir_chaine` se procure ce qui
+    lui manque en appelant `fabriquer` DIRECTEMENT : la récolte n'était donc jamais
+    atteinte sur le seul chemin qui en avait besoin. Partie 14, mesuré : 395 plaques
+    produites, zéro en poche, et « missing={'burner-mining-drill': 2} » avec une
+    fabrication qui échoue en 23 puis 20 étapes.
+
+    C'est l'erreur de H10 refaite à l'identique — un correctif juste, posé sur une
+    branche que le cas réel n'emprunte pas. `fabriquer` est le point de passage
+    universel : la récolte va là.
+
+    On ne récolte QUE si l'on manque, et jamais deux fois de suite : vider les fours à
+    chaque craft coûterait plus que cela ne rapporte.
+    """
+    from agents.coordinator import Coordinator
+
+    recoltes = []
+
+    class _ApiFab:
+        def get_state(self):
+            return {"inventory": {}, "tick": 1, "ready": True}
+
+    c = _coord_mesure(_ApiFab())
+    c.journal = []
+    c.builder = None
+    c._fabrications = {}
+    c._recolte_faite = False
+    c._recolter_la_production = lambda item: (recoltes.append(item), 0)[1]
+    c.fabriquer = Coordinator.fabriquer.__get__(c)
+
+    try:
+        c.fabriquer("burner-mining-drill", 2)
+    except Exception:
+        pass          # le double n'ira pas jusqu'au bout ; seule la récolte nous occupe
+
+    ok = bool(recoltes)
+    rec("test_fabriquer_recolte_avant_de_planifier", ok,
+        f"récolte(s) tentée(s) avant planification : {recoltes}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2510,6 +2553,7 @@ def main() -> int:
         test_l_evacuation_fabrique_le_bras_qui_lui_manque,
         test_l_evacuation_fabrique_le_coffre_qui_lui_manque,
         test_on_recolte_l_usine_avant_de_miner_a_la_main,
+        test_fabriquer_recolte_avant_de_planifier,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,
