@@ -1812,31 +1812,50 @@ class Coordinator:
 
         branchees, ravitaillees, echecs_r = self._mettre_en_service(
             getattr(rap, "placed", []) or [])
-        # ÉVACUER, SINON LA CHAÎNE S'ÉTOUFFE. Mesuré : la chaîne posée produit seule
-        # (+3, +4, +3, +2 sur quatre fenêtres) puis s'arrête net — `full_output` sur les
-        # assembleuses de tête, et derrière elles toute la mine en attente. Produire sans
-        # évacuer ne tient que le temps de remplir la machine. `batir_evacuation` est le
-        # pendant exact d'`approvisionner`, à l'autre bout : un coffre et un bras.
-        finales = {i for i, e in enumerate(lp.entities)
-                   if getattr(e, "role", "") == "machine"
-                   and getattr(e, "node_item", "") == item}
-        vidées = 0
-        for p in (getattr(rap, "placed", []) or []):
-            if getattr(p, "idx", -1) not in finales:
-                continue
-            ok_e, _ = self.batir_evacuation(
-                Symptome(name=p.name, x=p.x, y=p.y, cause="sortie_pleine", gravite=1,
-                         detail="machine de tête d'une chaîne posée à l'instant"))
-            if ok_e:
-                vidées += 1
-                break          # un ramassage suffit à amorcer ; l'agent complètera
+        vidées, echecs_e = self._evacuer_les_tetes(lp, rap, item)
         return True, (f"chaîne « {item} » bâtie : {n} entité(s), "
                       f"{vidées} sortie(s) évacuée(s), "
                       f"{len(getattr(splan, 'nodes', []) or [])} étage(s), "
                       f"gisements {', '.join(gisements) or 'aucun'}, "
                       f"objectif {debit}/s, {branchees} machine(s) raccordée(s), "
                       f"{ravitaillees} alimentée(s) en {self.combustible}"
-                      f"{fabriques}{echecs_r}")
+                      f"{fabriques}{echecs_r}{echecs_e}")
+
+    def _evacuer_les_tetes(self, lp, rap, item: str) -> tuple[int, str]:
+        """Vide les machines de tête, et DIT pourquoi quand elle n'y arrive pas.
+
+        ÉVACUER, SINON LA CHAÎNE S'ÉTOUFFE. Mesuré : la chaîne posée produit seule
+        (+3, +4, +3, +2 sur quatre fenêtres) puis s'arrête net — `full_output` sur les
+        machines de tête, et derrière elles toute la mine en attente. Produire sans
+        évacuer ne tient que le temps de remplir la machine. `batir_evacuation` est le
+        pendant exact d'`approvisionner`, à l'autre bout : un coffre et un bras.
+
+        UN COMPTEUR À ZÉRO N'EST PAS UN DIAGNOSTIC. La partie 10 et le banc H14 rendent
+        tous deux « 0 sortie(s) évacuée(s) » sans un mot, et les deux causes possibles
+        — aucune machine de tête identifiée dans le plan, ou évacuation refusée — ne se
+        distinguent pas. Le motif existait pourtant : un `ok_e, _ =` le jetait.
+        """
+        finales = {i for i, e in enumerate(lp.entities)
+                   if getattr(e, "role", "") == "machine"
+                   and getattr(e, "node_item", "") == item}
+        if not finales:
+            return 0, (f" — rien à évacuer : aucune machine de tête « {item} » "
+                       f"dans le plan")
+        vidées, motif = 0, ""
+        for p in (getattr(rap, "placed", []) or []):
+            if getattr(p, "idx", -1) not in finales:
+                continue
+            ok_e, detail_e = self.batir_evacuation(
+                Symptome(name=p.name, x=p.x, y=p.y, cause="sortie_pleine", gravite=1,
+                         detail="machine de tête d'une chaîne posée à l'instant"))
+            if ok_e:
+                return vidées + 1, ""   # un ramassage suffit à amorcer
+            if not motif:
+                motif = f" — évacuation refusée : {str(detail_e)[:60]}"
+        if not motif:
+            motif = (f" — aucune des {len(finales)} machine(s) de tête n'a été posée : "
+                     f"rien à évacuer")
+        return vidées, motif
 
     def _assurer_stock(self, nom: str, combien: int = 1) -> tuple[bool, str]:
         """Garantit `combien` exemplaires de `nom` en poche, en les fabriquant au besoin.

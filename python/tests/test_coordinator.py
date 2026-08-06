@@ -2064,6 +2064,56 @@ def test_l_alimentation_fabrique_le_foreur_qui_lui_manque() -> None:
     assert ok
 
 
+def test_une_evacuation_qui_echoue_dit_pourquoi() -> None:
+    """UN COMPTEUR À ZÉRO N'EST PAS UN DIAGNOSTIC.
+
+    Partie 10 et banc H14 rendent tous deux « 0 sortie(s) évacuée(s) » sans un mot de
+    plus. Impossible de savoir laquelle des deux causes joue : aucune machine de tête
+    n'a été identifiée dans le plan, ou `batir_evacuation` a été refusée. Le motif
+    était pourtant là — le code l'écartait d'un `ok_e, _ =`.
+
+    C'est le défaut qui a coûté trois parties sous une autre forme : une action qui
+    échoue sans dire pourquoi se lit comme une action qui n'avait rien à faire.
+    """
+    from agents.coordinator import Coordinator
+
+    class _Ent:
+        def __init__(self, role, node_item):
+            self.role, self.node_item = role, node_item
+
+    class _Pose:
+        def __init__(self, idx, name="stone-furnace"):
+            self.idx, self.name, self.x, self.y = idx, name, 0.0, 0.0
+
+    class _Plan:
+        def __init__(self, ents):
+            self.entities = ents
+
+    class _Rap:
+        def __init__(self, poses):
+            self.placed = poses
+
+    c = _coord_mesure(None)
+    c.journal = []
+    c._evacuer_les_tetes = Coordinator._evacuer_les_tetes.__get__(c)
+
+    # 1. Aucune machine de tête dans le plan : il faut le DIRE.
+    c.batir_evacuation = lambda cible, coffre="wooden-chest": (True, "ok")
+    vide, motif_vide = c._evacuer_les_tetes(
+        _Plan([_Ent("drill", "iron-ore")]), _Rap([_Pose(0)]), "iron-plate")
+
+    # 2. Une machine de tête, mais l'évacuation refusée : le motif doit remonter.
+    c.batir_evacuation = lambda cible, coffre="wooden-chest": (False, "coffre introuvable")
+    refuse, motif_refus = c._evacuer_les_tetes(
+        _Plan([_Ent("machine", "iron-plate")]), _Rap([_Pose(0)]), "iron-plate")
+
+    ok = (vide == 0 and "tête" in motif_vide
+          and refuse == 0 and "coffre introuvable" in motif_refus)
+    rec("test_une_evacuation_qui_echoue_dit_pourquoi", ok,
+        f"sans tête : « {motif_vide[:45]} » — refusée : « {motif_refus[:45]} »")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2106,6 +2156,7 @@ def main() -> int:
         test_on_ne_tire_pas_de_ligne_vers_une_machine_a_charbon,
         test_une_chaine_burner_est_approvisionnee_pas_branchee,
         test_l_alimentation_fabrique_le_foreur_qui_lui_manque,
+        test_une_evacuation_qui_echoue_dit_pourquoi,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,
