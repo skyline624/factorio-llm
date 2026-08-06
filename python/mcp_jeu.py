@@ -130,9 +130,53 @@ def _rendu(valeur: Any) -> str:
     return tronquer(valeur, entites_max=20, caracteres=2000)
 
 
+# CE QUE L'AGENT APPELLE, ET DANS QUEL ORDRE. Sans ce journal on observe à l'aveugle :
+# le serveur ne trace que des `POST /mcp` anonymes, et il a fallu deviner, deux parties
+# durant, si Hermes demandait vraiment de bâtir ou s'il minait encore à la main. Une
+# partie ne se lit pas dans l'état final — elle se lit dans la suite des gestes.
+JOURNAL = os.environ.get("FL_MCP_JOURNAL", "mcp_appels.log")
+
+
+def _tracer(nom: str, args: dict, reponse: str, duree: float) -> None:
+    """Une ligne par appel : quand, quoi, avec quoi, combien de temps, ce qui en sort."""
+    import datetime
+    ligne = (f"{datetime.datetime.now():%H:%M:%S} {nom:26s} "
+             f"{str(args)[:70]:70s} {duree:6.1f}s -> {str(reponse)[:110]}")
+    print(f"[appel] {ligne}", flush=True)
+    try:
+        with open(JOURNAL, "a", encoding="utf-8") as f:
+            f.write(ligne + "\n")
+    except OSError:
+        pass          # un journal qui échoue ne doit jamais arrêter une partie
+
+
+def outil(fn):
+    """Déclare un outil MCP et journalise chaque appel.
+
+    Enveloppe `mcp.tool()` plutôt que de le remplacer : la signature et la docstring —
+    donc ce que l'agent LIT de l'outil — restent celles de la fonction.
+    """
+    import functools
+    import time
+
+    @functools.wraps(fn)
+    def enveloppe(*a, **kw):
+        t0 = time.time()
+        try:
+            r = fn(*a, **kw)
+        except Exception as e:
+            _tracer(fn.__name__, kw or dict(enumerate(a)),
+                    f"ERREUR {type(e).__name__}: {e}", time.time() - t0)
+            raise
+        _tracer(fn.__name__, kw or dict(enumerate(a)), r, time.time() - t0)
+        return r
+
+    return mcp.tool()(enveloppe)
+
+
 # ------------------------------------------------------------------------- OBSERVER
 
-@mcp.tool()
+@outil
 def etat_du_jeu() -> str:
     """L'état de l'usine : machines, énergie, diagnostic, inventaire, recherche visée.
 
@@ -143,7 +187,7 @@ def etat_du_jeu() -> str:
     return resumer_etat(_coord().observer())
 
 
-@mcp.tool()
+@outil
 def diagnostiquer(x: float = 0.0, y: float = 0.0, rayon: float = 30.0) -> str:
     """Pourquoi les machines d'une zone ne tournent pas — la CAUSE, pas le symptôme.
 
@@ -161,7 +205,7 @@ def diagnostiquer(x: float = 0.0, y: float = 0.0, rayon: float = 30.0) -> str:
         for s in (diag.symptomes or [])[:20])
 
 
-@mcp.tool()
+@outil
 def ou_sont_les_ressources(ressource: str, portee_max: float = 200.0) -> str:
     """Où trouver une ressource : distance depuis le joueur, et nids alentour.
 
@@ -186,7 +230,7 @@ def ou_sont_les_ressources(ressource: str, portee_max: float = 200.0) -> str:
         for g in trouves[:8])
 
 
-@mcp.tool()
+@outil
 def ce_qu_il_faut_pour(item: str) -> str:
     """La chaîne complète d'un produit : tous les intermédiaires et les minerais à extraire.
 
@@ -201,7 +245,7 @@ def ce_qu_il_faut_pour(item: str) -> str:
             f"se fond en : {fondu or 'RIEN (ce minerai ne se fond pas)'}")
 
 
-@mcp.tool()
+@outil
 def etat_de_la_recherche() -> str:
     """Technologies acquises, et les marches à portée avec leur coût en flacons."""
     from services import recherche
@@ -210,7 +254,7 @@ def etat_de_la_recherche() -> str:
                    "marches": [str(m) for m in (arbre.marches or [])[:12]]})
 
 
-@mcp.tool()
+@outil
 def suivre_une_ligne(depart_x: float, depart_y: float,
                      cible_nom: str = "", cible_x: float = 0.0,
                      cible_y: float = 0.0) -> str:
@@ -224,7 +268,7 @@ def suivre_une_ligne(depart_x: float, depart_y: float,
     return _rendu(suivre_flux(_api(), (depart_x, depart_y), cible_nom, cible))
 
 
-@mcp.tool()
+@outil
 def regarder(x: float, y: float, rayon: float = 4.0) -> str:
     """Ce qui est POSÉ à un endroit : nom, type, statut, orientation.
 
@@ -234,7 +278,7 @@ def regarder(x: float, y: float, rayon: float = 4.0) -> str:
     return _rendu(_api().inspect_at(x, y, rayon))
 
 
-@mcp.tool()
+@outil
 def ce_que_l_usine_a_produit(item: str) -> str:
     """Combien de `item` l'usine a réellement produit depuis le début.
 
@@ -246,7 +290,7 @@ def ce_que_l_usine_a_produit(item: str) -> str:
 
 # ---------------------------------------------------------------------------- AGIR
 
-@mcp.tool()
+@outil
 def batir_une_chaine(item: str, debit: float = 0.5) -> str:
     """Bâtit de quoi produire `item` : extraction, fonte, transport, raccordement.
 
@@ -257,7 +301,7 @@ def batir_une_chaine(item: str, debit: float = 0.5) -> str:
     return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
 
 
-@mcp.tool()
+@outil
 def se_procurer(item: str, combien: int = 1) -> str:
     """Obtient `item` par tous les moyens : miner, fondre, fabriquer — dans cet ordre.
 
@@ -268,7 +312,7 @@ def se_procurer(item: str, combien: int = 1) -> str:
     return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
 
 
-@mcp.tool()
+@outil
 def batir_une_centrale() -> str:
     """Pose une centrale à vapeur au bord de l'eau et la relie à la zone de travail.
 
@@ -280,7 +324,7 @@ def batir_une_centrale() -> str:
     return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
 
 
-@mcp.tool()
+@outil
 def chercher_une_technologie(nom: str) -> str:
     """Lance une recherche, en payant ses flacons — d'une chaîne ou à la main.
 
@@ -291,7 +335,7 @@ def chercher_une_technologie(nom: str) -> str:
     return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
 
 
-@mcp.tool()
+@outil
 def reparer(quoi: str, x: float, y: float, nom_machine: str = "") -> str:
     """Répare une machine nommée par le diagnostic.
 
@@ -307,7 +351,7 @@ def reparer(quoi: str, x: float, y: float, nom_machine: str = "") -> str:
     return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
 
 
-@mcp.tool()
+@outil
 def se_deplacer(x: float, y: float) -> str:
     """Marche jusqu'à un point, en générant le terrain et en contournant les obstacles.
 

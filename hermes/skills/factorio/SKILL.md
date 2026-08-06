@@ -12,6 +12,25 @@ metadata:
 
 # Jouer à Factorio
 
+## La marche à suivre, dans cet ordre
+
+Ne t'en écarte que si une observation te le commande. Mesuré sur trois parties : sans cet
+ordre, on mine à la main pendant vingt minutes et on ne pose jamais rien.
+
+1. `etat_du_jeu` — voir où l'on est.
+2. `ou_sont_les_ressources("iron-ore")` — savoir où est le fer.
+3. **`batir_une_chaine("iron-plate")`** — la poser. C'est l'étape qui compte, et elle
+   vient TÔT. Elle fabrique elle-même ce qui lui manque : n'attends pas d'avoir « assez
+   de matériel » pour l'appeler, c'est son travail.
+4. `etat_du_jeu` — vérifier ce qui est en terre.
+5. `diagnostiquer` puis `reparer` — mettre en marche ce qui ne tourne pas.
+
+**Tu n'appelles `se_procurer` que si `batir_une_chaine` te dit explicitement ce qui lui
+manque.** Jamais « au cas où », jamais pour accumuler.
+
+Le signe que tu t'égares : ton inventaire grossit et le sol reste vide. Quarante-cinq
+minerais en poche et zéro machine posée, c'est une partie perdue — pas un début prometteur.
+
 ## Ce que tu vises
 
 Une usine **autonome** : elle produit sans que tu la nourrisses à la main. Tant que tu
