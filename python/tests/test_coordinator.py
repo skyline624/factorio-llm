@@ -2012,6 +2012,58 @@ def test_une_chaine_burner_est_approvisionnee_pas_branchee() -> None:
     assert ok
 
 
+def test_l_alimentation_fabrique_le_foreur_qui_lui_manque() -> None:
+    """UNE CHAÎNE QUI CONSOMME TOUT SON STOCK NE PEUT PLUS S'ALIMENTER.
+
+    Banc H14 en jeu, carte neuve : `batir_chaine` pose ses 29 entités, puis
+    `approvisionner` est bien appelé (le rapport porte « 0 alimentée(s) en coal ») et
+    échoue aussitôt :
+
+        alimentation refusée : foreur non posé sur coal : {'burner-mining-drill': 1}
+
+    `batir_chaine` fabrique EXACTEMENT les foreuses de la chaîne de fer, puis
+    l'alimentation en réclame une de plus pour le charbon — il n'en reste aucune.
+    Résultat mesuré : 6 machines en service à la pose, zéro 90 secondes plus tard, et
+    la production figée à 159 plaques sur trois fenêtres.
+
+    `batir_chaine` sait pourtant se procurer ce qui lui manque plutôt que de renoncer.
+    L'alimentation doit en faire autant : c'est une pose comme une autre, et ce qui
+    vaut pour la chaîne vaut pour ce qui la nourrit.
+    """
+    from agents.coordinator import Coordinator
+
+    class _ApiStock:
+        def __init__(self, inv):
+            self.inv = dict(inv)
+
+        def get_state(self):
+            return {"inventory": dict(self.inv), "tick": 1, "ready": True}
+
+    demandes = []
+
+    def _coord(inv):
+        c = _coord_mesure(_ApiStock(inv))
+        c.journal = []
+        c.fabriquer = lambda item, combien=1: (demandes.append((item, combien)),
+                                               (True, f"{item} fabriqué"))[1]
+        c._assurer_stock = Coordinator._assurer_stock.__get__(c)
+        return c
+
+    # Les mains vides : il FAUT fabriquer.
+    ok_vide, _ = _coord({})._assurer_stock("burner-mining-drill", 1)
+    apres_vide = list(demandes)
+    # Déjà en poche : ne rien refabriquer, c'est du temps de jeu pur.
+    ok_plein, _ = _coord({"burner-mining-drill": 2})._assurer_stock("burner-mining-drill", 1)
+    apres_plein = list(demandes)
+
+    ok = (ok_vide and ok_plein
+          and apres_vide == [("burner-mining-drill", 1)]
+          and apres_plein == apres_vide)
+    rec("test_l_alimentation_fabrique_le_foreur_qui_lui_manque", ok,
+        f"mains vides -> {apres_vide} ; deja en poche -> {apres_plein[len(apres_vide):]} (attendu aucune)")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2053,6 +2105,7 @@ def main() -> int:
         test_un_abandon_se_perime_au_lieu_detre_definitif,
         test_on_ne_tire_pas_de_ligne_vers_une_machine_a_charbon,
         test_une_chaine_burner_est_approvisionnee_pas_branchee,
+        test_l_alimentation_fabrique_le_foreur_qui_lui_manque,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,

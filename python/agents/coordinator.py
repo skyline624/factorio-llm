@@ -1838,6 +1838,25 @@ class Coordinator:
                       f"{ravitaillees} alimentée(s) en {self.combustible}"
                       f"{fabriques}{echecs_r}")
 
+    def _assurer_stock(self, nom: str, combien: int = 1) -> tuple[bool, str]:
+        """Garantit `combien` exemplaires de `nom` en poche, en les fabriquant au besoin.
+
+        Une pose sans pré-vol échoue en `missing`, et l'appelant renonce alors qu'il
+        savait produire la pièce. Mesuré au banc H14 : `batir_chaine` fabrique
+        exactement les foreuses de la chaîne de fer, puis l'alimentation en réclame une
+        de plus pour le charbon et rend « foreur non posé sur coal :
+        {'burner-mining-drill': 1} ». Toute la chaîne s'éteint pour une foreuse
+        manquante que l'agent aurait pu forger en vingt secondes.
+
+        `fabriquer` vise un TOTAL, pas un ajout (`plan_production` arbitre sur
+        l'inventaire), d'où le passage direct de `combien`. On ne l'appelle pas si le
+        stock suffit : un craft inutile coûte du temps de jeu.
+        """
+        en_poche = perception.inventory(self.api).get(nom, 0)
+        if en_poche >= combien:
+            return True, f"{nom} : {en_poche} déjà en poche"
+        return self.fabriquer(nom, combien)
+
     def _mettre_en_service(self, poses) -> tuple[int, int, str]:
         """Donne à chaque machine posée ce dont ELLE a besoin pour tourner.
 
@@ -3723,6 +3742,12 @@ class Coordinator:
         foreur = "burner-mining-drill" if burner else "electric-mining-drill"
         bras = "burner-inserter" if burner else "inserter"
         taille = 2 if burner else 3
+
+        # DE QUOI POSER, AVANT DE POSER. La chaîne qu'on vient de bâtir a pu consommer
+        # la dernière foreuse : sans ce pré-vol, l'alimentation rend « foreur non posé »
+        # sur un manque d'UNE pièce que l'agent sait forger, et toute l'usine s'éteint.
+        self._assurer_stock(foreur, 1)
+        self._assurer_stock(bras, 1)
 
         self.api.generate_terrain(ancre[0], ancre[1], 25.0)
         mp = plan_micro(MicroRequest(
