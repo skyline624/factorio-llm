@@ -171,7 +171,10 @@ def _debut(nom: str, args: dict) -> None:
 def _fin(nom: str, reponse: str, duree: float) -> None:
     import datetime
     _tracer(f"{datetime.datetime.now():%H:%M:%S} << {nom:26s} {duree:6.1f}s "
-            f"{str(reponse)[:400]}")
+            # LA RAISON D'UN ECHEC EST TOUJOURS EN FIN DE RAPPORT. Tronquer a 400 la
+            # coupait systematiquement : « 0 sortie(s) evacuee(s) » restait sans motif
+            # trois heures durant, alors que le rapport le nommait.
+            f"{str(reponse)[:1200]}")
 
 
 # UN SEUL OUTIL À LA FOIS. Le lien RCON est un singleton et n'est pas réentrant : deux

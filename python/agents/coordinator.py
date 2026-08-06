@@ -1537,6 +1537,11 @@ class Coordinator:
     # mesuré trois bancs de suite, l'usine s'éteignant toujours entre T2 et T3.
     CHARBON_PAR_BRULEUR = 25
 
+    # Ce qu'on va reprendre dans les machines avant d'aller miner. Les produits de fusion
+    # seulement : ce sont eux qui coûtent du temps de four, et eux qui s'entassent quand
+    # l'évacuation manque. Le minerai brut se remine en quelques secondes.
+    MATIERES_RECOLTABLES = ("iron-plate", "copper-plate", "stone-brick")
+
     # Combien de brûleurs on relie au charbon après une pose. Chaque alimentation est
     # une chaîne complète — marche jusqu'au gisement, foreuse, belt, bras — donc une
     # minute ou deux. Les borner évite qu'une chaîne de trente entités passe une heure
@@ -1963,6 +1968,37 @@ class Coordinator:
         stock = perception.inventory(self.api).get("transport-belt", 0)
         return float(min(stock + self.BELTS_FABRICABLES, self.PORTEE_APPRO))
 
+    def _recolter_la_production(self, item: str) -> int:
+        """Vide les machines qui retiennent `item`, et rend ce qu'on a récupéré.
+
+        UNE USINE QU'ON NE RÉCOLTE PAS EST UN STOCK QU'ON N'A PAS. Mesuré partie 13 :
+        l'usine a produit 444 plaques, le joueur en avait 4. Sa chaîne de charbon échoue
+        alors sur `missing={'burner-mining-drill': 2}`, et la fabrication de la foreuse
+        échoue à son tour — deux fois, en 26 puis 20 étapes.
+
+        Le raisonnement tournait en rond : sans plaques pas de foreuse, sans foreuse pas
+        de chaîne de charbon, sans charbon les fours ne fondent plus, donc pas de
+        plaques. Et 440 plaques dormaient dans les machines.
+
+        La sortie n'est pas de miner davantage, c'est de PRENDRE ce qui est déjà là.
+        On ne vide que les machines susceptibles de tenir l'item — inutile de démonter
+        une chaîne voisine qui alimentait autre chose.
+        """
+        avant = perception.inventory(self.api).get(item, 0)
+        try:
+            proches = ((self.api.inspect_at(self.zone[0], self.zone[1], self.rayon)
+                        or {}).get("entities") or [])
+        except Exception:
+            return 0
+        for e in proches:
+            if str(e.get("type", "")) not in ("furnace", "assembling-machine"):
+                continue
+            # `full_output` et `waiting_for_space_in_destination` disent la même chose de
+            # deux points de vue : la machine ne peut plus poser ce qu'elle a fabriqué.
+            self.api.run_action(self.api.empty_output_at, e.get("x"), e.get("y"),
+                                e.get("name"), timeout=20.0)
+        return perception.inventory(self.api).get(item, 0) - avant
+
     def _assurer_stock(self, nom: str, combien: int = 1) -> tuple[bool, str]:
         """Garantit `combien` exemplaires de `nom` en poche, en les fabriquant au besoin.
 
@@ -1980,6 +2016,12 @@ class Coordinator:
         en_poche = perception.inventory(self.api).get(nom, 0)
         if en_poche >= combien:
             return True, f"{nom} : {en_poche} déjà en poche"
+        # RÉCOLTER AVANT DE MINER. Ce qu'on fabrique se paie en plaques, et l'usine en a
+        # déjà produit des centaines — enfermées dans ses fours faute d'évacuation. Aller
+        # miner du minerai quand quatre cent quarante plaques dorment à trente tuiles,
+        # c'est le cercle vicieux mesuré en partie 13.
+        for matiere in self.MATIERES_RECOLTABLES:
+            self._recolter_la_production(matiere)
         return self.fabriquer(nom, combien)
 
     def _mettre_en_service(self, poses) -> tuple[int, int, str]:

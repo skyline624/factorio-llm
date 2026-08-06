@@ -2403,6 +2403,64 @@ def test_l_evacuation_fabrique_le_coffre_qui_lui_manque() -> None:
     assert ok
 
 
+def test_on_recolte_l_usine_avant_de_miner_a_la_main() -> None:
+    """LE CERCLE VICIEUX DE LA SESSION, ET SA SORTIE.
+
+    Partie 13, mesuré : l'usine a produit **444 plaques**, le joueur en a **4**. Hermes
+    lance sa chaîne de charbon, qui échoue sur `missing={'burner-mining-drill': 2}` — et
+    la fabrication de la foreuse échoue à son tour, deux fois, en 26 puis 20 étapes.
+
+    Le raisonnement tourne en rond : sans plaques pas de foreuse, sans foreuse pas de
+    chaîne de charbon, sans charbon les fours ne fondent plus, donc pas de plaques. Et
+    440 plaques dorment dans les machines pendant ce temps.
+
+    La sortie n'est pas de miner davantage — c'est de RÉCOLTER ce qui est déjà produit.
+    `empty_output_at` vide une machine ; le mod le fait déjà pour `evacuer`. Une usine
+    qu'on ne récolte pas est un stock qu'on n'a pas.
+
+    On ne récolte que ce qui sert : viser l'item manquant évite de vider une chaîne
+    voisine qui alimentait autre chose.
+    """
+    from agents.coordinator import Coordinator
+
+    vidages = []
+
+    class _ApiUsine:
+        def __init__(self):
+            self.stock = 4
+
+        def get_state(self):
+            return {"inventory": {"iron-plate": self.stock}, "tick": 1, "ready": True}
+
+        def inspect_at(self, x, y, radius=0.5):
+            return {"entities": [
+                {"name": "stone-furnace", "type": "furnace", "x": 6.0, "y": 6.0,
+                 "status": "waiting_for_space_in_destination"},
+                {"name": "transport-belt", "type": "transport-belt", "x": 7.0, "y": 6.0,
+                 "status": "working"}]}
+
+        def run_action(self, fn, *a, **kw):
+            if getattr(fn, "__name__", "") == "empty_output_at":
+                vidages.append(a)
+                self.stock += 50           # la machine rend ce qu'elle retenait
+            return {"ok": True}
+
+        def empty_output_at(self, *a, **kw):
+            return {"ok": True}
+
+    api = _ApiUsine()
+    c = _coord_mesure(api)
+    c.journal = []
+    c.zone, c.rayon = (0.0, 0.0), 30.0
+    c._recolter_la_production = Coordinator._recolter_la_production.__get__(c)
+
+    gagne = c._recolter_la_production("iron-plate")
+    ok = bool(vidages) and gagne > 0
+    rec("test_on_recolte_l_usine_avant_de_miner_a_la_main", ok,
+        f"{len(vidages)} machine(s) vidée(s), {gagne:+d} plaque(s) récupérée(s)")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2451,6 +2509,7 @@ def main() -> int:
         test_gaver_va_miner_le_charbon_qui_manque,
         test_l_evacuation_fabrique_le_bras_qui_lui_manque,
         test_l_evacuation_fabrique_le_coffre_qui_lui_manque,
+        test_on_recolte_l_usine_avant_de_miner_a_la_main,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,
