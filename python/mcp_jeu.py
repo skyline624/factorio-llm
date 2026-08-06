@@ -137,17 +137,40 @@ def _rendu(valeur: Any) -> str:
 JOURNAL = os.environ.get("FL_MCP_JOURNAL", "mcp_appels.log")
 
 
-def _tracer(nom: str, args: dict, reponse: str, duree: float) -> None:
-    """Une ligne par appel : quand, quoi, avec quoi, combien de temps, ce qui en sort."""
-    import datetime
-    ligne = (f"{datetime.datetime.now():%H:%M:%S} {nom:26s} "
-             f"{str(args)[:70]:70s} {duree:6.1f}s -> {str(reponse)[:110]}")
-    print(f"[appel] {ligne}", flush=True)
+def _tracer(ligne: str) -> None:
+    """Écrit une ligne de journal, sur la sortie et sur le disque."""
+    # `errors="replace"` : la console Windows ecrit en cp1252 et un seul caractere
+    # hors table ferait echouer l'outil lui-meme. Un journal ne doit jamais etre plus
+    # fragile que ce qu'il observe.
+    try:
+        print(f"[appel] {ligne}", flush=True)
+    except UnicodeEncodeError:
+        print("[appel] " + ligne.encode("ascii", "replace").decode("ascii"), flush=True)
     try:
         with open(JOURNAL, "a", encoding="utf-8") as f:
             f.write(ligne + "\n")
     except OSError:
         pass          # un journal qui échoue ne doit jamais arrêter une partie
+
+
+def _debut(nom: str, args: dict) -> None:
+    """UN APPEL EN COURS DOIT SE VOIR. Ne tracer qu'à la sortie rend invisible tout ce
+    qui dure — c'est-à-dire précisément ce qu'on veut observer : bâtir une chaîne occupe
+    plusieurs minutes, et pendant ce temps le journal restait muet.
+
+    Mesuré sur quatre parties : on jugeait le comportement de l'agent sur l'état du jeu
+    faute de voir ses gestes, et « il mine à la main » a été conclu trois fois sans
+    pouvoir distinguer un `se_procurer` d'un `batir_une_chaine` qui s'approvisionne. Ce
+    ne sont pas les mêmes conduites : la seconde est celle qu'on lui demande.
+    """
+    import datetime
+    _tracer(f"{datetime.datetime.now():%H:%M:%S} >> {nom:26s} {str(args)[:80]}")
+
+
+def _fin(nom: str, reponse: str, duree: float) -> None:
+    import datetime
+    _tracer(f"{datetime.datetime.now():%H:%M:%S} << {nom:26s} {duree:6.1f}s "
+            f"{str(reponse)[:110]}")
 
 
 def outil(fn):
@@ -161,14 +184,15 @@ def outil(fn):
 
     @functools.wraps(fn)
     def enveloppe(*a, **kw):
+        args = kw or dict(enumerate(a))
+        _debut(fn.__name__, args)
         t0 = time.time()
         try:
             r = fn(*a, **kw)
         except Exception as e:
-            _tracer(fn.__name__, kw or dict(enumerate(a)),
-                    f"ERREUR {type(e).__name__}: {e}", time.time() - t0)
+            _fin(fn.__name__, f"ERREUR {type(e).__name__}: {e}", time.time() - t0)
             raise
-        _tracer(fn.__name__, kw or dict(enumerate(a)), r, time.time() - t0)
+        _fin(fn.__name__, r, time.time() - t0)
         return r
 
     return mcp.tool()(enveloppe)
