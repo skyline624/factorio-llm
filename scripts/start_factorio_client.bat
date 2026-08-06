@@ -7,12 +7,22 @@ REM Le joueur connecte EST l'IA : en production, le mod lui donne le kit de depa
 REM (via on_player_joined_game) et l'orchestrateur Python pilote son character via RCON.
 REM
 REM 1) Lance d'abord le serveur : scripts\start_factorio_dedicated.bat
-REM 2) Puis ce client, et dans le menu : Multijoueur -> Connect -> 127.0.0.1:34197
+REM 2) Puis ce client : il SE CONNECTE TOUT SEUL a 127.0.0.1:34197 (--mp-connect).
+REM    Passe "menu" en argument pour s'arreter au menu principal a la place.
+REM
+REM La connexion directe est possible parce que server-settings.json porte
+REM require_user_verification=false et verify_identity=false : aucun compte a valider.
+REM Elle compte : chaque partie repart d'une carte neuve, donc d'une reconnexion, et
+REM sans cela il faut un humain devant l'ecran entre deux manches. Un test de production
+REM sans avatar ne mesure rien -- « aucun avatar pour poser le four », 7e partie.
 REM
 REM NB : ne tue PAS factorio.exe (pour ne pas arreter le serveur). Si tu as deja un
 REM     client de test ouvert, ferme-le avant de relancer celui-ci.
 
 setlocal
+
+set "CONNECT=--mp-connect 127.0.0.1:34197"
+if /I "%~1"=="menu" set "CONNECT="
 
 set "ROOT=%~dp0.."
 
@@ -56,9 +66,10 @@ echo write-data=%ROOT%\client-data >> "%CONFIG%"
 
 :startclient
 echo [start] lancement du client de test (mods du projet, write-data client-data) ...
-echo [start] Dans le menu : Multijoueur ^> Connect ^> 127.0.0.1:34197
+if defined CONNECT echo [start] connexion directe a 127.0.0.1:34197
+if not defined CONNECT echo [start] Dans le menu : Multijoueur ^> Connect ^> 127.0.0.1:34197
 echo [start] (cette fenetre reste ouverte pendant la partie ; ferme Factorio pour la liberer)
-"%FACTORIO_EXE%" --config "%CONFIG%" --mod-directory "%MODS_DIR%"
+"%FACTORIO_EXE%" --config "%CONFIG%" --mod-directory "%MODS_DIR%" %CONNECT%
 goto :eof
 
 :noexe
