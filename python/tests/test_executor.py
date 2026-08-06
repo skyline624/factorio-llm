@@ -644,6 +644,79 @@ def test_executor_se_rapproche_de_chaque_pose_lointaine() -> None:
     assert ok
 
 
+def _executor_loin(approach: bool):
+    """Un plan dont la dernière entité est hors de portée, l'avatar à l'origine."""
+    api = FakeApi(FULL_KIT)
+    api.pos = (0.0, 0.0)
+
+    def _walk(x, y):
+        api.calls.append(("walk_to", x, y))
+        api.pos = (float(x), float(y))
+        return {"ok": True}
+
+    def _etat():
+        return {"tick": 1, "ready": True, "test_mode": False,
+                "character": {"position": {"x": api.pos[0], "y": api.pos[1]}},
+                "inventory": dict(api.inv), "task": {}}
+
+    api.walk_to, api.get_state = _walk, _etat
+    plan = _micro(facing=4)
+    plan.entities[-1].x, plan.entities[-1].y = 60.0, 60.0
+    execute_micro(api, plan, generate=False, approach=approach, verify=False)
+    return api, plan
+
+
+def test_executor_s_approche_meme_sans_approche_initiale() -> None:
+    """LA PORTÉE N'EST PAS UNE OPTION — `approach=False` ne l'abolit pas.
+
+    Le correctif précédent plaçait l'approche par pose sous le drapeau `approach`. Or
+    `Coordinator.batir_chaine` passe `approach=False` DÉLIBÉRÉMENT, et pour une raison
+    juste : l'approche initiale menait l'avatar au milieu du chantier, où il refusait
+    ensuite sa propre pose (`can_place` en mode manuel exclut la tuile du personnage).
+    Le drapeau court-circuitait donc le correctif sur le seul chemin qui en avait besoin.
+
+    Mesuré à la huitième partie, correctif en place : 646 s, `missing={}`, et toujours
+    `blocked=[(0,'burner-mining-drill',57,37,'walk closer first')]` avec l'avatar en
+    (52,25) — treize tuiles.
+
+    Marcher n'est pas un confort mais une CONDITION PHYSIQUE : au-delà de
+    `build_distance` le mod refuse, et la chaîne est infaisable. Ce que `approach`
+    gouverne, c'est l'approche initiale vers le centre du plan — rien d'autre.
+    """
+    api, _ = _executor_loin(approach=False)
+    marches = api.named("walk_to")
+    vers_loin = [c for c in marches if abs(c[1] - 60.0) < 12 and abs(c[2] - 60.0) < 12]
+    ok = bool(vers_loin)
+    rec("test_executor_s_approche_meme_sans_approche_initiale", ok,
+        f"{len(marches)} marche(s) : {[(round(c[1]), round(c[2])) for c in marches]}")
+    assert ok
+
+
+def test_executor_ne_marche_pas_sur_la_tuile_a_batir() -> None:
+    """S'APPROCHER SANS SE METTRE EN TRAVERS.
+
+    L'autre moitié du dilemme, et la raison pour laquelle `batir_chaine` avait renoncé
+    à s'approcher : `can_place_check` en mode manuel REFUSE la tuile où se tient le
+    personnage. Vérifié en jeu — une foreuse refusée sur un emplacement parfaitement
+    valide, minerai sur les quatre tuiles, `can_place=True` une fois l'avatar ailleurs.
+    Et une seule entité refusée fait abandonner le plan entier.
+
+    On s'arrête donc À CÔTÉ : assez près pour bâtir, assez loin pour ne pas occuper
+    l'emplacement.
+    """
+    api, _ = _executor_loin(approach=False)
+    vers_loin = [c for c in api.named("walk_to")
+                 if abs(c[1] - 60.0) < 12 and abs(c[2] - 60.0) < 12]
+    assert vers_loin, "aucune approche : le test precedent couvre ce cas"
+    x, y = vers_loin[-1][1], vers_loin[-1][2]
+    ecart = max(abs(x - 60.0), abs(y - 60.0))
+    # Ni sur la tuile (>= 2), ni hors de portee de construction (<= 8).
+    ok = 2.0 <= ecart <= 8.0
+    rec("test_executor_ne_marche_pas_sur_la_tuile_a_batir", ok,
+        f"arret en ({x:.1f},{y:.1f}) soit {ecart:.1f} tuile(s) de l'entite a poser")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_executor_pose_les_3_entites,
@@ -654,6 +727,8 @@ def main() -> int:
         test_executor_verifie_toutes_les_positions_avant_de_poser,
         test_executor_pose_fantome_rejetee,
         test_executor_se_rapproche_de_chaque_pose_lointaine,
+        test_executor_s_approche_meme_sans_approche_initiale,
+        test_executor_ne_marche_pas_sur_la_tuile_a_batir,
         test_executor_verify_desactivable,
         test_executor_retries_epuises_bloque_et_arrete,
         test_executor_echec_pose_malgre_can_place,

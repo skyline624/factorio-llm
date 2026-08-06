@@ -1666,12 +1666,19 @@ class Coordinator:
             # exigeait 6768 charbons sur une chaîne à quatre gisements — infaisable, donc
             # zéro entité posée. Entre les deux, l'agent sait ravitailler ce qui s'épuise.
             # L'AVATAR EST UN OBSTACLE POUR LUI-MÊME. `can_place` en mode manuel refuse la
-            # tuile où se tient le personnage ; l'approche le mène au milieu du chantier,
-            # et une foreuse était refusée sur un emplacement PARFAITEMENT valide —
-            # vérifié après coup : minerai sur les quatre tuiles, `can_place=True` une fois
-            # l'avatar ailleurs. Une seule entité refusée fait abandonner le plan entier.
-            # Une chaîne s'étend sur des centaines de tuiles : aucune position d'approche
-            # n'est sûre. On ne s'approche donc pas.
+            # tuile où se tient le personnage ; l'approche INITIALE le mène au milieu du
+            # chantier, et une foreuse était refusée sur un emplacement PARFAITEMENT
+            # valide — vérifié après coup : minerai sur les quatre tuiles, `can_place=True`
+            # une fois l'avatar ailleurs. Une seule entité refusée fait abandonner le plan
+            # entier. Une chaîne s'étend sur des centaines de tuiles : aucune position
+            # d'approche unique n'est sûre. D'où `approach=False`.
+            #
+            # Cela ne dispense PAS de marcher. Le mod refuse toute pose au-delà de
+            # `build_distance` (« walk closer first ») : sans déplacement, une chaîne plus
+            # large que cette portée est infaisable — 8e partie Hermes, zéro entité posée
+            # après 646 s d'approvisionnement réussi. `execute_micro` s'approche donc de
+            # chaque pose lointaine indépendamment de ce drapeau, en s'arrêtant à
+            # `RECUL_POSE` tuiles de la cible pour ne pas occuper l'emplacement.
             return execute_micro(self.api, lp, fuel=self.combustible,
                                  fuel_count=self.AMORCE_BRAS, approach=False,
                                  timeout=40.0)

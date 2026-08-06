@@ -63,6 +63,7 @@ Limites connues (levées au chantier suivant)
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -79,6 +80,12 @@ DIR_TO_STR: dict[int, str] = {0: "north", 2: "east", 4: "south", 6: "west"}
 # est refusee : « walk closer first ». On garde une marge -- arriver pile a la limite
 # laisserait la moindre derive de position hors de portee.
 PORTEE_POSE = 8.0
+
+# OU L'ON S'ARRETE en s'approchant d'une pose. Jamais sur la tuile visee : `can_place`
+# en mode manuel refuse l'emplacement ou se tient le personnage, et une seule entite
+# refusee fait abandonner le plan entier. Trois tuiles laissent l'entite libre (les plus
+# grandes du bootstrap font 2x2) tout en restant largement dans `PORTEE_POSE`.
+RECUL_POSE = 3.0
 
 # Candidats de repli quand `can_place_check` refuse la position calculée. Bornés et
 # ordonnés du plus proche au plus éloigné : l'executor absorbe l'imprécision du bbox de
@@ -435,10 +442,26 @@ def execute_micro(api, plan, *, fuel: str = "coal", fuel_count: int = 5,
         # « blocked=[(0,'burner-mining-drill',-55,-91,'walk closer first')] » — le joueur
         # était à treize tuiles. On ne marche que si c'est nécessaire : une entité déjà à
         # portée ne doit pas coûter un déplacement.
-        if approach and not dry_run:
+        #
+        # INDÉPENDANT DE `approach`, et c'est le cœur du correctif. `batir_chaine` passe
+        # `approach=False` pour une raison juste — l'approche initiale menait l'avatar au
+        # milieu du chantier, où il refusait ensuite sa propre pose. Mais le drapeau
+        # court-circuitait alors le seul chemin qui en avait besoin : 8e partie, correctif
+        # en place, toujours « walk closer first » à treize tuiles. La portée n'est pas
+        # une option de confort, c'est une condition physique ; `approach` ne gouverne
+        # que l'approche INITIALE vers le centre du plan.
+        #
+        # ET L'ON S'ARRÊTE À CÔTÉ, jamais sur la tuile visée : `can_place` en mode manuel
+        # exclut l'emplacement du personnage. C'est l'autre moitié du dilemme, et la
+        # raison pour laquelle `batir_chaine` avait renoncé à s'approcher.
+        if not dry_run:
             try:
-                if deplacement.distance(api, px, py) > PORTEE_POSE:
-                    ax, ay = deplacement.marcher_vers(api, px, py)
+                cx0, cy0 = deplacement.position(api)
+                loin = math.hypot(px - cx0, py - cy0)
+                if loin > PORTEE_POSE:
+                    part = max(0.0, (loin - RECUL_POSE) / loin)
+                    ax, ay = deplacement.marcher_vers(api, cx0 + (px - cx0) * part,
+                                                      cy0 + (py - cy0) * part)
                     report.steps.append(f"approche {e.name}@({px},{py}) -> "
                                         f"({ax:.0f},{ay:.0f})")
             except Exception as exc:
