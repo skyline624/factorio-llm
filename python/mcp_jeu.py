@@ -31,6 +31,7 @@ Lancement (sur l'hôte, serveur Factorio démarré) :
 from __future__ import annotations
 
 import os
+import threading
 from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -173,22 +174,48 @@ def _fin(nom: str, reponse: str, duree: float) -> None:
             f"{str(reponse)[:400]}")
 
 
+# UN SEUL OUTIL À LA FOIS. Le lien RCON est un singleton et n'est pas réentrant : deux
+# outils en parallèle mélangeraient leurs réponses. Ce verrou sérialise le TRAVAIL sans
+# bloquer le TRANSPORT — c'est toute la différence avec l'exécution sur la boucle.
+_VERROU_JEU = threading.Lock()
+
+
 def outil(fn):
-    """Déclare un outil MCP et journalise chaque appel.
+    """Déclare un outil MCP et journalise chaque appel, HORS de la boucle d'événements.
 
     Enveloppe `mcp.tool()` plutôt que de le remplacer : la signature et la docstring —
     donc ce que l'agent LIT de l'outil — restent celles de la fonction.
+
+    UN OUTIL SYNCHRONE GÈLE TOUT LE SERVEUR. Nos outils parlent RCON pendant des dizaines
+    de secondes (`chercher_une_technologie` : 72 s, `batir_une_chaine` : 647 s). Exécutés
+    sur la boucle asyncio, ils suspendent le transport entier : plus de ping, plus de
+    session gérée, plus rien. Le client en conclut que le lien est mort, ferme la session
+    et en rouvre une — et la réponse, produite ensuite, part sur une session sans
+    destinataire.
+
+    Mesuré des deux côtés. En jeu (9e partie) : serveur fini en 71,9 s, client en
+    « TimeoutError after 900.0s » — quinze minutes perdues, et Hermes conclut à une panne
+    du serveur pour un appel qui avait RÉUSSI. Hors du jeu (banc `sonde_mcp_bloque`) : un
+    outil qui dort 20 s empêche un second appel de seulement s'INITIALISER avant sa fin.
+
+    D'où `to_thread` : le travail part sur un thread, la boucle reste libre de répondre.
     """
     import functools
     import time
 
+    import anyio.to_thread
+
+    def _travail(*a, **kw):
+        with _VERROU_JEU:
+            return fn(*a, **kw)
+
     @functools.wraps(fn)
-    def enveloppe(*a, **kw):
+    async def enveloppe(*a, **kw):
         args = kw or dict(enumerate(a))
         _debut(fn.__name__, args)
         t0 = time.time()
         try:
-            r = fn(*a, **kw)
+            r = await anyio.to_thread.run_sync(functools.partial(_travail, *a, **kw))
         except Exception as e:
             _fin(fn.__name__, f"ERREUR {type(e).__name__}: {e}", time.time() - t0)
             raise
