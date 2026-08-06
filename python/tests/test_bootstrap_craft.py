@@ -200,6 +200,36 @@ def test_la_decision_de_fabriquer_porte_la_quantite() -> None:
     assert ok
 
 
+def test_le_bois_se_recolte_sur_les_arbres() -> None:
+    """Le bois n'a AUCUNE recette : il se mine, mais sur une cible qui ne porte pas son nom.
+
+    Blocage mesuré : `small-electric-pole` coûte 1 wood + 2 copper-cable, et
+    `wooden-chest` 2 wood. Les mains vides, l'agent rendait « ni ressource, ni recette
+    accessible pour 'wood' » — donc pas de coffre pour évacuer, pas de poteau pour
+    l'électricité, et tout le palier électrique fermé pour une bûche.
+
+    Le piège est dans le NOM. Le mode « mine » cherche `goal.item` en jeu ; or aucune
+    entité ne s'appelle « wood » : les arbres portent `tree-01`, `dry-hairy-tree`, et
+    vingt-six autres noms. Ce qu'ils ont en commun est leur TYPE, `tree`, et
+    `find_target_entities` (mod) retombe justement sur le type quand le nom ne donne
+    rien. La cible du minage doit donc être dissociée de l'item récolté.
+    """
+    steps = plan_production(ProductionGoal("wood", 4), {}, _lookup)
+    kinds = _kinds(steps)
+    ok_forme = kinds == ["find_nearest", "walk_to_entity", "mine_entity"]
+    cibles = sorted({str(s.args.get("name")) for s in steps})
+    rec("le bois se recolte sur les arbres", ok_forme and cibles == ["tree"],
+        f"{kinds} visant {cibles}")
+    assert ok_forme and cibles == ["tree"]
+
+
+def test_le_bois_deja_en_poche_ne_se_recolte_pas() -> None:
+    """Un seul rondin suffit à un poteau : la table ne doit pas rendre le bois inépuisable."""
+    steps = plan_production(ProductionGoal("wood", 1), {"wood": 1}, _lookup)
+    rec("le bois deja en poche ne se recolte pas", steps == [], f"{_kinds(steps)}")
+    assert steps == []
+
+
 def main() -> int:
     for t in (test_une_machine_hors_table_se_planifie_quand_meme,
               test_le_bootstrap_complet_part_de_rien,
@@ -208,7 +238,9 @@ def main() -> int:
               test_le_plan_va_chercher_le_combustible_du_four,
               test_le_charbon_deja_en_poche_ne_se_remine_pas,
               test_les_ressources_restent_minees_et_les_plaques_fondues,
-              test_la_decision_de_fabriquer_porte_la_quantite):
+              test_la_decision_de_fabriquer_porte_la_quantite,
+              test_le_bois_se_recolte_sur_les_arbres,
+              test_le_bois_deja_en_poche_ne_se_recolte_pas):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

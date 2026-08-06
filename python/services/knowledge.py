@@ -56,6 +56,13 @@ ITEM_PROD: dict[str, dict] = {
     "copper-ore":    {"mode": "mine"},
     "coal":          {"mode": "mine"},
     "stone":         {"mode": "mine"},
+    # Le bois se récolte sur les arbres — et AUCUNE entité ne s'appelle « wood ». Les
+    # arbres portent `tree-01`, `dry-hairy-tree` et vingt-six autres noms ; leur seul
+    # point commun est le TYPE `tree`, sur lequel `find_target_entities` retombe quand le
+    # nom ne donne rien. D'où `cible` : ce qu'on VISE en jeu, distinct de ce qu'on RÉCOLTE.
+    # Sans cette ligne, `small-electric-pole` (1 wood) et `wooden-chest` (2 wood) étaient
+    # hors d'atteinte les mains vides, et tout le palier électrique fermé pour une bûche.
+    "wood":          {"mode": "mine", "cible": "tree"},
     # Fours (smelting) : 1 ore -> ratio plate.
     "iron-plate":    {"mode": "smelt", "from": "iron-ore",   "ratio": 1},
     "copper-plate":  {"mode": "smelt", "from": "copper-ore", "ratio": 1},
@@ -151,10 +158,12 @@ def _plan(goal: ProductionGoal, sim_inv: dict[str, int],
     steps: list[Step] = []
 
     if mode == "mine":
-        # Resource : trouver -> marcher -> miner.
-        steps.append(Step("find_nearest", {"name": goal.item}))
-        steps.append(Step("walk_to_entity", {"name": goal.item}))
-        steps.append(Step("mine_entity", {"name": goal.item, "count": missing}))
+        # Resource : trouver -> marcher -> miner. La CIBLE en jeu n'est pas toujours
+        # l'item récolté (`wood` se mine sur un `tree`) : par défaut les deux coïncident.
+        cible = spec.get("cible", goal.item)
+        steps.append(Step("find_nearest", {"name": cible}))
+        steps.append(Step("walk_to_entity", {"name": cible}))
+        steps.append(Step("mine_entity", {"name": cible, "count": missing}))
         _credit(sim_inv, goal.item, missing)
 
     elif mode == "smelt":
