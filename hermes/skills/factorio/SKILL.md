@@ -126,28 +126,61 @@ Mesuré : un appel coupé trop tôt s'est lu comme « le serveur est tombé » a
 construisait. Si un appel de construction est long, il travaille — attends-le. Ne conclus
 à une panne que si un appel de LECTURE (`etat_du_jeu`, `regarder`) échoue lui aussi.
 
-## `wooden-chest` verrouille toutes les chaînes — mesuré
+## `find_nearest` retourne None après des timeouts — mesuré, partie 4
 
-`batir_une_chaine` pose toujours un coffre en bout de chaîne pour stocker la
-production. Dans cette configuration, `wooden-chest` est **verrouillé** dès le départ
-et aucune technologie de premier rang ne l'ouvre. `ce_qu_il_faut_pour("wooden-chest")`
-révèle qu'il exige `steel-plate` — donc `steel-processing` (50 flacons) est le seul
-chemin pour débloquer TOUTE chaîne de production.
+Après plusieurs timeouts MCP consécutifs (batir_une_chaine + chercher_une_technologie),
+le serveur entre un état dégradé où `find_nearest(ressource)` retourne None pour
+**toutes** les ressources (iron-ore, copper-ore, coal). `ou_sont_les_ressources`
+trouve toujours les gisements, mais `se_procurer` et `chercher_une_technologie` ne
+peuvent plus rien fabriquer car leur étape `find_nearest` échoue.
 
-Conséquence : on ne peut pas bâtir une chaîne autonome (fer, cuivre, rien) tant
-qu'on n'a pas `steel-processing`. La séquence réelle depuis une carte vierge est :
+Symptômes mesurés :
+- `se_procurer("iron-plate")` → "bloqué sur nearest iron-ore = None" en 12 étapes
+- `se_procurer("copper-plate")` → "bloqué sur nearest copper-ore = None" en 12 étapes
+- `se_procurer("coal")` → "rien à faire, l'inventaire en contient déjà assez" (incohérent)
+- `chercher_une_technologie("automation")` → "0/10" en 26 étapes, 0 flacon fabriqué
+- `batir_une_chaine("iron-plate")` → 0 entité posée, tous les sous-produits en échec
 
-1. `se_procurer` charbon + inserteur (amorcer) ;
-2. `chercher_une_technologie("electronics")` — 10 copper-plate à la main ;
-3. `chercher_une_technologie("automation-science-pack")` — fabrique le lab à la main ;
-4. `batir_une_centrale` — le lab exige du courant ;
-5. `chercher_une_technologie("automation")` — 10 flacons, assembleuse débloquée ;
-6. `chercher_une_technologie("steel-processing")` — 50 flacons à la main ;
-7. SEULEMENT ALORS `batir_une_chaine("iron-plate")` fonctionne.
+Le serveur HTTP répond (initialize, tools/list, etat_du_jeu fonctionnent), mais les
+fonctions de localisation de ressources sont cassées. C'est un état **non
+récupérable** dans la session : il faut relancer le serveur Factorio.
 
-Étape 6 prend **plus de 15 minutes** (timeout MCP à 900 s) : l'outil fabrique 50
-flacons à la main. Mesuré : deux timeouts consécutifs sur
-`chercher_une_technologie("steel-processing")`, le serveur a fini par crasher.
+**Conséquence stratégique** : éviter les timeouts est critique. Un timeout n'est
+pas seulement long — il corrompt l'état du serveur pour le reste de la session.
+`batir_une_chaine` sur une carte vierge sans `steel-processing` (wooden-chest
+verrouillé) timeout à 900 s et lance la dégradation. NE JAMAIS appeler
+`batir_une_chaine` avant d'avoir `steel-processing`.
+
+## `se_deplacer` ne déplace pas le joueur — mesuré, partie 4
+
+`se_deplacer(x, y)` retourne systématiquement "arrivé en (0,0) — visé (x, y)" quel
+que soit la cible. Le joueur reste à sa position de départ (vérifié avec
+`regarder` : crash-site-spaceship toujours visible à côté). L'outil ne déclenche
+pas le déplacement réel du personnage en jeu.
+
+## `chercher_une_technologie` n'a pas besoin de courant ni de lab posé — mesuré
+
+`chercher_une_technologie("electronics")` a réussi à fabriquer 10 copper-plate à la
+main, sans lab posé ni réseau électrique. `chercher_une_technologie("automation-science-pack")`
+a réussi à fabriquer un lab à la main. L'outil simule la recherche en fabriquant les
+prérequis directement — il ne pose pas de lab ni ne l'alimente.
+
+**Conséquence** : la séquence documentée (étape 4 : batir_une_centrale avant
+automation) est **fausse** pour ce serveur. La centrale n'est pas nécessaire pour
+les recherches manuelles. L'ordre correct est :
+
+1. `chercher_une_technologie("electronics")` — 10 copper-plate à la main ;
+2. `chercher_une_technologie("automation-science-pack")` — lab à la main ;
+3. `chercher_une_technologie("automation")` — 10 flacons à la main ;
+4. `chercher_une_technologie("steel-processing")` — 50 flacons à la main ;
+5. `batir_une_chaine("iron-plate")` — coffre débloqué, chaîne possible.
+
+La centrale vient **après** steel-processing, pas avant. Le cercle vicieux
+small-electric-pole n'existe plus car on n'a pas besoin de la centrale pour
+rechercher.
+
+ATTENTION : les étapes 3-4 exigent `find_nearest(iron-ore)` fonctionnel. Si le
+serveur est dans l'état dégradé (find_nearest = None), ces étapes échouent.
 
 ## `se_procurer` : le paramètre est `combien`, pas `quantite`
 
@@ -194,3 +227,20 @@ mieux jouer. Si tu compares, compare à durée égale.
 Un fait durable sur ce jeu mérite d'être écrit dans une skill — un piège rencontré, un
 enchaînement qui marche, une limite. Écris ce que tu as **mesuré**, pas ce que tu supposes,
 et dis comment tu l'as constaté. La partie suivante commencera là où celle-ci s'arrête.
+
+## Ce que le bois verrouille — vérifié contre le jeu le 06/08
+
+`wooden-chest` coûte **2 bois**, `small-electric-pole` **1 bois + 2 câbles**. Les deux
+recettes sont OUVERTES dès le départ : rien n'est verrouillé par une technologie.
+
+Mais le bois n'a **aucune recette** — il se récolte en abattant un arbre, et `se_procurer`
+ne sait pas encore le faire. C'est donc le bois, et lui seul, qui limite le coffre et le
+poteau. Une chaîne se bâtit sans coffre (`batir_une_chaine` choisit le réceptacle qu'elle
+peut faire, ou s'en passe).
+
+CORRECTION D'UNE LEÇON PRÉCÉDENTE : il avait été écrit ici que `wooden-chest` exigeait
+`steel-plate` et que `steel-processing` était le seul chemin vers toute production. C'était
+faux, et la faute venait de l'outil : `ce_qu_il_faut_pour` remontait des recettes de
+RECYCLAGE — recycler un fusil à pompe rend du bois — et inventait neuf étages pour un objet
+qui en compte deux. L'outil est réparé. Se méfier d'une chaîne anormalement longue pour un
+objet simple : c'est le signe d'un outil qui ment, pas d'un jeu compliqué.

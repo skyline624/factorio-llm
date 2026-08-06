@@ -1637,6 +1637,13 @@ class Coordinator:
                      replan_budget=self.REPLANS_CHAINE,
                      layout_constraints=LayoutConstraints(
                          collect_belt_scope="drills",
+                         # LE COFFRE SE CHOISIT, comme la foreuse et le four. Laissé en
+                         # dur à « wooden-chest », il a fait échouer une chaîne entière —
+                         # 565 s de travail, 0 entité posée — pour un objet qui coûte du
+                         # bois, lequel n'a aucune recette. `None` = aucun réceptacle
+                         # possible : le planificateur s'en passera plutôt que d'exiger
+                         # l'introuvable.
+                         sink_tier=self.coffre_disponible() or "",
                          bypass_offset_v=self.PAS_ECART_CHAINE,
                          bypass_max_offset_v=self.ECART_MAX_CHAINE)))
         lp = fb.build_layout(splan, geometry)
@@ -2096,6 +2103,44 @@ class Coordinator:
         return {"drill": "burner-mining-drill", "inserter": "burner-inserter",
                 "furnace": "stone-furnace", "drill_size": 2, "furnace_size": 2,
                 "nom": "burner"}
+
+    # Les réceptacles connus, du moins cher au plus cher. Le bois coûte deux planches et
+    # le fer huit plaques : on préfère le premier quand on peut, sans jamais l'exiger.
+    COFFRES = ("wooden-chest", "iron-chest", "steel-chest")
+
+    def coffre_disponible(self) -> Optional[str]:
+        """Quel coffre on peut réellement poser, ou None si aucun.
+
+        UNE CONSTANTE LÀ OÙ IL FALLAIT UN CHOIX. `LayoutConstraints.sink_tier` valait
+        « wooden-chest » en dur, et une chaîne entière était refusée faute de ce seul
+        objet : mesuré en jeu, 565 secondes de travail, dix-huit belts, cinq inserteurs,
+        trois foreuses et deux fours fabriqués — puis « 0 entité posée,
+        missing={'wooden-chest': 1} », avec dix plaques de fer en poche.
+
+        Aggravant : le coffre en bois coûte deux BOIS, qui n'a aucune recette — il se
+        récolte sur un arbre. Il n'était pas seulement absent, il était hors d'atteinte.
+
+        Le projet choisit déjà ses paliers de foreuse, four et inserteur selon les moyens
+        du moment (`tiers_micro`) ; le réceptacle avait été oublié dans cette logique. On
+        applique la même règle : en poche, ou fabricable — sinon on le dit.
+        """
+        inv = perception.inventory(self.api)
+        for nom in self.COFFRES:
+            if inv.get(nom, 0) > 0:
+                return nom
+            recette = perception.recipe_of(self.api, nom)
+            if recette is None:
+                continue
+            # UNE RECETTE OUVERTE N'EST PAS UNE RECETTE FAISABLE. `wooden-chest` est
+            # ouverte sur toute carte neuve, et pourtant hors d'atteinte : elle coûte du
+            # BOIS, qui n'a aucune recette et se récolte sur un arbre. Juger sur
+            # l'existence de la recette aurait redonné le même coffre introuvable.
+            ingredients = [str(i.get("name", "")) for i in
+                           (recette.get("ingredients") or [])]
+            if all(inv.get(i, 0) > 0 or perception.recipe_of(self.api, i) is not None
+                   for i in ingredients):
+                return nom
+        return None
 
     def fabriquer(self, item: str, combien: int = 1) -> tuple[bool, str]:
         """Se procure `item` : miner, fondre, crafter — dans cet ordre s'il le faut.

@@ -1895,6 +1895,65 @@ def test_les_ancres_sont_essayees_de_la_plus_proche_a_la_plus_lointaine() -> Non
     assert ok
 
 
+def test_le_coffre_se_choisit_comme_les_autres_paliers() -> None:
+    """UNE CONSTANTE LÀ OÙ IL FALLAIT UN CHOIX — et neuf minutes perdues pour un coffre.
+
+    Mesuré à la cinquième partie d'Hermes, sur carte vierge :
+
+        09:46:19 >> batir_une_chaine {'item': 'iron-plate'}
+        09:55:44 << 565.2s ÉCHEC — 0 entité posée, missing={'wooden-chest': 1}
+
+    Neuf minutes de travail, 18 belts, 5 inserteurs, 3 foreuses et 2 fours fabriqués —
+    et le plan entier refusé faute d'UN coffre. Il avait pourtant dix plaques de fer en
+    poche, de quoi faire un `iron-chest` (8 plaques) sur-le-champ.
+
+    La cause : `LayoutConstraints.sink_tier = "wooden-chest"`, écrit en dur. Le projet
+    choisit déjà ses paliers de foreuse, four et inserteur selon les moyens du moment
+    (`tiers_micro`) ; le réceptacle avait été oublié dans cette logique.
+
+    Aggravant : `wooden-chest` coûte 2 bois, et le bois n'a AUCUNE recette — il se
+    récolte sur un arbre, ce que `fabriquer` ne sait pas faire. Le coffre en bois était
+    donc hors d'atteinte, pas seulement absent.
+    """
+    from agents.coordinator import Coordinator
+
+    class _Api:
+        """Ce que le jeu répond sur les recettes, rien de plus."""
+
+        def __init__(self, ouvertes, inventaire=None):
+            self.ouvertes, self.inv = set(ouvertes), dict(inventaire or {})
+
+    def _tier(ouvertes, inventaire=None):
+        api = _Api(ouvertes, inventaire)
+        c = _coord_mesure(api)
+        c.tiers_micro = Coordinator.tiers_micro.__get__(c)
+        import services.perception as perc
+        vrai_inv, vrai_rec = perc.inventory, perc.recipe_of
+        perc.inventory = lambda a: dict(a.inv)
+        ingredients = {"wooden-chest": [{"name": "wood", "amount": 2}],
+                       "iron-chest": [{"name": "iron-plate", "amount": 8}]}
+        perc.recipe_of = lambda a, n: (
+            {"name": n, "ingredients": ingredients.get(n, [])}
+            if n in a.ouvertes else None)          # `wood` : jamais dans `ouvertes`
+        try:
+            return Coordinator.coffre_disponible(c)
+        finally:
+            perc.inventory, perc.recipe_of = vrai_inv, vrai_rec
+
+    # Du bois en poche : le coffre en bois convient, il est le moins cher.
+    bois = _tier({"wooden-chest", "iron-chest"}, {"wood": 4})
+    # Pas de bois, mais des plaques : le coffre en FER, plutôt que d'échouer.
+    fer = _tier({"wooden-chest", "iron-chest"}, {"iron-plate": 10})
+    # Ni l'un ni l'autre : on le dit, on n'invente pas.
+    rien = _tier(set(), {})
+
+    ok = (bois == "wooden-chest" and fer == "iron-chest" and rien is None)
+    rec("test_le_coffre_se_choisit_comme_les_autres_paliers", ok,
+        f"avec du bois -> {bois} ; sans bois mais 10 plaques -> {fer} ; "
+        f"sans rien -> {rien}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -1944,6 +2003,7 @@ def main() -> int:
         test_evacuer_s_approche_avant_de_vider,
         test_le_combustible_offre_un_choix_au_lieu_dun_verdict,
         test_les_ancres_sont_essayees_de_la_plus_proche_a_la_plus_lointaine,
+        test_le_coffre_se_choisit_comme_les_autres_paliers,
     ]
     for t in tests:
         t()

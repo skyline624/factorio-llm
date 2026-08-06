@@ -677,7 +677,22 @@ def recette_de(api, item: str):
         return directe
     if "entity" in d:                      # ressource brute : elle s'extrait
         return None
-    for p in sorted(d.get("recipes_producing") or [],
+    # RECYCLER N'EST PAS PRODUIRE. Une recette de catégorie « recycling » défait un objet
+    # pour en rendre les morceaux : c'est un cycle, jamais une source.
+    #
+    # Mesuré le 06/08 : `wood` n'a aucune recette et ses seuls « producteurs » sont des
+    # recyclages. `ce_qu_il_faut_pour("wooden-chest")` répondait donc « 9 étages —
+    # combat-shotgun, copper-ore, steel-plate… » pour un coffre qui coûte DEUX PLANCHES,
+    # en remontant la branche du fusil à pompe.
+    #
+    # Ce que cela a coûté est le vrai sujet : Hermes a lu cette réponse et a INSCRIT DANS
+    # SA PROPRE SKILL que « steel-processing est le seul chemin pour débloquer toute
+    # chaîne de production ». Il n'avait pas mal raisonné — il avait bien raisonné sur une
+    # donnée corrompue. Un agent qui apprend amplifie la qualité de ses instruments.
+    producteurs = [p for p in (d.get("recipes_producing") or [])
+                   if p.get("category") != "recycling"
+                   and not str(p.get("name", "")).endswith("-recycling")]
+    for p in sorted(producteurs,
                     key=lambda r: (not r.get("enabled"), r.get("n_ingredients", 99),
                                    r.get("name", ""))):
         via = api.describe(p.get("name", ""))

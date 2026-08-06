@@ -58,7 +58,8 @@ class FauxJeu:
             # fabrique par un PROCEDE au nom different porte ses `recipes_producing`.
             if name in getattr(self, "ressources", ()):
                 return {"name": name, "entity": {"type": "resource"}}
-            prod = [{"name": n, "enabled": True, "n_ingredients": len(ing)}
+            prod = [{"name": n, "enabled": True, "n_ingredients": len(ing),
+                     "category": getattr(self, "categories", {}).get(n, "crafting")}
                     for n, ing in self.recettes.items()
                     if name in getattr(self, "produits", {}).get(n, ())]
             return {"name": name, "recipes_producing": prod} if prod else {}
@@ -243,7 +244,45 @@ def test_un_minerai_qui_ne_se_fond_pas_ne_veut_pas_de_four() -> None:
                f"iron-plate -> {fond_en(jeu, 'iron-plate')}")
 
 
-TESTS = [test_un_minerai_qui_ne_se_fond_pas_ne_veut_pas_de_four,
+def test_le_recyclage_n_est_pas_un_moyen_de_production() -> None:
+    """RECYCLER N'EST PAS PRODUIRE — et un outil qui l'ignore enseigne des faussetés.
+
+    Mesuré le 06/08, et la conséquence est le vrai sujet. `ce_qu_il_faut_pour` répondait :
+
+        wooden-chest : 9 étages — combat-shotgun, copper-ore, copper-plate,
+                       iron-gear-wheel, iron-ore, iron-plate, steel-plate, wood…
+
+    Un coffre en bois coûte DEUX PLANCHES. Le parcours cherchait « qui produit du bois »,
+    tombait sur `wood-recycling` — le recyclage rend du bois — et remontait toute la
+    branche du fusil à pompe.
+
+    Ce que cela a coûté : Hermes a lu cette réponse, en a conclu que `wooden-chest`
+    exigeait `steel-plate`, et a INSCRIT DANS SA PROPRE SKILL que « `steel-processing`
+    est le seul chemin pour débloquer toute chaîne de production ». Il n'avait pas mal
+    raisonné : il avait correctement raisonné sur une donnée corrompue. Un agent qui
+    apprend amplifie la qualité de ses instruments, dans les deux sens.
+
+    La règle est générale et ne nomme aucun item : une recette de catégorie « recycling »
+    défait un objet pour en rendre les morceaux. C'est un cycle, jamais une source.
+    """
+    jeu = FauxJeu({"plastique": [("charbon", 1)]})
+    jeu.ressources = {"charbon"}
+    # Le piège exact du jeu : la seule chose qui « produit » du bois est un recyclage.
+    jeu.recettes["coffre"] = [("bois", 2)]
+    jeu.recettes["fusil-recycling"] = [("fusil", 1)]
+    jeu.produits = {"fusil-recycling": ("bois",)}
+    jeu.categories = {"fusil-recycling": "recycling"}
+
+    items, feuilles = decouvrir_chaine(jeu, "coffre")
+    assert rec("le bois reste une feuille, le recyclage n'est pas sa source",
+               "fusil" not in items and "bois" in feuilles,
+               f"items={items} feuilles={feuilles}")
+    assert rec("la chaîne du coffre tient en deux étages",
+               set(items) == {"coffre", "bois"}, f"items={items}")
+
+
+TESTS = [test_le_recyclage_n_est_pas_un_moyen_de_production,
+         test_un_minerai_qui_ne_se_fond_pas_ne_veut_pas_de_four,
          test_chaine_complete_du_flacon_vert,
          test_les_feuilles_sont_les_gisements,
          test_profondeur_complete,
