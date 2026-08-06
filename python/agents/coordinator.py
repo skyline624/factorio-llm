@@ -2135,10 +2135,17 @@ class Coordinator:
             # ouverte sur toute carte neuve, et pourtant hors d'atteinte : elle coûte du
             # BOIS, qui n'a aucune recette et se récolte sur un arbre. Juger sur
             # l'existence de la recette aurait redonné le même coffre introuvable.
-            ingredients = [str(i.get("name", "")) for i in
-                           (recette.get("ingredients") or [])]
-            if all(inv.get(i, 0) > 0 or perception.recipe_of(self.api, i) is not None
-                   for i in ingredients):
+            #
+            # `recipe_of` rend une LISTE DE COUPLES — `[('wood', 2)]` — et non un dict.
+            # Le lire comme un dict a fait échouer `batir_une_chaine` sur
+            # « 'list' object has no attribute 'get' » à CHAQUE appel d'une partie
+            # entière : mon test double rendait un dict, il validait une forme qui
+            # n'existe pas. Un double qui ne copie pas le réel ne prouve rien.
+            # LA QUANTITÉ COMPTE. Un bois en poche ne fait pas un coffre qui en coûte
+            # deux : ignorer les quantités rendait « wooden-chest » disponible sur le kit
+            # vanilla, et l'échec se reportait plus loin, au moment de la pose.
+            if all(inv.get(n, 0) >= q or perception.recipe_of(self.api, n) is not None
+                   for n, q in (recette or [])):
                 return nom
         return None
 

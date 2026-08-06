@@ -1930,11 +1930,14 @@ def test_le_coffre_se_choisit_comme_les_autres_paliers() -> None:
         import services.perception as perc
         vrai_inv, vrai_rec = perc.inventory, perc.recipe_of
         perc.inventory = lambda a: dict(a.inv)
-        ingredients = {"wooden-chest": [{"name": "wood", "amount": 2}],
-                       "iron-chest": [{"name": "iron-plate", "amount": 8}]}
-        perc.recipe_of = lambda a, n: (
-            {"name": n, "ingredients": ingredients.get(n, [])}
-            if n in a.ouvertes else None)          # `wood` : jamais dans `ouvertes`
+        # LA FORME RÉELLE : `recipe_of` rend une LISTE DE COUPLES, pas un dict. Le
+        # double rendait un dict et validait une forme qui n'existe pas — d'où
+        # « 'list' object has no attribute 'get' » à chaque appel, une partie durant.
+        # Un double qui ne copie pas le réel ne prouve rien.
+        ingredients = {"wooden-chest": [("wood", 2)],
+                       "iron-chest": [("iron-plate", 8)]}
+        perc.recipe_of = lambda a, n: (ingredients.get(n, [])
+                                       if n in a.ouvertes else None)
         try:
             return Coordinator.coffre_disponible(c)
         finally:

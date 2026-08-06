@@ -151,6 +151,43 @@ pas seulement long — il corrompt l'état du serveur pour le reste de la sessio
 verrouillé) timeout à 900 s et lance la dégradation. NE JAMAIS appeler
 `batir_une_chaine` avant d'avoir `steel-processing`.
 
+## `batir_une_chaine` peut crasher même sur serveur sain — mesuré, partie 5
+
+`batir_une_chaine("iron-plate")` et `batir_une_chaine("coal")` retournent
+`'list' object has no attribute 'get'` même quand le serveur est sain :
+`etat_du_jeu` répond, `find_nearest` fonctionne (se_procurer marche), pas de
+timeout préalable. C'est un bug interne au code de construction (Python), pas
+l'état dégradé décrit plus bas. Non contournable par les arguments (item et
+debit testés). Il faut relancer le serveur Factorio.
+
+## L'arbre de recherche a changé — automation exige un lab alimenté — mesuré, partie 5
+
+L'ordre documenté (electronics → automation-science-pack → automation →
+steel-processing) est **obsolète**. L'arbre réel mesuré le 06/08 :
+
+1. `electronics` (fabriquer 10 copper-plate) — OK à la main, pas de lab.
+2. `steam-power` (fabriquer 50 iron-plate) — OK à la main, pas de lab.
+3. `automation-science-pack` (fabriquer 1 lab) — OK à la main.
+4. `automation` (10 automation-science-pack) — **ÉCHEC** : « aucune place
+   libre pour un laboratoire près du réseau ». Exige un lab POSÉ sur un
+   RÉSEAU ÉLECTRIQUE. Contrairement à electronics/steam-power (coût = objets
+   fabriqués à la main), automation coûte des flacons de science, qui
+   exigent un lab alimenté.
+
+**Conséquence** : la centrale EST nécessaire avant automation, contrairement
+à ce qui était écrit. L'ordre correct est :
+
+1. electronics → 2. steam-power → 3. automation-science-pack →
+4. **batir_une_centrale** (réseau électrique) → 5. poser lab + alimenter →
+6. automation → 7. steel-processing → 8. batir_une_chaine.
+
+**Le bois verrouille toute la suite.** small-electric-pole = 1 bois + 2 câbles.
+Pas de bois → pas de poteau → pas de réseau → pas de lab alimenté → pas de
+recherche automation → pas d'assembleuse. `se_procurer("wood")` échoue
+(« verrouillée »), `ou_sont_les_ressources("wood")` ne trouve rien (le bois
+vient des arbres, pas d'un gisement), et aucun arbre à moins de 40 tuiles du
+spawn. **Il faut abattre un arbre à la main en jeu** pour débloquer.
+
 ## `se_deplacer` ne déplace pas le joueur — mesuré, partie 4
 
 `se_deplacer(x, y)` retourne systématiquement "arrivé en (0,0) — visé (x, y)" quel
