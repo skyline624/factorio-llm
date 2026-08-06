@@ -2504,6 +2504,41 @@ def test_fabriquer_recolte_avant_de_planifier() -> None:
     assert ok
 
 
+def test_le_coffre_d_evacuation_essaie_aussi_les_diagonales() -> None:
+    """QUATRE DIRECTIONS NE SUFFISENT PAS AUTOUR D'UNE MACHINE CEINTURÉE.
+
+    Partie 14, motif enfin lisible une fois le journal détronqué :
+
+        évacuation refusée : aucune place pour évacuer stone-furnace (96.5,26.5)
+
+    Ce n'est plus « aucun coffre » — H21 le forge désormais — mais « aucune place ».
+    La recherche n'essayait que les quatre axes cardinaux à trois distances, soit douze
+    positions. Or un four de tête est précisément la machine la plus entourée de la
+    chaîne : belt d'entrée, bras de chargement, belt de sortie. Ses quatre côtés sont
+    pris, et le ramassage échoue là où il est le plus nécessaire.
+
+    Les diagonales sont libres bien plus souvent — rien d'une chaîne en ligne ne les
+    occupe. Vingt-quatre candidats au lieu de douze, sans changer ni l'ordre (du plus
+    proche au plus loin) ni la vérification `can_place` qui précède chaque pose.
+    """
+    from agents.coordinator import Coordinator
+
+    c = _coord_mesure(None)
+    places = list(Coordinator._places_pour_coffre(c, 10.0, 10.0))
+
+    cardinales = [(x, y) for x, y in places if x == 10.5 or y == 10.5]
+    diagonales = [(x, y) for x, y in places if x != 10.5 and y != 10.5]
+    # Du plus proche au plus loin : une place à côté vaut mieux qu'une place au large.
+    dists = [max(abs(x - 10.0), abs(y - 10.0)) for x, y in places]
+    ordonne = dists == sorted(dists)
+
+    ok = len(places) >= 24 and bool(diagonales) and bool(cardinales) and ordonne
+    rec("test_le_coffre_d_evacuation_essaie_aussi_les_diagonales", ok,
+        f"{len(places)} candidat(s) : {len(cardinales)} cardinale(s), "
+        f"{len(diagonales)} diagonale(s), ordonné du plus proche : {ordonne}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2554,6 +2589,7 @@ def main() -> int:
         test_l_evacuation_fabrique_le_coffre_qui_lui_manque,
         test_on_recolte_l_usine_avant_de_miner_a_la_main,
         test_fabriquer_recolte_avant_de_planifier,
+        test_le_coffre_d_evacuation_essaie_aussi_les_diagonales,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,

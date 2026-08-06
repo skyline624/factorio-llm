@@ -1972,6 +1972,26 @@ class Coordinator:
         stock = perception.inventory(self.api).get("transport-belt", 0)
         return float(min(stock + self.BELTS_FABRICABLES, self.PORTEE_APPRO))
 
+    # Où poser le coffre de ramassage, du plus proche au plus éloigné.
+    #
+    # LES QUATRE AXES NE SUFFISENT PAS. Un four de tête est la machine la plus entourée
+    # de la chaîne — belt d'entrée, bras de chargement, belt de sortie — et ses côtés
+    # sont pris. Mesuré partie 14 : « aucune place pour évacuer stone-furnace », donc
+    # aucun ramassage là où il est le plus nécessaire. Les diagonales, elles, sont
+    # libres bien plus souvent : rien d'une chaîne en ligne ne les occupe.
+    #
+    # Les distances croissent parce que l'emprise varie : un four 2×2 et une assembleuse
+    # 3×3 n'offrent pas leurs bords au même endroit, et rien dans la ligne d'entité ne
+    # donne la bounding box.
+    _DIRS_COFFRE = ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
+                    (1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0))
+
+    def _places_pour_coffre(self, x: float, y: float):
+        """Candidats de pose autour de (x, y), centrés sur la tuile."""
+        for d in (2.5, 3.5, 4.5):
+            for ux, uy in self._DIRS_COFFRE:
+                yield (math.floor(x + ux * d) + 0.5, math.floor(y + uy * d) + 0.5)
+
     def _recolter_la_production(self, item: str) -> int:
         """Vide les machines qui retiennent `item`, et rend ce qu'on a récupéré.
 
@@ -3832,10 +3852,7 @@ class Coordinator:
         # Les distances croissent parce que l'emprise varie : un four 2×2 et une
         # assembleuse 3×3 n'offrent pas leurs bords au même endroit, et rien dans la
         # ligne d'entité ne donne la bounding box (même raison qu'au relais d'entrée).
-        for d in (2.5, 3.5, 4.5):
-            for ux, uy in ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)):
-                kx = math.floor(cible.x + ux * d) + 0.5
-                ky = math.floor(cible.y + uy * d) + 0.5
+        for kx, ky in self._places_pour_coffre(cible.x, cible.y):
                 if not site_finder.can_place(self.api, coffre, kx, ky):
                     continue
                 r = self.api.run_action(self.api.place_entity_at, coffre, kx, ky,
