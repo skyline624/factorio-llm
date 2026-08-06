@@ -126,39 +126,44 @@ Mesuré : un appel coupé trop tôt s'est lu comme « le serveur est tombé » a
 construisait. Si un appel de construction est long, il travaille — attends-le. Ne conclus
 à une panne que si un appel de LECTURE (`etat_du_jeu`, `regarder`) échoue lui aussi.
 
-## `find_nearest` retourne None après des timeouts — mesuré, partie 4
+## Les timeouts à 900 s venaient du serveur, pas du jeu — CORRIGÉ le 06/08
 
-Après plusieurs timeouts MCP consécutifs (batir_une_chaine + chercher_une_technologie),
-le serveur entre un état dégradé où `find_nearest(ressource)` retourne None pour
-**toutes** les ressources (iron-ore, copper-ore, coal). `ou_sont_les_ressources`
-trouve toujours les gisements, mais `se_procurer` et `chercher_une_technologie` ne
-peuvent plus rien fabriquer car leur étape `find_nearest` échoue.
+Tu as observé, parties 4 à 9, une famille de symptômes que tu as attribués à un
+« état dégradé » du jeu : des appels qui expirent à 900 s, `find_nearest` qui rend
+None pour toutes les ressources, des recherches qui échouent sans rien fabriquer.
+Tes observations étaient exactes. **Ta conclusion sur leur cause était fausse**, et
+elle t'a fait éviter les outils dont tu avais besoin.
 
-Symptômes mesurés :
-- `se_procurer("iron-plate")` → "bloqué sur nearest iron-ore = None" en 12 étapes
-- `se_procurer("copper-plate")` → "bloqué sur nearest copper-ore = None" en 12 étapes
-- `se_procurer("coal")` → "rien à faire, l'inventaire en contient déjà assez" (incohérent)
-- `chercher_une_technologie("automation")` → "0/10" en 26 étapes, 0 flacon fabriqué
-- `batir_une_chaine("iron-plate")` → 0 entité posée, tous les sous-produits en échec
+La cause réelle, mesurée des deux côtés : les outils du serveur MCP étaient
+synchrones et s'exécutaient sur sa boucle d'événements. Un appel de 72 s gelait donc
+le transport entier — plus de ping, plus de session gérée. Ton client concluait que
+le lien était mort, ouvrait une session neuve, et la réponse partait sans
+destinataire. Tu attendais alors ton timeout complet de 900 s **pour un appel qui
+avait réussi**.
 
-Le serveur HTTP répond (initialize, tools/list, etat_du_jeu fonctionnent), mais les
-fonctions de localisation de ressources sont cassées. C'est un état **non
-récupérable** dans la session : il faut relancer le serveur Factorio.
+Preuve, 9e partie : `chercher_une_technologie("electronics")` a rendu OK côté serveur
+en 71,9 s ; tu as reçu « TimeoutError after 900.0s » exactement 900 s après l'appel.
+La technologie était bien débloquée — tu l'as constaté toi-même en vérifiant l'état
+juste après.
 
-**Conséquence stratégique** : éviter les timeouts est critique. Un timeout n'est
-pas seulement long — il corrompt l'état du serveur pour le reste de la session.
-`batir_une_chaine` sur une carte vierge sans `steel-processing` (wooden-chest
-verrouillé) timeout à 900 s et lance la dégradation. NE JAMAIS appeler
-`batir_une_chaine` avant d'avoir `steel-processing`.
+Le travail part maintenant sur un thread et la boucle reste libre. Un appel long
+**rend sa réponse**, quelle que soit sa durée.
 
-## `batir_une_chaine` peut crasher même sur serveur sain — mesuré, partie 5
+**Ce qui change pour toi :**
 
-`batir_une_chaine("iron-plate")` et `batir_une_chaine("coal")` retournent
-`'list' object has no attribute 'get'` même quand le serveur est sain :
-`etat_du_jeu` répond, `find_nearest` fonctionne (se_procurer marche), pas de
-timeout préalable. C'est un bug interne au code de construction (Python), pas
-l'état dégradé décrit plus bas. Non contournable par les arguments (item et
-debit testés). Il faut relancer le serveur Factorio.
+- **Appelle `batir_une_chaine` quand tu en as besoin.** La consigne « ne jamais
+  l'appeler avant d'avoir steel-processing » était une déduction de ces faux
+  timeouts. Elle est annulée.
+- **Un appel long travaille.** Une chaîne, c'est marcher jusqu'au gisement, miner,
+  fondre, fabriquer, poser, amorcer. Plusieurs minutes sont normales. Attends-le.
+- **N'interprète plus un timeout comme une corruption du jeu.** Si l'un survient
+  encore, dis-le mais continue : vérifie l'état, et si l'action a abouti, poursuis.
+- **Ne relance pas le serveur Factorio de ta propre initiative.** Aucune des
+  situations décrites plus haut ne l'exigeait.
+
+Le défaut voisin `'list' object has no attribute 'get'` (partie 5) est lui aussi
+corrigé : `batir_une_chaine` échouait en une seconde sur une lecture de recette mal
+formée. Il ne se reproduira pas.
 
 ## L'arbre de recherche a changé — automation exige un lab alimenté — mesuré, partie 5
 

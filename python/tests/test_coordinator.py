@@ -934,6 +934,10 @@ def _coord_mesure(api):
     c.api = api
     c.zone = (0.0, 0.0)
     c.tourelle = "gun-turret"
+    # Le vrai Coordinator porte `combustible="coal"` depuis son __init__. Un double qui
+    # ne copie pas le réel ne prouve rien : sans ce champ, un test passait au vert sur
+    # un chemin que la production ne pouvait pas exécuter.
+    c.combustible = "coal"
     c._chaines = {}
     return c
 
@@ -1957,6 +1961,57 @@ def test_le_coffre_se_choisit_comme_les_autres_paliers() -> None:
     assert ok
 
 
+def test_une_chaine_burner_est_approvisionnee_pas_branchee() -> None:
+    """UNE CHAÎNE QUI DÉMARRE N'EST PAS UNE CHAÎNE QUI TIENT.
+
+    10e partie Hermes, première chaîne réellement posée en jeu : 29 entités, la
+    production démarre à 0,66 plaque/s — puis s'éteint. Deux minutes plus tard, les
+    trois foreuses sont en `no_fuel`, plus une seule machine ne travaille, et la
+    production est passée de +79 à +3 par fenêtre.
+
+    Après la pose, `batir_chaine` fait deux choses : il RELIE au courant, et il
+    ÉVACUE. Relier ne veut rien dire pour une machine à charbon — la garde de
+    `relier` le refuse d'ailleurs, à juste titre. Il ne restait donc RIEN pour une
+    chaîne tout-burner, et l'`AMORCE_BRAS` de cinq charbons est un démarrage, pas
+    une alimentation : un foreur burner l'a brûlée en moins de deux minutes.
+
+    Le pendant existe pourtant déjà : `approvisionner` bâtit la chaîne
+    mine -> belt -> inserter qui amène le charbon. Personne ne l'appelait après une
+    pose. La règle est symétrique et tient en une ligne : ce qui mange du courant se
+    RELIE, ce qui mange du charbon s'APPROVISIONNE.
+    """
+    from agents.coordinator import Coordinator
+
+    api = _ApiEnergie({"burner-mining-drill": "burner", "stone-furnace": "burner",
+                       "electric-mining-drill": "electric"})
+    c = _coord_mesure(api)
+    c.journal = []
+    relies, approvisionnes = [], []
+    c.relier = lambda s: (relies.append(s.name), (True, "relié"))[1]
+    c.approvisionner = lambda cible, item="coal": (approvisionnes.append(cible.name),
+                                                   (True, "approvisionné"))[1]
+
+    class _Pose:
+        def __init__(self, name, x, y, role):
+            self.name, self.x, self.y, self.role = name, x, y, role
+            self.idx, self.direction = 0, 0
+
+    poses = [_Pose("burner-mining-drill", 10.0, 0.0, "drill"),
+             _Pose("stone-furnace", 14.0, 0.0, "machine"),
+             _Pose("electric-mining-drill", 18.0, 0.0, "drill")]
+
+    c._mettre_en_service = Coordinator._mettre_en_service.__get__(c)
+    branchees, ravitaillees, _ = c._mettre_en_service(poses)
+
+    ok = (sorted(approvisionnes) == ["burner-mining-drill", "stone-furnace"]
+          and relies == ["electric-mining-drill"]
+          and ravitaillees == 2 and branchees == 1)
+    rec("test_une_chaine_burner_est_approvisionnee_pas_branchee", ok,
+        f"approvisionnés {approvisionnes} / reliés {relies} "
+        f"— {ravitaillees} ravitaillée(s), {branchees} branchée(s)")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -1997,6 +2052,7 @@ def main() -> int:
         test_lacharnement_est_inscrit_dans_la_raison_de_loption,
         test_un_abandon_se_perime_au_lieu_detre_definitif,
         test_on_ne_tire_pas_de_ligne_vers_une_machine_a_charbon,
+        test_une_chaine_burner_est_approvisionnee_pas_branchee,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,

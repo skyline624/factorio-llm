@@ -38,6 +38,7 @@ from typing import Any, Callable, Optional, Protocol
 
 from services import perception
 from services.factory_doctor import Diagnostic, Symptome, diagnose_zone
+from services.site_finder import _consomme_du_courant
 from services.threat_model import EN_COURS, Menace, evaluer
 
 # Cause diagnostiquée -> action qui la répare, et primitive correspondante.
@@ -1508,6 +1509,13 @@ class Coordinator:
     # plutôt que masquée par un « chaîne bâtie » qui laisserait croire l'affaire close.
     AMORCE = 50
     AMORCE_BRAS = 5
+
+    # Combien de brûleurs on relie au charbon après une pose. Chaque alimentation est
+    # une chaîne complète — marche jusqu'au gisement, foreuse, belt, bras — donc une
+    # minute ou deux. Les borner évite qu'une chaîne de trente entités passe une heure
+    # à s'alimenter ; ce qui reste à sec est nommé dans le rapport plutôt que passé
+    # sous silence, et l'agent peut y revenir par `reparer`.
+    ALIMENTATIONS_MAX = 4
     # Ce qu'une chaîne tout-burner réclame en charbon pour démarrer : trois machines qui
     # brûlent, plus la marge que l'executor exige au pré-vol. Mesuré, il manquait 7
     # unités avec 8 en poche — 20 laisse de quoi poser sans revenir miner aussitôt.
@@ -1802,20 +1810,8 @@ class Coordinator:
         for p in (getattr(rap, "placed", []) or []):
             self._englober(p.x, p.y)
 
-        branchees, echecs_r = 0, ""
-        for p in (getattr(rap, "placed", []) or []):
-            if getattr(p, "role", "") not in ("machine", "drill"):
-                continue
-            etat_p = self.api.get_power_state(p.x, p.y, 1.5) or {}
-            if etat_p.get("connected") is True:
-                continue
-            ok_r, detail_r = self.relier(
-                Symptome(name=p.name, x=p.x, y=p.y, cause="debranchee", gravite=1,
-                         detail="machine d'une chaîne posée à l'instant"))
-            if ok_r:
-                branchees += 1
-            elif not echecs_r:
-                echecs_r = f" — raccordement refusé : {str(detail_r)[:60]}"
+        branchees, ravitaillees, echecs_r = self._mettre_en_service(
+            getattr(rap, "placed", []) or [])
         # ÉVACUER, SINON LA CHAÎNE S'ÉTOUFFE. Mesuré : la chaîne posée produit seule
         # (+3, +4, +3, +2 sur quatre fenêtres) puis s'arrête net — `full_output` sur les
         # assembleuses de tête, et derrière elles toute la mine en attente. Produire sans
@@ -1838,8 +1834,68 @@ class Coordinator:
                       f"{vidées} sortie(s) évacuée(s), "
                       f"{len(getattr(splan, 'nodes', []) or [])} étage(s), "
                       f"gisements {', '.join(gisements) or 'aucun'}, "
-                      f"objectif {debit}/s, {branchees} machine(s) raccordée(s)"
+                      f"objectif {debit}/s, {branchees} machine(s) raccordée(s), "
+                      f"{ravitaillees} alimentée(s) en {self.combustible}"
                       f"{fabriques}{echecs_r}")
+
+    def _mettre_en_service(self, poses) -> tuple[int, int, str]:
+        """Donne à chaque machine posée ce dont ELLE a besoin pour tourner.
+
+        La règle est symétrique et tient en une ligne : **ce qui mange du courant se
+        RELIE, ce qui mange du charbon s'APPROVISIONNE**. Jusqu'ici seule la moitié
+        électrique existait, si bien qu'une chaîne tout-burner ne recevait rien —
+        `relier` la refusait (à raison : une machine à charbon n'a pas de connexion),
+        et rien ne prenait le relais.
+
+        Mesuré à la 10e partie d'Hermes, première chaîne réellement posée en jeu :
+        29 entités, la production démarre à 0,66 plaque/s, puis s'éteint. Deux minutes
+        plus tard les trois foreuses sont en `no_fuel` et plus une machine ne travaille.
+        L'`AMORCE_BRAS` de cinq charbons est un démarrage, pas une alimentation : un
+        foreur burner la brûle en moins de deux minutes.
+
+        `approvisionner` bâtit précisément ce qui manquait — mine -> belt -> inserter.
+        Il rend la main de lui-même si le gisement est trop loin (« c'est un problème
+        de train, pas de belt »), donc l'appeler ici ne risque pas de dérouler une
+        ceinture interminable.
+        """
+        branchees, ravitaillees, echecs = 0, 0, ""
+        restant = self.ALIMENTATIONS_MAX
+        for p in poses:
+            if getattr(p, "role", "") not in ("machine", "drill"):
+                continue
+            cible = Symptome(name=p.name, x=p.x, y=p.y, cause="debranchee", gravite=1,
+                             detail="machine d'une chaîne posée à l'instant")
+            # La règle « qui consomme du courant » vit dans `site_finder` : on la
+            # DÉLÈGUE plutôt que d'en écrire une seconde copie qui divergera. Elle
+            # répond « électrique » quand elle ne sait pas — donc dans le doute on
+            # relie, comportement inchangé.
+            if not _consomme_du_courant(self.api, p):
+                # CHAQUE BRÛLEUR A BESOIN DU SIEN. Un bras de chargement dessert une
+                # machine, pas un voisinage : grouper par zone laissait les fours à sec
+                # à quatre tuiles d'une foreuse servie. On borne en revanche le NOMBRE
+                # d'alimentations — chacune est une marche jusqu'au gisement — et ce
+                # qui n'a pas été fait est DIT, jamais tu.
+                if restant <= 0:
+                    if not echecs:
+                        echecs = (f" — alimentation bornée à {self.ALIMENTATIONS_MAX} : "
+                                  f"d'autres brûleurs restent à sec")
+                    continue
+                restant -= 1
+                ok_a, detail_a = self.approvisionner(cible, self.combustible)
+                if ok_a:
+                    ravitaillees += 1
+                elif not echecs:
+                    echecs = f" — alimentation refusée : {str(detail_a)[:60]}"
+                continue
+            etat_p = self.api.get_power_state(p.x, p.y, 1.5) or {}
+            if etat_p.get("connected") is True:
+                continue
+            ok_r, detail_r = self.relier(cible)
+            if ok_r:
+                branchees += 1
+            elif not echecs:
+                echecs = f" — raccordement refusé : {str(detail_r)[:60]}"
+        return branchees, ravitaillees, echecs
 
     def choisir_gisement(self, resource: str, depuis: tuple[float, float],
                          portee_max: float = 60.0):
