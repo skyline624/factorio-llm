@@ -169,7 +169,12 @@ mcp_servers:
     # Hermes a vu « transport is down » et a conclu que le serveur etait tombe -- alors
     # qu'il tournait toujours et construisait. Un timeout trop court ne se lit pas comme
     # un timeout : il se lit comme une panne.
-    timeout: 900
+    # 900 s NE SUFFISENT PLUS depuis que la chaine s'alimente elle-meme : le gavage
+    # va MINER son charbon avant de le verser (H19), ce qui ajoute une marche et
+    # plusieurs minutes. Mesure : 695 a 804 s au banc sans gavage ; partie 12, gisement
+    # a 69 tuiles, l'appel depasse 900 s et Hermes recoit un timeout sur un travail
+    # REUSSI -- 11 machines posees, 3 en service, 155 plaques. Il croit avoir echoue.
+    timeout: 1800
 plugins:
   enabled: []
 
