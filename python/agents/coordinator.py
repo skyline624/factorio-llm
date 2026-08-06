@@ -3746,7 +3746,16 @@ class Coordinator:
         # nourrir est exactement le genre de dépendance qu'on cherche à supprimer ici.
         bras = "inserter" if inv.get("inserter", 0) else "burner-inserter"
         if not inv.get(bras, 0):
-            return False, f"aucun bras disponible pour évacuer {cible.name}"
+            # ON FORGE CE QUI MANQUE, comme l'alimentation depuis H15. La chaîne vient
+            # de consommer ses cinq bras à la pose, exactement comme ses foreuses — et
+            # une machine de tête qui ne se vide pas bloque toute la mine derrière elle.
+            # `burner-inserter` est le repli : il demande à être nourri, mais un bras à
+            # nourrir vaut mieux qu'une chaîne bouchée.
+            self._assurer_stock(bras, 1)
+            inv = (self.api.get_state() or {}).get("inventory", {}) or {}
+            if not inv.get(bras, 0):
+                return False, (f"aucun bras disponible pour évacuer {cible.name}, "
+                               f"et « {bras} » n'a pas pu être fabriqué")
         if not inv.get(coffre, 0):
             return False, f"aucun {coffre} pour recevoir la sortie de {cible.name}"
 

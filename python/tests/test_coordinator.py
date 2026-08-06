@@ -2316,6 +2316,49 @@ def test_gaver_va_miner_le_charbon_qui_manque() -> None:
     assert ok
 
 
+def test_l_evacuation_fabrique_le_bras_qui_lui_manque() -> None:
+    """MÊME DÉFAUT QUE L'ALIMENTATION, À L'AUTRE BOUT DE LA CHAÎNE.
+
+    Banc H18, une fois que le rapport a cessé de se taire (H16) :
+
+        évacuation refusée : aucun bras disponible pour évacuer stone-furnace
+
+    `batir_evacuation` LIT l'inventaire et renonce. Or la chaîne vient de consommer ses
+    cinq bras à la pose, exactement comme elle avait consommé ses foreuses — c'est le
+    défaut réglé par `_assurer_stock` côté alimentation, resté ici.
+
+    Ce que ça coûte : une machine de tête qui se remplit et bloque toute la mine
+    derrière elle (`full_output` en amont, `waiting_for_space` sur les foreuses). Le
+    même four est retombé en `full_output` aux tours 152, 380, 608 et 831 d'une partie
+    de 952 tours, chaque fois « réparé » à la main.
+    """
+    from agents.coordinator import Coordinator
+
+    demandes = []
+
+    class _ApiVide:
+        def get_state(self):
+            return {"inventory": {}, "tick": 1, "ready": True}
+
+    c = _coord_mesure(_ApiVide())
+    c.journal = []
+    c.fabriquer = lambda item, combien=1: (demandes.append((item, combien)),
+                                           (False, "pas de fer"))[1]
+    c._assurer_stock = Coordinator._assurer_stock.__get__(c)
+    c.batir_evacuation = Coordinator.batir_evacuation.__get__(c)
+
+    from services.factory_doctor import Symptome
+    ok_e, motif = c.batir_evacuation(
+        Symptome(name="stone-furnace", x=0.0, y=0.0, cause="sortie_pleine",
+                 gravite=1, detail=""))
+
+    # Il a tenté de forger un bras avant de renoncer, et le dit.
+    ok = bool(demandes) and demandes[0][0].endswith("inserter")
+    rec("test_l_evacuation_fabrique_le_bras_qui_lui_manque", ok,
+        f"tentative(s) de fabrication : {demandes} — motif « {str(motif)[:50]} »")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2362,6 +2405,7 @@ def main() -> int:
         test_la_portee_d_alimentation_se_chiffre_en_plaques,
         test_on_gave_les_bruleurs_avant_de_leur_batir_une_belt,
         test_gaver_va_miner_le_charbon_qui_manque,
+        test_l_evacuation_fabrique_le_bras_qui_lui_manque,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,
