@@ -88,6 +88,16 @@ première fois qu'un produit t'est demandé en quantité, la réponse est
 La règle : `se_procurer` pour ce qui **manque une fois** ; `batir_une_chaine` pour ce qui
 doit **continuer d'arriver**.
 
+## Joue par petits pas, pas en une seule fois
+
+Un appel qui dure vingt minutes te prive de tout : tu ne peux ni observer, ni corriger, ni
+changer d'avis. Mesuré à la deuxième partie : une seule construction lancée d'un bloc a
+occupé la session entière sans rien poser.
+
+Alterne : **une action, puis un regard**. `batir_une_chaine`, puis `etat_du_jeu` pour voir
+ce qui en est sorti. Si une construction échoue, tu l'apprends tout de suite et tu peux
+faire autrement — plutôt que de découvrir à la fin que rien n'a abouti.
+
 ## Bâtir prend du temps — ce n'est pas une panne
 
 `batir_une_chaine` marche jusqu'au gisement (parfois cent tuiles), pose, amorce, raccorde
@@ -96,6 +106,43 @@ et met en route. Plusieurs minutes de temps réel peuvent s'écouler sans répon
 Mesuré : un appel coupé trop tôt s'est lu comme « le serveur est tombé » alors qu'il
 construisait. Si un appel de construction est long, il travaille — attends-le. Ne conclus
 à une panne que si un appel de LECTURE (`etat_du_jeu`, `regarder`) échoue lui aussi.
+
+## `wooden-chest` verrouille toutes les chaînes — mesuré
+
+`batir_une_chaine` pose toujours un coffre en bout de chaîne pour stocker la
+production. Dans cette configuration, `wooden-chest` est **verrouillé** dès le départ
+et aucune technologie de premier rang ne l'ouvre. `ce_qu_il_faut_pour("wooden-chest")`
+révèle qu'il exige `steel-plate` — donc `steel-processing` (50 flacons) est le seul
+chemin pour débloquer TOUTE chaîne de production.
+
+Conséquence : on ne peut pas bâtir une chaîne autonome (fer, cuivre, rien) tant
+qu'on n'a pas `steel-processing`. La séquence réelle depuis une carte vierge est :
+
+1. `se_procurer` charbon + inserteur (amorcer) ;
+2. `chercher_une_technologie("electronics")` — 10 copper-plate à la main ;
+3. `chercher_une_technologie("automation-science-pack")` — fabrique le lab à la main ;
+4. `batir_une_centrale` — le lab exige du courant ;
+5. `chercher_une_technologie("automation")` — 10 flacons, assembleuse débloquée ;
+6. `chercher_une_technologie("steel-processing")` — 50 flacons à la main ;
+7. SEULEMENT ALORS `batir_une_chaine("iron-plate")` fonctionne.
+
+Étape 6 prend **plus de 15 minutes** (timeout MCP à 900 s) : l'outil fabrique 50
+flacons à la main. Mesuré : deux timeouts consécutifs sur
+`chercher_une_technologie("steel-processing")`, le serveur a fini par crasher.
+
+## `se_procurer` : le paramètre est `combien`, pas `quantite`
+
+Le schema de `se_procurer` utilise `combien` (int, défaut 1). Passer `quantite` est
+ignoré silencieusement — l'outil prend la valeur par défaut 1. Mesuré : 17 charbons
+fabriqués un par un au lieu de 17 d'un coup.
+
+## `batir_une_centrale` consomme plus de prérequis que annoncé
+
+La centrale affiche `missing={pipe: 4, coal: 16}` même quand l'inventaire contient
+4 pipes et 50 charbon. Il faut fabriquer **plus** que le compte affiché : 8 pipes et
+51 charbon dans la pratique. La centrale consomme des pipes pendant la pose et en
+demande encore. Méthode : fabriquer le double des prérequis affichés avant de
+lancer `batir_une_centrale`.
 
 ## Ce qui trompe
 

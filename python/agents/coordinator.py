@@ -811,6 +811,24 @@ def enumerer_options(etat: EtatUsine) -> list[Decision]:
     return options
 
 
+def ancres_par_proximite(candidats: list, depuis: tuple) -> list:
+    """Les mêmes ancres, essayées de la plus proche à la plus lointaine.
+
+    MARCHER N'EST GRATUIT QU'EN `test_mode`. `batir` essaie jusqu'à six ancrages — la
+    meilleure tuile étant occupée dès que la première chaîne y est posée — et l'ordre
+    était celui du gisement, indifférent quand le personnage est téléporté.
+
+    Mesuré à la deuxième partie d'Hermes, sur carte vierge : vingt-cinq minutes à marcher
+    d'un candidat à l'autre, laboratoire et matériel complets en poche, et AUCUNE machine
+    posée. La construction n'échouait pas — elle n'en finissait pas d'essayer.
+
+    C'est un TRI, jamais un filtre : aucune ancre n'est écartée, le planificateur garde
+    le choix du gisement. Seul l'ordre des tentatives change.
+    """
+    return sorted(candidats,
+                  key=lambda a: math.hypot(a[0] - depuis[0], a[1] - depuis[1]))
+
+
 def decide(etat: EtatUsine, arbitre: Optional[Arbitre] = None) -> Decision:
     """Choisit la prochaine action. Fonction PURE : aucun appel RCON, testable seule.
 
@@ -3846,6 +3864,15 @@ class Coordinator:
                     candidats.append(a)
         if not candidats:
             return False, f"aucun gisement de {self.ressource} exploitable"
+        # DE LA PLUS PROCHE À LA PLUS LOINTAINE. En production chaque essai coûte une
+        # marche : mesuré, vingt-cinq minutes à traverser la carte d'un candidat à
+        # l'autre sans rien poser. Le tri ne retire aucune ancre — il évite seulement de
+        # commencer par celle d'en face.
+        from services import deplacement
+        try:
+            candidats = ancres_par_proximite(candidats, deplacement.position(self.api))
+        except Exception:
+            pass          # position illisible : l'ordre d'origine reste valable
         essais: list[str] = []
         # Le palier est CHOISI, pas imposé : sans recherche ni dotation, l'électrique
         # n'existe tout simplement pas (recettes `enabled=false`).

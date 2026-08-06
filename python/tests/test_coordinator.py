@@ -1864,6 +1864,37 @@ def test_le_combustible_offre_un_choix_au_lieu_dun_verdict() -> None:
     assert ok
 
 
+def test_les_ancres_sont_essayees_de_la_plus_proche_a_la_plus_lointaine() -> None:
+    """MARCHER N'EST GRATUIT QU'EN `test_mode`, ET LE CODE A ÉTÉ ÉCRIT POUR LUI.
+
+    `batir` essaie jusqu'à six ancrages sur le gisement — « la meilleure tuile est occupée
+    dès que la première chaîne y est posée ». En test le personnage est TÉLÉPORTÉ : chaque
+    essai est gratuit. En production, chacun coûte une traversée à pied.
+
+    Mesuré à la deuxième partie d'Hermes, sur carte vierge : vingt-cinq minutes passées à
+    marcher d'un candidat à l'autre, laboratoire et matériel complets en poche, et
+    **aucune machine posée**. La construction n'a jamais abouti — non qu'elle échoue, mais
+    parce qu'elle n'en finissait pas d'essayer.
+
+    Cinquième défaut de la même famille que ceux d'hier : sain en test, ruineux en jeu.
+    Celui-ci ne casse rien — il rend seulement la construction inatteignable.
+
+    On ne change PAS quelles ancres sont candidates, seulement l'ordre : d'abord la plus
+    proche de là où l'agent se trouve. Le choix du gisement reste au planificateur.
+    """
+    from agents.coordinator import ancres_par_proximite
+
+    candidats = [(100.0, 0.0), (5.0, 0.0), (50.0, 0.0), (5.0, 5.0)]
+    triees = ancres_par_proximite(candidats, depuis=(0.0, 0.0))
+
+    ok = (triees[0] == (5.0, 0.0) and triees[-1] == (100.0, 0.0)
+          # Aucune ancre perdue ni inventée : c'est un TRI, pas un filtre.
+          and sorted(triees) == sorted(candidats))
+    rec("test_les_ancres_sont_essayees_de_la_plus_proche_a_la_plus_lointaine", ok,
+        f"depuis (0,0) -> {triees} (la plus proche d'abord, aucune perdue)")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -1912,6 +1943,7 @@ def main() -> int:
         test_sans_combustible_pour_amorcer_on_va_en_chercher,
         test_evacuer_s_approche_avant_de_vider,
         test_le_combustible_offre_un_choix_au_lieu_dun_verdict,
+        test_les_ancres_sont_essayees_de_la_plus_proche_a_la_plus_lointaine,
     ]
     for t in tests:
         t()
