@@ -1986,6 +1986,35 @@ class Coordinator:
     _DIRS_COFFRE = ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
                     (1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0))
 
+    def _boucler_le_charbon(self, drill: tuple[float, float], foreur: str,
+                            depart: tuple[float, float]):
+        """Pose le bras qui remet du charbon DANS la foreuse à charbon.
+
+        UNE FOREUSE ASSISE SUR SON PROPRE COMBUSTIBLE NE DEVRAIT JAMAIS TOMBER À SEC.
+        Défaut trouvé par HERMES et inscrit dans sa skill après sa dixième partie : la
+        chaîne fait tomber le charbon sur un convoyeur qui s'en va, sans rien qui
+        revienne vers le réservoir. Les cinquante unités de l'amorce brûlées, la foreuse
+        s'arrête — sur un gisement de charbon, avec une belt pleine qui la longe.
+
+        C'est ce qui condamnait l'agent à ravitailler à la main : mesuré partie 13, la
+        même foreuse rechargée quatre fois en trois minutes.
+
+        Le bras prend sur la belt et dépose dans la foreuse — l'inverse exact de
+        l'évacuation, et le même helper, qui LIT `pickup`/`drop` réels plutôt que de
+        déduire l'orientation d'une convention (un inserter mal orienté se pose sans
+        erreur et ne transporte rien).
+        """
+        from services import site_finder
+        self._assurer_stock("burner-inserter", 1)
+        pose = site_finder.place_inserter_vers(
+            self.api, drill, depart, foreur, nom="burner-inserter")
+        if pose is not None:
+            # Il lui faut de quoi tourner lui-même : un burner-inserter qui manipule du
+            # charbon finit par s'auto-alimenter, mais il doit démarrer.
+            self.api.run_action(self.api.move_items_at, "coal", "burner-inserter",
+                                pose[0], pose[1], self.AMORCE_BRAS, True, timeout=20.0)
+        return pose
+
     def _places_pour_coffre(self, x: float, y: float):
         """Candidats de pose autour de (x, y), centrés sur la tuile."""
         for d in (2.5, 3.5, 4.5):
@@ -4054,6 +4083,15 @@ class Coordinator:
         essais.append(f"belt {origine} -> relais d'entrée {arrivee} : {len(seg)} segment(s)")
         if not belts:
             return False, f"aucune belt posée entre le foreur et {cible.name}"
+
+        # BOUCLER LE CHARBON SUR LUI-MÊME. La belt part vers la machine à nourrir ; sans
+        # bras de retour, la foreuse à charbon brûle son amorce et s'arrête au-dessus de
+        # son propre gisement. Défaut trouvé par Hermes, mesuré partie 13 : la même
+        # foreuse rechargée quatre fois à la main en trois minutes.
+        if burner:
+            retour = self._boucler_le_charbon((drill.x, drill.y), foreur, belts[0])
+            essais.append(f"bras de retour charbon : "
+                          f"{'posé en ' + str(retour[:2]) if retour else 'AUCUN'}")
 
         # La tuile d'arrivée elle-même : `place_belt_line` s'arrête AVANT elle, or c'est
         # précisément celle sur laquelle le bras doit puiser.

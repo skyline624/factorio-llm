@@ -2539,6 +2539,65 @@ def test_le_coffre_d_evacuation_essaie_aussi_les_diagonales() -> None:
     assert ok
 
 
+def test_la_foreuse_a_charbon_recoit_un_bras_de_retour() -> None:
+    """UNE FOREUSE ASSISE SUR SON PROPRE COMBUSTIBLE NE DEVRAIT JAMAIS TOMBER À SEC.
+
+    Défaut trouvé par HERMES lui-même, inscrit dans sa skill après sa 10e partie :
+
+        « Une foreuse burner sur un gisement de charbon devrait s'auto-alimenter. Mais
+        la chaîne fait tomber le charbon sur un convoyeur qui part vers le sud — sans
+        bras de retour vers le réservoir de la foreuse. »
+
+    Vérifié dans le code : `approvisionner` amorce la foreuse avec `AMORCE` (50 unités)
+    et pose la belt vers la machine à nourrir, mais rien ne remet du charbon DANS la
+    foreuse. Les cinquante brûlées, elle s'arrête — sur un gisement de charbon, avec un
+    convoyeur plein qui la longe.
+
+    C'est ce qui condamnait l'agent à ravitailler à la main : mesuré partie 13, la même
+    foreuse rechargée QUATRE fois en trois minutes.
+
+    Le bras prend sur la belt et dépose dans la foreuse — l'inverse exact de
+    l'évacuation, et le même helper, qui LIT `pickup`/`drop` réels au lieu de déduire
+    l'orientation d'une convention.
+    """
+    from agents.coordinator import Coordinator
+
+    appels = []
+
+    class _ApiRetour:
+        def get_state(self):
+            return {"inventory": {"burner-inserter": 1}, "tick": 1, "ready": True}
+
+        def run_action(self, fn, *a, **kw):
+            return {"ok": True}
+
+        def move_items_at(self, *a, **kw):
+            return {"ok": True}
+
+    c = _coord_mesure(_ApiRetour())
+    c.journal = []
+    c._boucler_le_charbon = Coordinator._boucler_le_charbon.__get__(c)
+
+    import services.site_finder as sf
+    vrai = sf.place_inserter_vers
+    sf.place_inserter_vers = lambda api, cible, source, cible_nom, **kw: (
+        appels.append({"cible": cible, "source": source, "cible_nom": cible_nom,
+                       "bras": kw.get("nom")}), (5.0, 5.0, "north"))[1]
+    try:
+        pose = c._boucler_le_charbon((10.0, 10.0), "burner-mining-drill", (12.0, 10.0))
+    finally:
+        sf.place_inserter_vers = vrai
+
+    ok = (bool(appels) and pose is not None
+          and appels[0]["cible"] == (10.0, 10.0)          # il dépose DANS la foreuse
+          and appels[0]["source"] == (12.0, 10.0)         # il prend sur la belt
+          and appels[0]["cible_nom"] == "burner-mining-drill"
+          and "burner" in str(appels[0]["bras"]))
+    rec("test_la_foreuse_a_charbon_recoit_un_bras_de_retour", ok,
+        f"{appels[:1]}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2590,6 +2649,7 @@ def main() -> int:
         test_on_recolte_l_usine_avant_de_miner_a_la_main,
         test_fabriquer_recolte_avant_de_planifier,
         test_le_coffre_d_evacuation_essaie_aussi_les_diagonales,
+        test_la_foreuse_a_charbon_recoit_un_bras_de_retour,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,
