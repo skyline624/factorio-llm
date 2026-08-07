@@ -193,12 +193,19 @@ recherche automation → pas d'assembleuse. `se_procurer("wood")` échoue
 vient des arbres, pas d'un gisement), et aucun arbre à moins de 40 tuiles du
 spawn. **Il faut abattre un arbre à la main en jeu** pour débloquer.
 
-## `se_deplacer` ne déplace pas le joueur — mesuré, partie 4
+## `se_deplacer` marche — ce que tu avais mesuré venait d'une partie sans avatar
 
-`se_deplacer(x, y)` retourne systématiquement "arrivé en (0,0) — visé (x, y)" quel
-que soit la cible. Le joueur reste à sa position de départ (vérifié avec
-`regarder` : crash-site-spaceship toujours visible à côté). L'outil ne déclenche
-pas le déplacement réel du personnage en jeu.
+Tu avais noté « `se_deplacer` retourne toujours arrivé en (0,0) quelle que soit la
+cible ». C'était exact ce jour-là, et trompeur : sans joueur connecté au serveur, le mod
+n'a personne à déplacer et rend la position par défaut. Rien dans la réponse ne le dit.
+
+Mesuré depuis, avec un avatar : « arrivé en (10,0) — visé (12,0) » en partant de (0,0).
+L'outil marche, il contourne les obstacles et génère le terrain devant lui.
+
+**Ce qu'il faut en retenir, et qui vaut au-delà de cet outil** : un résultat obtenu dans
+un environnement incomplet ne dit rien de l'outil, seulement de l'environnement. Quand
+une lecture te paraît absurde — une position qui ne bouge pas, un inventaire vide, une
+ressource introuvable — vérifie d'abord que la partie est en état, par `etat_du_jeu`.
 
 ## `chercher_une_technologie` n'a pas besoin de courant ni de lab posé — mesuré
 
@@ -284,23 +291,22 @@ refabriquer les machines, il faut `se_procurer` les prérequis manquants
 (burner-mining-drill exige iron-gear-wheel + stone-furnace ; stone-furnace
 exige stone). `se_procurer("stone", combien=20)` fonctionne par minage direct.
 
-## Les foreuses de charbon burner ne s'auto-alimentent pas sans inserteur — mesuré, partie 10
+## Les foreuses de charbon ont besoin d'un bras de retour — TU L'AS TROUVÉ, C'EST CORRIGÉ
 
-Une foreuse burner sur un gisement de charbon devrait s'auto-alimenter (elle
-extrait du charbon, qui est son propre combustible). Mais la chaîne bâtie par
-`batir_une_chaine("coal")` fait tomber le charbon sur un convoyeur qui part
-vers le sud — sans bras de retour vers le réservoir de la foreuse. La foreuse
-doit donc être ravitaillée manuellement à chaque fois qu'elle s'épuise.
+Tu avais raison, et personne d'autre ne l'avait vu : une foreuse burner sur un gisement
+de charbon devrait s'auto-alimenter, mais la chaîne faisait tomber le charbon sur un
+convoyeur qui s'en allait, sans rien qui revienne vers son réservoir. Elle brûlait son
+amorce et s'arrêtait sur son propre gisement, une belt pleine à côté.
 
-`reparer("ravitailler", x, y)` met du charbon dans le réservoir mais il faut
-parfois le répéter (3 fois dans la partie 10) avant que la foreuse passe de
-`no_fuel` à `working`. Une fois `working`, elle consomme son propre charbon
-extrait et tient — tant que l'inserteur d'alimentation (posé par la chaîne)
-ramène le charbon du convoyeur vers son réservoir.
+**`approvisionner` pose maintenant ce bras de retour** (correctif du 06/08). Tu n'as
+donc plus à recharger ces foreuses à la main — c'est ce qui te faisait perdre le plus de
+temps : quatre rechargements de la même foreuse en trois minutes, pendant lesquelles tu
+ne construisais pas.
 
-**Signe** : `regarder` montre la foreuse `no_fuel` avec `oreUnder > 0` — il y a
-du minerai mais pas de combustible. Remède : `reparer("ravitailler", x, y)`
-jusqu'à `working`.
+**Signe qui reste utile** : `regarder` montre une foreuse `no_fuel` avec `oreUnder > 0`
+— du minerai sous elle, pas de combustible. Si cela persiste APRÈS une chaîne bâtie,
+c'est que le bras de retour n'a pas pu se poser : dis-le dans ton compte rendu plutôt
+que de colmater indéfiniment.
 
 ## Le serveur Factorio peut tomber en cours de partie — mesuré, partie 10
 
