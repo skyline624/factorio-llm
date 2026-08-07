@@ -270,6 +270,50 @@ Un fait durable sur ce jeu mérite d'être écrit dans une skill — un piège r
 enchaînement qui marche, une limite. Écris ce que tu as **mesuré**, pas ce que tu supposes,
 et dis comment tu l'as constaté. La partie suivante commencera là où celle-ci s'arrête.
 
+## `batir_une_chaine` peut poser sur un gisement épuisé — mesuré, partie 10
+
+`batir_une_chaine("iron-plate")` a posé une foreuse sur un gisement de fer qui
+n'avait plus de minerai sous l'emprise (`gisement_epuise` au diagnostic suivant).
+L'outil trouve le gisement le plus proche par `find_nearest` mais ne vérifie pas
+la quantité restante avant de poser. Conséquence : la foreuse tourne à vide.
+
+**Signe révélateur** : `diagnostiquer` montre `gisement_epuise` sur une foreuse
+qui vient d'être posée. Remède : relancer `batir_une_chaine` — l'outil va
+relocaliser sur un autre gisement. Mais si l'inventaire ne permet pas de
+refabriquer les machines, il faut `se_procurer` les prérequis manquants
+(burner-mining-drill exige iron-gear-wheel + stone-furnace ; stone-furnace
+exige stone). `se_procurer("stone", combien=20)` fonctionne par minage direct.
+
+## Les foreuses de charbon burner ne s'auto-alimentent pas sans inserteur — mesuré, partie 10
+
+Une foreuse burner sur un gisement de charbon devrait s'auto-alimenter (elle
+extrait du charbon, qui est son propre combustible). Mais la chaîne bâtie par
+`batir_une_chaine("coal")` fait tomber le charbon sur un convoyeur qui part
+vers le sud — sans bras de retour vers le réservoir de la foreuse. La foreuse
+doit donc être ravitaillée manuellement à chaque fois qu'elle s'épuise.
+
+`reparer("ravitailler", x, y)` met du charbon dans le réservoir mais il faut
+parfois le répéter (3 fois dans la partie 10) avant que la foreuse passe de
+`no_fuel` à `working`. Une fois `working`, elle consomme son propre charbon
+extrait et tient — tant que l'inserteur d'alimentation (posé par la chaîne)
+ramène le charbon du convoyeur vers son réservoir.
+
+**Signe** : `regarder` montre la foreuse `no_fuel` avec `oreUnder > 0` — il y a
+du minerai mais pas de combustible. Remède : `reparer("ravitailler", x, y)`
+jusqu'à `working`.
+
+## Le serveur Factorio peut tomber en cours de partie — mesuré, partie 10
+
+Après ~30 actions (bâtir, ravitailler, évacuer, diagnostiquer), la connexion
+RCON a été refusée (`[WinError 10061]`). Le serveur MCP factorio lui-même
+restait debout — c'est le processus de jeu Factorio sur Windows qui est tombé.
+`etat_du_jeu` et `regarder` échouent tous les deux avec le même WinError 10061.
+
+La skill dit « ne relance pas le serveur de ta propre initiative » — mais
+ici le serveur de JEU (pas le MCP) est tombé, pas seulement un appel long.
+Il faut le redémarrer côté Windows pour reprendre. Depuis WSL, on ne peut ni
+voir ni relancer le processus Windows.
+
 ## Ce que le bois verrouille — vérifié contre le jeu le 06/08
 
 `wooden-chest` coûte **2 bois**, `small-electric-pole` **1 bois + 2 câbles**. Les deux
