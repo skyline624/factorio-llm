@@ -717,6 +717,53 @@ def test_executor_ne_marche_pas_sur_la_tuile_a_batir() -> None:
     assert ok
 
 
+def test_une_entite_deja_en_terre_compte_comme_posee() -> None:
+    """UNE POSE PARTIELLE DOIT SE REPRENDRE, PAS SE REJOUER.
+
+    Partie 19, la centrale d'Hermes à une pièce du but :
+
+        offshore-pump (50.5,-9.5) working · pipe ×3 working
+        [refus] pipe (46.5,-9.5) « cannot place here »
+        boiler (45.5,-10) no_fuel · steam-engine no_input_fluid
+
+    Le tuyau est refusé parce que `can_place` répond « occupe par boiler » : la chaudière
+    fait 3×2 et son emprise couvre cette tuile. Le plan prévoit donc un tuyau À
+    L'INTÉRIEUR de la chaudière — inutile, puisque l'eau arrive (le boiler dit `no_fuel`,
+    pas `no_water`).
+
+    Une seule entité refusée faisait échouer la pose entière, et chaque nouvel essai
+    repartait de zéro : les pièces déjà posées manquaient alors à l'inventaire, d'où un
+    « missing » qui réclamait ce qui était déjà en terre. Trois tentatives, trois
+    messages différents, une centrale complète et jamais déclarée bâtie.
+
+    Ce qui est DÉJÀ LÀ compte comme posé. Même principe que `_foreuse_existante` (H29),
+    appliqué à l'executor : on ne repose pas ce qu'on a bâti.
+    """
+    api = FakeApi(FULL_KIT)
+    # TOUTE L'EMPRISE est prise, pas une seule tuile : un boiler fait 3x2, donc les
+    # positions de repli de l'executor tombent dedans elles aussi. Un double qui
+    # n'occupe qu'une case laisse le repli réussir et ne prouve rien.
+    occupees = {(x + dx, dy) for x in (3.0,) for dx in (-1.0, 0.0, 1.0)
+                for dy in (-1.0, 0.0, 1.0)}
+
+    def _can_place(name, x, y, direction="north"):
+        if (x, y) in occupees:
+            return {"can_place": False, "motif": "occupe par boiler"}
+        return {"can_place": True}
+
+    api.can_place_check = _can_place
+    plan = _micro(facing=4)
+    plan.entities[-1].x, plan.entities[-1].y = 3.0, 0.0   # tombe sur l'occupé
+
+    rap = execute_micro(api, plan, generate=False, approach=False, verify=False)
+
+    bloque_pour_occupation = [b for b in rap.blocked if "occupe" in str(b[-1])]
+    ok = rap.ok and not bloque_pour_occupation
+    rec("test_une_entite_deja_en_terre_compte_comme_posee", ok,
+        f"ok={rap.ok} blocked={rap.blocked[:1]}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_executor_pose_les_3_entites,
@@ -729,6 +776,7 @@ def main() -> int:
         test_executor_se_rapproche_de_chaque_pose_lointaine,
         test_executor_s_approche_meme_sans_approche_initiale,
         test_executor_ne_marche_pas_sur_la_tuile_a_batir,
+        test_une_entite_deja_en_terre_compte_comme_posee,
         test_executor_verify_desactivable,
         test_executor_retries_epuises_bloque_et_arrete,
         test_executor_echec_pose_malgre_can_place,

@@ -247,6 +247,11 @@ def _ok(res) -> bool:
     return isinstance(res, dict) and res.get("ok") is True
 
 
+# Ce qu'une tuile « occupée » peut porter sans que la pose ait échoué : une entité DE
+# NOTRE PLAN, déjà en terre. `occupe par <nom>` est alors une confirmation, pas un refus.
+_DEJA_POSE = "occupe par "
+
+
 def _can_place(api, name: str, x: float, y: float, d: str) -> tuple[bool, str]:
     """(placable, raison). Isole la lecture défensive de la réponse du mod."""
     chk = api.can_place_check(name, x, y, d)
@@ -318,6 +323,16 @@ def _rigid_offset(api, ordered: list[tuple[int, object]],
         for idx, e in ordered:
             okp, why = _can_place(api, e.name, round(e.x + ox, 2), round(e.y + oy, 2),
                                   _dir_str(e.direction))
+            # CE QUI EST DÉJÀ LÀ NE BLOQUE PAS. Une tuile « occupée » peut l'être par une
+            # entité de ce plan, posée à un essai précédent — ou par une machine dont
+            # l'emprise déborde sur une pièce que le plan croit devoir ajouter.
+            #
+            # Mesuré partie 19 : la centrale d'Hermes était complète — pompe, trois
+            # tuyaux, chaudière, machine à vapeur, deux poteaux — et refusée sur un tuyau
+            # à poser DANS l'emprise 3×2 de la chaudière. « occupe par boiler ». Chaque
+            # nouvel essai repartait de zéro, réclamant des pièces déjà en terre.
+            if not okp and str(why).startswith(_DEJA_POSE):
+                continue
             if not okp:
                 if not first_fail:
                     first_fail = (idx, e.name, e.x, e.y, why)
