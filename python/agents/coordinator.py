@@ -2205,9 +2205,17 @@ class Coordinator:
         électrique, donc la fin du problème de charbon, tombait sur quatre pièces qu'il
         savait fabriquer.
         """
+        # `missing` DIT LE MANQUE, `fabriquer` VISE UN TOTAL — les confondre ne produit
+        # rien du tout. Mesuré partie 19 : « se_procurer coal : rien à faire, l'inventaire
+        # en contient déjà assez », et à la seconde suivante « centrale non bâtie :
+        # missing={'coal': 12} ». L'agent en avait vingt en poche, il en fallait douze DE
+        # PLUS. C'est le piège déjà payé sur les déclencheurs de recherche, où viser le
+        # compte au lieu du stock+compte laissait la technologie fermée.
         rates = []
+        inv = perception.inventory(self.api)
         for nom, combien in (manque or {}).items():
-            ok, _ = self._assurer_stock(str(nom), int(combien))
+            vise = inv.get(str(nom), 0) + int(combien)
+            ok, _ = self._assurer_stock(str(nom), vise)
             if not ok:
                 rates.append(str(nom))
         return ", ".join(rates)

@@ -2939,9 +2939,26 @@ def test_la_centrale_forge_ce_qui_lui_manque() -> None:
     c._forger_le_manque(manque)
 
     forges = {i for i, _ in demandes}
-    ok = {"boiler", "steam-engine", "small-electric-pole", "offshore-pump"} <= forges
+    pieces = {"boiler", "steam-engine", "small-electric-pole", "offshore-pump"} <= forges
+
+    # `missing` DIT LE MANQUE, `fabriquer` VISE UN TOTAL — les confondre ne produit rien.
+    # Mesuré partie 19 : « se_procurer coal : rien à faire, l'inventaire en contient déjà
+    # assez », puis « centrale non bâtie : missing={'coal': 12} » à la seconde suivante.
+    # L'agent en avait vingt en poche et il en fallait douze DE PLUS.
+    demandes.clear()
+    c2 = _coord_mesure(type("_A", (), {
+        "get_state": lambda self: {"inventory": {"coal": 20}, "tick": 1, "ready": True}})())
+    c2.journal = []
+    c2.fabriquer = lambda item, combien=1: (demandes.append((item, combien)),
+                                            (True, "forgé"))[1]
+    c2._assurer_stock = Coordinator._assurer_stock.__get__(c2)
+    c2._recolte_faite = True
+    c2._forger_le_manque({"coal": 12})
+    vise = dict(demandes).get("coal")
+
+    ok = pieces and vise == 32          # 20 en poche + 12 manquants
     rec("test_la_centrale_forge_ce_qui_lui_manque", ok,
-        f"pièces forgées : {sorted(forges)}")
+        f"pièces forgées : {sorted(forges)} — coal visé : {vise} (attendu 32)")
     assert ok
 
 
