@@ -2854,6 +2854,53 @@ def test_un_refus_de_terrain_dit_ce_qui_bloque() -> None:
     assert ok
 
 
+def test_le_nombre_d_alimentations_revient_a_l_agent() -> None:
+    """DEUXIÈME PLAFOND QUE JE M'ÉTAIS ARROGÉ — même faute que pour les belts.
+
+    Partie 19, meilleur score de la session et sa limite dans la même ligne :
+
+        4 alimentée(s) en coal — alimentation bornée à 4 : d'autres brûleurs restent à sec
+
+    Vingt-trois machines, onze affamées. `ALIMENTATIONS_MAX = 4` venait d'une mesure
+    juste — chaque alimentation coûtait une marche jusqu'au gisement — dont j'avais fait
+    une règle au lieu d'une information.
+
+    Cette mesure ne vaut d'ailleurs plus : depuis H29, les alimentations suivantes
+    REPRENNENT la foreuse à charbon déjà posée au lieu d'en reposer une. Le coût marginal
+    qui justifiait le plafond a disparu avec le correctif.
+
+    Le plafond reste comme DÉFAUT prudent — sans consigne, on ne déroule pas dix lignes.
+    Mais l'agent peut demander autre chose : c'est son arbitrage, comme le budget de
+    belts depuis H29.
+    """
+    from agents.coordinator import Coordinator
+
+    class _Pose:
+        def __init__(self, i):
+            self.name, self.x, self.y = "burner-mining-drill", float(i) * 4, 0.0
+            self.role = "drill"
+
+    def _compte(limite):
+        servies = []
+        api = _ApiEnergie({"burner-mining-drill": "burner"})
+        c = _coord_mesure(api)
+        c.journal = []
+        c.approvisionner = lambda cible, item="coal": (servies.append(cible.name),
+                                                       (True, "ok"))[1]
+        c._gaver_les_bruleurs = lambda poses: 0
+        c._mettre_en_service = Coordinator._mettre_en_service.__get__(c)
+        c._mettre_en_service([_Pose(i) for i in range(9)], alimentations_max=limite)
+        return len(servies)
+
+    defaut = _compte(None)          # prudence inchangée
+    demande = _compte(9)            # l'agent veut tout alimenter
+
+    ok = defaut == Coordinator.ALIMENTATIONS_MAX and demande == 9
+    rec("test_le_nombre_d_alimentations_revient_a_l_agent", ok,
+        f"sans consigne : {defaut} ; demande 9 : {demande}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2911,6 +2958,7 @@ def main() -> int:
         test_la_portee_d_alimentation_n_est_pas_plafonnee_par_nous,
         test_on_ne_pose_pas_de_coffre_sur_une_machine_deja_evacuee,
         test_un_refus_de_terrain_dit_ce_qui_bloque,
+        test_le_nombre_d_alimentations_revient_a_l_agent,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,

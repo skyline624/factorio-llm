@@ -361,13 +361,16 @@ def ce_que_l_usine_a_produit(item: str) -> str:
 # ---------------------------------------------------------------------------- AGIR
 
 @outil
-def batir_une_chaine(item: str, debit: float = 0.5) -> str:
+def batir_une_chaine(item: str, debit: float = 0.5,
+                     alimentations_max: int = 0) -> str:
     """Bâtit de quoi produire `item` : extraction, fonte, transport, raccordement.
 
     LA capacité principale. Le placement, l'orientation et les raccords sont calculés —
     ne demande jamais de position. Rend ce qui a été posé, ou ce qui a manqué.
     """
-    ok, detail = _coord().batir_chaine(item, debit)
+    ok, detail = _coord().batir_chaine(
+        item, debit,
+        alimentations_max=(int(alimentations_max) if alimentations_max else None))
     return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
 
 

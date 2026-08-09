@@ -1592,7 +1592,8 @@ class Coordinator:
     TYPES_LOGISTIQUES = ("transport-belt", "underground-belt", "splitter",
                          "inserter", "electric-pole")
 
-    def batir_chaine(self, item: str, debit: float = 0.5) -> tuple[bool, str]:
+    def batir_chaine(self, item: str, debit: float = 0.5,
+                     alimentations_max: Optional[int] = None) -> tuple[bool, str]:
         """Bâtit de quoi produire `item` en continu — quel que soit `item`.
 
         Le nom dit BÂTIR et non produire : `produire(cible, item)` existe déjà et règle la
@@ -1847,7 +1848,7 @@ class Coordinator:
             self._englober(p.x, p.y)
 
         branchees, ravitaillees, echecs_r = self._mettre_en_service(
-            getattr(rap, "placed", []) or [])
+            getattr(rap, "placed", []) or [], alimentations_max=alimentations_max)
         vidées, echecs_e = self._evacuer_les_tetes(lp, rap, item)
         return True, (f"chaîne « {item} » bâtie : {n} entité(s), "
                       f"{vidées} sortie(s) évacuée(s), "
@@ -2189,7 +2190,8 @@ class Coordinator:
                         f"arbres ou des rochers.")
         return base
 
-    def _mettre_en_service(self, poses) -> tuple[int, int, str]:
+    def _mettre_en_service(self, poses,
+                           alimentations_max: Optional[int] = None) -> tuple[int, int, str]:
         """Donne à chaque machine posée ce dont ELLE a besoin pour tourner.
 
         La règle est symétrique et tient en une ligne : **ce qui mange du courant se
@@ -2217,7 +2219,16 @@ class Coordinator:
         self._gaver_les_bruleurs(poses)
 
         branchees, ravitaillees, echecs = 0, 0, ""
-        restant = self.ALIMENTATIONS_MAX
+        # LE PLAFOND EST UN DÉFAUT, PAS UNE LOI. Il venait d'une mesure juste — chaque
+        # alimentation coûtait une marche jusqu'au gisement — dont j'avais fait une règle
+        # au lieu d'une information. Cette mesure ne vaut d'ailleurs plus : depuis H29,
+        # les alimentations suivantes REPRENNENT la foreuse à charbon déjà posée.
+        #
+        # Partie 19 : « 4 alimentée(s) en coal — alimentation bornée à 4 : d'autres
+        # brûleurs restent à sec », sur vingt-trois machines dont onze affamées. Combien
+        # de lignes valent la peine est un arbitrage, donc celui de l'agent.
+        plafond = self.ALIMENTATIONS_MAX if alimentations_max is None             else max(0, int(alimentations_max))
+        restant = plafond
         for p in poses:
             if getattr(p, "role", "") not in ("machine", "drill"):
                 continue
@@ -2235,8 +2246,9 @@ class Coordinator:
                 # qui n'a pas été fait est DIT, jamais tu.
                 if restant <= 0:
                     if not echecs:
-                        echecs = (f" — alimentation bornée à {self.ALIMENTATIONS_MAX} : "
-                                  f"d'autres brûleurs restent à sec")
+                        echecs = (f" — alimentation bornée à {plafond} : d'autres "
+                                  f"brûleurs restent à sec ; rappelle avec "
+                                  f"`alimentations_max` si tu en veux davantage")
                     continue
                 restant -= 1
                 ok_a, detail_a = self.approvisionner(cible, self.combustible)
