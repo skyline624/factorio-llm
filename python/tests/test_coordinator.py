@@ -2598,6 +2598,65 @@ def test_la_foreuse_a_charbon_recoit_un_bras_de_retour() -> None:
     assert ok
 
 
+def test_l_evacuation_s_approche_avant_de_poser_son_coffre() -> None:
+    """H12, JAMAIS APPLIQUÉ À L'ÉVACUATION — troisième variante du même défaut.
+
+    Partie 15, mesuré sur la carte : « aucune place pour évacuer stone-furnace
+    (72.5,58.5) », premier essai « coffre refusé ». Or vingt des vingt-quatre
+    emplacements candidats étaient LIBRES — vérifié un par un avec `can_place`.
+
+    Le refus ne venait pas du terrain. `can_place_check` utilise bien
+    `build_check_type = manual` et prédit donc la pose... sauf sur un point : il ne
+    vérifie PAS la distance au joueur. C'est `state_placing_at` qui refuse au-delà de
+    `build_distance`, et cette borne-là ne se lit nulle part dans le test préalable.
+
+    Le joueur était à 7,5 tuiles du four ; les candidats sont à 2,5 à 4,5 tuiles DU
+    FOUR, donc jusqu'à douze tuiles de lui. `execute_micro` s'approche de chaque pose
+    depuis H12 — mais `batir_evacuation` pose son coffre par `place_entity_at` direct,
+    sans passer par l'executor, et n'a jamais reçu le correctif.
+
+    `_approcher` existe déjà et sert à `ravitailler` : même geste, même contrainte.
+    """
+    from agents.coordinator import Coordinator
+
+    approches = []
+
+    class _ApiLoin:
+        def get_state(self):
+            return {"inventory": {"burner-inserter": 1, "wooden-chest": 1},
+                    "tick": 1, "ready": True,
+                    "character": {"position": {"x": 76.5, "y": 52.2}}}
+
+        def run_action(self, fn, *a, **kw):
+            return {"ok": False, "detail": "walk closer first"}
+
+        def can_place_check(self, name, x, y, direction="north"):
+            # Le terrain est LIBRE — c'est le point du test : le refus vient de la
+            # distance au joueur, que ce contrôle ne mesure pas.
+            return {"name": name, "x": x, "y": y, "can_place": True}
+
+        def place_entity_at(self, *a, **kw):
+            return {"ok": False}
+
+        def remove_entity_at(self, *a, **kw):
+            return {"ok": True}
+
+    c = _coord_mesure(_ApiLoin())
+    c.journal = []
+    c._evacuations = {}
+    c._approcher = lambda x, y, **kw: (approches.append((x, y)), True)[1]
+    c.batir_evacuation = Coordinator.batir_evacuation.__get__(c)
+
+    from services.factory_doctor import Symptome
+    c.batir_evacuation(Symptome(name="stone-furnace", x=72.5, y=58.5,
+                                cause="sortie_pleine", gravite=1, detail=""))
+
+    ok = approches and approches[0] == (72.5, 58.5)
+    rec("test_l_evacuation_s_approche_avant_de_poser_son_coffre", bool(ok),
+        f"approche(s) demandée(s) : {approches[:2]}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2650,6 +2709,7 @@ def main() -> int:
         test_fabriquer_recolte_avant_de_planifier,
         test_le_coffre_d_evacuation_essaie_aussi_les_diagonales,
         test_la_foreuse_a_charbon_recoit_un_bras_de_retour,
+        test_l_evacuation_s_approche_avant_de_poser_son_coffre,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,

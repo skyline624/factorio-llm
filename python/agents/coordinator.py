@@ -3877,6 +3877,18 @@ class Coordinator:
                 return False, (f"aucun {coffre} pour recevoir la sortie de {cible.name}, "
                                f"et il n'a pas pu être fabriqué")
 
+        # ÊTRE LÀ AVANT DE POSER. `can_place_check` utilise bien `build_check_type =
+        # manual` et prédit donc le terrain — mais il ne vérifie PAS la distance au
+        # joueur. C'est `state_placing_at` qui refuse au-delà de `build_distance`, et
+        # cette borne ne se lit nulle part dans le test préalable.
+        #
+        # Mesuré partie 15 : « aucune place pour évacuer stone-furnace (72.5,58.5) »,
+        # premier essai « coffre refusé », alors que VINGT des vingt-quatre candidats
+        # étaient libres — vérifiés un par un. Le joueur était à 7,5 tuiles du four, et
+        # les candidats jusqu'à douze de lui. `execute_micro` s'approche de chaque pose
+        # depuis H12 ; ce chemin-ci pose en direct et n'avait jamais reçu le correctif.
+        self._approcher(cible.x, cible.y)
+
         essais: list[str] = []
         # Les distances croissent parce que l'emprise varie : un four 2×2 et une
         # assembleuse 3×3 n'offrent pas leurs bords au même endroit, et rien dans la
