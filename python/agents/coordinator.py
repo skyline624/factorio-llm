@@ -1857,6 +1857,28 @@ class Coordinator:
                       f"{ravitaillees} alimentée(s) en {self.combustible}"
                       f"{fabriques}{echecs_r}{echecs_e}")
 
+    def _a_deja_une_sortie(self, x: float, y: float) -> bool:
+        """Un bras PUISE-t-il déjà dans la machine en (x, y) ?
+
+        C'est la signature d'une sortie desservie — même règle que `en_service` côté
+        mod, qui reconnaît une machine servie à ce qu'un inserteur pointe dessus. On
+        regarde le `pickup` et non le `drop` : un bras qui DÉPOSE dans la machine
+        l'alimente, il ne la vide pas.
+        """
+        try:
+            proches = ((self.api.inspect_at(x, y, 2.5) or {}).get("entities") or [])
+        except Exception:
+            return False
+        for e in proches:
+            if "inserter" not in str(e.get("type", "")):
+                continue
+            px, py = e.get("pickupX"), e.get("pickupY")
+            if px is None or py is None:
+                continue
+            if abs(float(px) - x) <= 1.5 and abs(float(py) - y) <= 1.5:
+                return True
+        return False
+
     def _evacuer_les_tetes(self, lp, rap, item: str) -> tuple[int, str]:
         """Vide les machines de tête, et DIT pourquoi quand elle n'y arrive pas.
 
@@ -1880,6 +1902,18 @@ class Coordinator:
         vidées, motif = 0, ""
         for p in (getattr(rap, "placed", []) or []):
             if getattr(p, "idx", -1) not in finales:
+                continue
+            # DÉJÀ VIDÉE ? ON N'AJOUTE RIEN. Le planner pose un bras qui puise dans la
+            # machine de tête et dépose sur un convoyeur — mesuré partie 16 autour du
+            # four (6,-32) : « burner-inserter (7.5,-32.5) pickup=four -> drop=belt ».
+            # Lui adjoindre un coffre et un second bras ne débouche rien, puisque la
+            # sortie n'était pas bouchée. `batir_evacuation` garde tout son sens pour
+            # une machine ISOLÉE (four de fusion à la main, assembleuse en full_output),
+            # d'où la garde ICI et non dans la méthode.
+            if self._a_deja_une_sortie(p.x, p.y):
+                if not motif:
+                    motif = (f" — {p.name}@({p.x},{p.y}) est déjà vidée par un bras : "
+                             f"rien à ajouter")
                 continue
             ok_e, detail_e = self.batir_evacuation(
                 Symptome(name=p.name, x=p.x, y=p.y, cause="sortie_pleine", gravite=1,

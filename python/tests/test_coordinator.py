@@ -2745,6 +2745,70 @@ def test_la_portee_d_alimentation_n_est_pas_plafonnee_par_nous() -> None:
     assert ok
 
 
+def test_on_ne_pose_pas_de_coffre_sur_une_machine_deja_evacuee() -> None:
+    """UN COFFRE DE PLUS SUR UNE SORTIE QUI MARCHE DÉJÀ NE SERT À RIEN.
+
+    Vu à l'écran partie 16, puis mesuré sur la carte autour du four (6,-32) :
+
+        burner-inserter (4.5,-32.5) pickup=belt  -> drop=four    ENTRÉE
+        burner-inserter (7.5,-32.5) pickup=four  -> drop=belt    SORTIE
+
+    Le planner pose déjà le bras qui vide la machine de tête vers un convoyeur. Lui
+    ajouter un coffre et un second bras ne débouche rien : la sortie n'était pas
+    bouchée. Quatre correctifs de la journée (H20, H21, H25, H27) ont servi à faire
+    fonctionner un geste qui, sur une chaîne bâtie par le planner, n'a pas lieu d'être.
+
+    `batir_evacuation` garde tout son sens pour `reparer` sur une machine ISOLÉE — un
+    four de fusion posé à la main, une assembleuse en `full_output`. La garde va donc
+    dans `_evacuer_les_tetes`, à l'endroit où l'on décide d'y recourir automatiquement,
+    et non dans la méthode elle-même.
+
+    Un inserteur qui PUISE dans la machine est la signature d'une sortie desservie —
+    même règle que `en_service` côté mod, qui reconnaît une machine servie à ce qu'un
+    bras pointe dessus.
+    """
+    from agents.coordinator import Coordinator
+
+    appels = []
+
+    class _Ent:
+        def __init__(self, role, node_item):
+            self.role, self.node_item = role, node_item
+
+    class _Pose:
+        def __init__(self, idx, x, y):
+            self.idx, self.x, self.y, self.name = idx, x, y, "stone-furnace"
+
+    class _Plan:
+        def __init__(self, ents):
+            self.entities = ents
+
+    class _Rap:
+        def __init__(self, poses):
+            self.placed = poses
+
+    class _ApiSortie:
+        def inspect_at(self, x, y, radius=0.5):
+            # Le bras de sortie du planner : il PUISE dans le four (6,-32).
+            return {"entities": [
+                {"name": "burner-inserter", "type": "inserter", "x": 7.5, "y": -32.5,
+                 "pickupX": 6.5, "pickupY": -32.5, "dropX": 8.6, "dropY": -32.5}]}
+
+    c = _coord_mesure(_ApiSortie())
+    c.journal = []
+    c.batir_evacuation = lambda cible, coffre="wooden-chest": (
+        appels.append(cible.name), (True, "posé"))[1]
+    c._evacuer_les_tetes = Coordinator._evacuer_les_tetes.__get__(c)
+
+    vidées, motif = c._evacuer_les_tetes(
+        _Plan([_Ent("machine", "iron-plate")]), _Rap([_Pose(0, 6.0, -32.0)]), "iron-plate")
+
+    ok = appels == [] and "déjà" in motif
+    rec("test_on_ne_pose_pas_de_coffre_sur_une_machine_deja_evacuee", ok,
+        f"appels à batir_evacuation : {appels} — motif « {motif.strip()[:60]} »")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2800,6 +2864,7 @@ def main() -> int:
         test_l_evacuation_s_approche_avant_de_poser_son_coffre,
         test_l_alimentation_reutilise_la_foreuse_deja_posee,
         test_la_portee_d_alimentation_n_est_pas_plafonnee_par_nous,
+        test_on_ne_pose_pas_de_coffre_sur_une_machine_deja_evacuee,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,
