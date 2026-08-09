@@ -2657,6 +2657,94 @@ def test_l_evacuation_s_approche_avant_de_poser_son_coffre() -> None:
     assert ok
 
 
+def test_l_alimentation_reutilise_la_foreuse_deja_posee() -> None:
+    """ON NE REPOSE PAS CE QU'ON A DÉJÀ BÂTI — surtout au même endroit.
+
+    Partie 16, mesuré : `reparer('approvisionner')` échoue en 113 secondes sur
+
+        foreur non posé sur coal :
+        [(0, 'burner-mining-drill', -65.0, -79.0, 'occupe par burner-mining-drill')]
+
+    L'ancre est DÉTERMINISTE — même gisement, même échantillon, même calcul — donc le
+    second passage vise exactement la tuile où le premier a posé sa foreuse. Elle tourne,
+    elle extrait, et l'agent la déclare « emplacement occupé » puis renonce à toute
+    l'alimentation.
+
+    Une foreuse déjà en terre sur le bon gisement est un ACQUIS, pas un obstacle : on
+    branche la belt dessus. C'est le même principe que `_englober` — ce qu'on vient de
+    bâtir doit entrer dans ce qu'on observe — appliqué à la pose.
+    """
+    from agents.coordinator import Coordinator
+
+    class _ApiDeja:
+        def inspect_at(self, x, y, radius=0.5):
+            # Une foreuse de la force, déjà posée sur le gisement, en train d'extraire.
+            return {"entities": [
+                {"name": "burner-mining-drill", "type": "mining-drill",
+                 "x": -65.0, "y": -79.0, "status": "working", "mining": "coal",
+                 "dropX": -66.5, "dropY": -79.5}]}
+
+    c = _coord_mesure(_ApiDeja())
+    c.journal = []
+    c._foreuse_existante = Coordinator._foreuse_existante.__get__(c)
+
+    trouvee = c._foreuse_existante((-65.0, -79.0), "burner-mining-drill")
+    # Et sur un gisement vierge, rien : on pose comme avant.
+    class _ApiVierge:
+        def inspect_at(self, x, y, radius=0.5):
+            return {"entities": []}
+    c2 = _coord_mesure(_ApiVierge())
+    c2.journal = []
+    c2._foreuse_existante = Coordinator._foreuse_existante.__get__(c2)
+    vierge = c2._foreuse_existante((10.0, 10.0), "burner-mining-drill")
+
+    ok = (trouvee is not None and abs(trouvee[0] - (-65.0)) < 0.6
+          and abs(trouvee[1] - (-79.0)) < 0.6 and vierge is None)
+    rec("test_l_alimentation_reutilise_la_foreuse_deja_posee", ok,
+        f"deja posée -> {trouvee} ; gisement vierge -> {vierge}")
+    assert ok
+
+
+def test_la_portee_d_alimentation_n_est_pas_plafonnee_par_nous() -> None:
+    """LE DÉTERMINISTE CALCULE LE COÛT, L'AGENT DÉCIDE S'IL LE PAIE.
+
+    `BELTS_FABRICABLES = 20` était un arbitrage que le code s'arrogeait : mesuré que
+    forger 73 belts prenait une heure, j'en avais fait une limite en dur. Or « est-ce
+    que ça vaut 240 plaques de dérouler 80 tuiles de convoyeur ? » n'est pas un calcul,
+    c'est un choix — et c'est celui de l'agent, comme le placement est celui du
+    déterministe.
+
+    Partie 16, la conséquence : « aucun gisement de coal à moins de 40 tuiles » alors
+    que la chaîne de charbon tournait à 80 tuiles avec 671 unités extraites. Le charbon
+    existait, l'usine mourait de faim, et le refus venait d'un seuil que personne
+    n'avait choisi.
+
+    L'écart entre gisements DÉPEND DE LA CARTE : si elle les éloigne, il n'y a pas
+    d'alternative à une longue ligne. Refuser au nom d'un plafond revient à condamner
+    l'usine pour une génération de terrain qu'on ne maîtrise pas.
+
+    `budget_belts` rend donc la décision à l'appelant : sans lui, on reste prudent
+    (comportement inchangé) ; avec, l'agent dit ce qu'il accepte de payer.
+    """
+    from agents.coordinator import Coordinator
+
+    class _ApiStock:
+        def get_state(self):
+            return {"inventory": {"transport-belt": 20}, "tick": 1, "ready": True}
+
+    c = _coord_mesure(_ApiStock())
+    c.journal = []
+    c._portee_appro = Coordinator._portee_appro.__get__(c)
+
+    prudent = c._portee_appro()                       # 20 en poche + la marge par défaut
+    choisi = c._portee_appro(budget_belts=100)        # l'agent accepte d'en forger 100
+
+    ok = choisi >= 100 and choisi > prudent
+    rec("test_la_portee_d_alimentation_n_est_pas_plafonnee_par_nous", ok,
+        f"sans budget : {prudent:.0f} tuiles ; budget 100 belts : {choisi:.0f} tuiles")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2710,6 +2798,8 @@ def main() -> int:
         test_le_coffre_d_evacuation_essaie_aussi_les_diagonales,
         test_la_foreuse_a_charbon_recoit_un_bras_de_retour,
         test_l_evacuation_s_approche_avant_de_poser_son_coffre,
+        test_l_alimentation_reutilise_la_foreuse_deja_posee,
+        test_la_portee_d_alimentation_n_est_pas_plafonnee_par_nous,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,

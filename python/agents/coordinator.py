@@ -1957,7 +1957,7 @@ class Coordinator:
         """
         return int(math.ceil(distance)) + 8
 
-    def _portee_appro(self) -> float:
+    def _portee_appro(self, budget_belts: Optional[int] = None) -> float:
         """Jusqu'où l'on peut tirer une belt : ce qu'on a en poche, plus ce qu'on forge.
 
         LA PORTÉE N'EST PAS UN NOMBRE, C'EST CE QU'ON PEUT PAYER. Deux constantes
@@ -1970,7 +1970,22 @@ class Coordinator:
         problème de train, quel que soit le stock.
         """
         stock = perception.inventory(self.api).get("transport-belt", 0)
-        return float(min(stock + self.BELTS_FABRICABLES, self.PORTEE_APPRO))
+        # LE PLAFOND N'EST PAS LE NÔTRE À POSER. `BELTS_FABRICABLES` était un arbitrage
+        # que le code s'arrogeait — mesuré que forger 73 belts prend une heure, j'en
+        # avais fait une limite en dur. Or « est-ce que ça vaut 240 plaques de dérouler
+        # 80 tuiles ? » n'est pas un calcul mais un CHOIX, et il revient à l'agent.
+        #
+        # Partie 16 : « aucun gisement de coal à moins de 40 tuiles » alors que la
+        # chaîne de charbon tournait à 80 tuiles avec 671 unités extraites. Le charbon
+        # existait, l'usine mourait de faim, et le refus venait d'un seuil que personne
+        # n'avait choisi. L'écart entre gisements DÉPEND DE LA CARTE : si elle les
+        # éloigne, il n'y a pas d'alternative à une longue ligne.
+        forgeables = self.BELTS_FABRICABLES if budget_belts is None else int(budget_belts)
+        portee = stock + forgeables
+        # Le plafond de sécurité ne s'applique qu'à notre propre prudence : un budget
+        # explicite de l'agent l'emporte, c'est lui qui paie.
+        return float(portee if budget_belts is not None
+                     else min(portee, self.PORTEE_APPRO))
 
     # Où poser le coffre de ramassage, du plus proche au plus éloigné.
     #
@@ -1985,6 +2000,29 @@ class Coordinator:
     # donne la bounding box.
     _DIRS_COFFRE = ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
                     (1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0))
+
+    def _foreuse_existante(self, ancre: tuple[float, float], foreur: str):
+        """La foreuse déjà posée sur cette ancre, s'il y en a une — sinon None.
+
+        ON NE REPOSE PAS CE QU'ON A DÉJÀ BÂTI. L'ancre est DÉTERMINISTE — même gisement,
+        même échantillon, même calcul — donc un second passage vise exactement la tuile
+        où le premier a posé sa foreuse. Mesuré partie 16 : 113 secondes perdues sur
+        « foreur non posé sur coal : occupe par burner-mining-drill », et l'alimentation
+        entière abandonnée alors que la foreuse tournait déjà.
+
+        Une foreuse en terre sur le bon gisement est un ACQUIS : on branche la belt
+        dessus. Même principe qu'`_englober` — ce qu'on vient de bâtir doit entrer dans
+        ce qu'on observe — appliqué à la pose.
+        """
+        try:
+            proches = ((self.api.inspect_at(ancre[0], ancre[1], 2.0) or {})
+                       .get("entities") or [])
+        except Exception:
+            return None
+        for e in proches:
+            if str(e.get("type", "")) == "mining-drill":
+                return (float(e.get("x", ancre[0])), float(e.get("y", ancre[1])), e)
+        return None
 
     def _boucler_le_charbon(self, drill: tuple[float, float], foreur: str,
                             depart: tuple[float, float]):
@@ -3938,7 +3976,8 @@ class Coordinator:
         return False, (f"aucune place pour évacuer {cible.name} — "
                        f"{' ; '.join(essais[:3]) if essais else 'aucun emplacement libre'}")
 
-    def approvisionner(self, cible, item: str = "coal") -> tuple[bool, str]:
+    def approvisionner(self, cible, item: str = "coal",
+                       budget_belts: Optional[int] = None) -> tuple[bool, str]:
         """Bâtit une chaîne mine -> belt -> inserter vers une machine à combustible.
 
         C'est ce qui sépare une usine qui démarre d'une usine qui tient : mesuré, un
@@ -3958,14 +3997,19 @@ class Coordinator:
         # La portée se CALCULE : elle vaut ce qu'on peut payer en belts (cf.
         # `_portee_appro`). Un refus doit donc nommer le stock, pas un nombre rond —
         # sinon « trop loin » masque « pas de quoi ».
-        portee = self._portee_appro()
+        portee = self._portee_appro(budget_belts)
         choix = self.sans_ecoulement(self.choisir_gisement, item, (cible.x, cible.y),
                                      portee)
         if choix is None:
             en_poche = perception.inventory(self.api).get("transport-belt", 0)
+            # ON DIT LE COÛT, ON NE TRANCHE PAS. Si la carte éloigne les gisements, une
+            # longue ligne est la SEULE option — refuser au nom de notre prudence
+            # condamnerait l'usine pour une génération de terrain qu'on ne choisit pas.
             return False, (f"aucun gisement de {item} à moins de {portee:.0f} tuiles "
-                           f"({en_poche} belt(s) en poche + {self.BELTS_FABRICABLES} "
-                           f"forgeable(s)) : c'est un problème de train, pas de belt")
+                           f"({en_poche} belt(s) en poche, {self.BELTS_FABRICABLES} "
+                           f"forgeable(s) sans budget). Une belt coûte "
+                           f"{self.PLAQUES_PAR_BELT:.0f} plaques la tuile : rappelle avec "
+                           f"`budget_belts` si tu acceptes d'en forger davantage")
         # On s'ancre sur une TUILE réelle du gisement retenu, jamais sur son centre : le
         # centre d'une boîte peut tomber sur un trou (piège déjà payé avec `scan_patch`).
         sp = self.builder._scan_patch_local(item)
@@ -4038,10 +4082,24 @@ class Coordinator:
         # `build_distance` (« walk closer first », mesuré à 10 tuiles). Le foreur est sur
         # le gisement, donc à des dizaines de tuiles de la machine qu'on alimente — il
         # FAUT y aller. En test_mode l'approche est un téléport, elle ne coûte rien.
-        rap = execute_micro(self.api, mp, generate=False, approach=True, timeout=90.0)
-        if not rap.ok or not rap.placed:
-            return False, f"foreur non posé sur {item} : {rap.missing or rap.blocked[:1]}"
-        drill = rap.placed[0]
+        # DÉJÀ BÂTI ? ON REPREND. L'ancre est déterministe, donc un second passage vise
+        # la tuile même où le premier a posé sa foreuse — elle tourne, et on la déclarait
+        # « emplacement occupé » avant de renoncer à toute l'alimentation (113 s perdues,
+        # partie 16). Une foreuse en terre sur le bon gisement est un acquis.
+        essais: list[str] = []
+        deja = self._foreuse_existante(ancre, foreur)
+        if deja is not None:
+            class _Pose:
+                def __init__(self, x, y, name):
+                    self.x, self.y, self.name, self.role, self.idx = x, y, name, "drill", 0
+            drill = _Pose(deja[0], deja[1], foreur)
+            essais.append(f"foreuse déjà en place en ({deja[0]:.0f},{deja[1]:.0f}) : reprise")
+        else:
+            rap = execute_micro(self.api, mp, generate=False, approach=True, timeout=90.0)
+            if not rap.ok or not rap.placed:
+                return False, (f"foreur non posé sur {item} : "
+                               f"{rap.missing or rap.blocked[:1]}")
+            drill = rap.placed[0]
 
         # 2. L'amorçage, ou le courant. Un burner doit recevoir de quoi extraire son
         #    premier charbon ; un électrique doit être relié.

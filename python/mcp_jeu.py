@@ -413,12 +413,19 @@ def _machine_a(api, x: float, y: float) -> str:
 
 
 @outil
-def reparer(quoi: str, x: float, y: float, nom_machine: str = "") -> str:
+def reparer(quoi: str, x: float, y: float, nom_machine: str = "",
+            budget_belts: int = 0) -> str:
     """Répare une machine nommée par le diagnostic.
 
     `quoi` : « ravitailler » (combustible), « evacuer » (sortie pleine), « relier »
     (courant), « approvisionner » (bâtir sa desserte), « batir_evacuation » (ramassage
     permanent). L'agent s'approche avant d'agir — le jeu refuse au-delà de dix tuiles.
+
+    `budget_belts` : combien de convoyeurs tu acceptes de faire FORGER pour une
+    « approvisionner ». Une belt coûte trois plaques de fer la tuile. Sans budget, on
+    reste prudent et l'outil te dit la distance manquante ; c'est à TOI de juger si
+    relier un gisement lointain vaut son prix — l'écart entre gisements dépend de la
+    carte, et quand elle les éloigne, une longue ligne est la seule option.
 
     `nom_machine` est FACULTATIF : sans lui, on lit sur place ce qui s'y trouve. Le
     remplacer par le mot « machine » — ce que faisait cet outil — envoyait
@@ -430,7 +437,12 @@ def reparer(quoi: str, x: float, y: float, nom_machine: str = "") -> str:
     from services.factory_doctor import Symptome
     cible = Symptome(name=nom_machine or _machine_a(_api(), x, y) or "machine",
                      x=x, y=y, cause="demandé", gravite=1, detail="")
-    ok, detail = _coord().agir(Decision(action=quoi, raison="demandé", cible=cible))
+    coord = _coord()
+    if quoi == "approvisionner" and budget_belts > 0:
+        ok, detail = coord.approvisionner(cible, coord.combustible,
+                                          budget_belts=int(budget_belts))
+    else:
+        ok, detail = coord.agir(Decision(action=quoi, raison="demandé", cible=cible))
     return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
 
 
