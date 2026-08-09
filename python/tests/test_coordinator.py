@@ -2809,6 +2809,38 @@ def test_on_ne_pose_pas_de_coffre_sur_une_machine_deja_evacuee() -> None:
     assert ok
 
 
+def test_un_refus_de_terrain_dit_ce_qui_bloque() -> None:
+    """« OBSTACLE_BLOCKING » NE DIT NI QUOI NI OÙ — l'agent ne peut rien en faire.
+
+    Partie 18, mesuré : `batir_une_chaine` refuse trois fois en six secondes sur
+    « non implantable : obstacle_blocking ». Hermes fait alors ce qu'il faut — il se
+    déplace jusqu'au gisement et appelle `regarder` — et ne trouve **aucune entité**.
+    `can_place_check` répond d'ailleurs True pour une foreuse à la tuile visée.
+
+    Le refus est pourtant légitime : le planner teste CHAQUE entité du plan contre le
+    terrain, et une seule qui tombe sur un obstacle condamne les vingt-neuf. Mais il
+    garde pour lui ce qu'il a vu. Ses notes portent
+    « obstacle_blocking:per_entity:4 hits kind=water » — le nombre ET la nature — et
+    rien de tout cela n'atteint l'agent.
+
+    La différence est décisive pour lui : de l'eau, il faut changer de gisement ; des
+    arbres, il faut dégager. Sans le savoir, il ne peut que réessayer à l'identique.
+    """
+    from agents.coordinator import Coordinator
+
+    class _Plan:
+        feasibility = "obstacle_blocking"
+        notes = ["ratio:1.0", "obstacle_blocking:per_entity:4 hits kind=water"]
+        entities = []
+
+    c = _coord_mesure(None)
+    motif = Coordinator._motif_de_refus(c, _Plan(), "iron-plate")
+
+    ok = "water" in motif and "4" in motif
+    rec("test_un_refus_de_terrain_dit_ce_qui_bloque", ok, f"« {motif[:80]} »")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2865,6 +2897,7 @@ def main() -> int:
         test_l_alimentation_reutilise_la_foreuse_deja_posee,
         test_la_portee_d_alimentation_n_est_pas_plafonnee_par_nous,
         test_on_ne_pose_pas_de_coffre_sur_une_machine_deja_evacuee,
+        test_un_refus_de_terrain_dit_ce_qui_bloque,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,

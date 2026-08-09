@@ -1698,7 +1698,7 @@ class Coordinator:
         if faisabilite != "ok":
             # `missing_patch:<ressource>` NOMME le gisement introuvable : le dire évite de
             # chercher la panne du côté du plan alors qu'il manque un minerai.
-            return False, f"« {item} » non implantable : {faisabilite}"
+            return False, self._motif_de_refus(lp, item)
 
         # Le combustible n'est versé qu'aux burners ; une chaîne électrique n'en veut pas,
         # et l'executor le sait (`is_burner`). On ne présume donc pas du palier.
@@ -2148,6 +2148,33 @@ class Coordinator:
         for matiere in self.MATIERES_RECOLTABLES:
             self._recolter_la_production(matiere)
         return self.fabriquer(nom, combien)
+
+    def _motif_de_refus(self, lp, item: str) -> str:
+        """Traduit un refus du planner en quelque chose dont l'agent puisse faire usage.
+
+        « obstacle_blocking » ne dit ni quoi ni où. Mesuré partie 18 : trois refus en six
+        secondes, après quoi Hermes se déplace jusqu'au gisement, appelle `regarder`, et
+        ne trouve AUCUNE entité — `can_place_check` répondant d'ailleurs True sur la tuile
+        visée. Sa démarche était juste ; c'est notre diagnostic qui se taisait.
+
+        Le planner sait pourtant : ses notes portent « obstacle_blocking:per_entity:4
+        hits kind=water », le nombre et la nature. La différence est décisive pour
+        l'agent — de l'eau, il faut changer de gisement ; des arbres, il faut dégager.
+        """
+        faisabilite = getattr(lp, "feasibility", "?")
+        base = f"« {item} » non implantable : {faisabilite}"
+        for note in (getattr(lp, "notes", None) or []):
+            texte = str(note)
+            if not texte.startswith(faisabilite):
+                continue
+            # « obstacle_blocking:per_entity:4 hits kind=water » -> 4 et water.
+            combien = "".join(c for c in texte.split(":")[-1].split()[0] if c.isdigit())
+            nature = texte.split("kind=")[-1].strip() if "kind=" in texte else ""
+            if combien or nature:
+                return (f"{base} — {combien or '?'} entité(s) du plan tombent sur "
+                        f"« {nature or 'un obstacle'} ». De l'eau ou une falaise : vise "
+                        f"un autre gisement. Des arbres ou des rochers : dégage d'abord.")
+        return base
 
     def _mettre_en_service(self, poses) -> tuple[int, int, str]:
         """Donne à chaque machine posée ce dont ELLE a besoin pour tourner.
