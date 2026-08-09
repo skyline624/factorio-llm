@@ -199,19 +199,24 @@ steel-processing) est **obsolète**. L'arbre réel mesuré le 06/08 :
    fabriqués à la main), automation coûte des flacons de science, qui
    exigent un lab alimenté.
 
-**Conséquence** : la centrale EST nécessaire avant automation, contrairement
-à ce qui était écrit. L'ordre correct est :
+**Conséquence** : la centrale est nécessaire avant `automation`, qui coûte des flacons
+— donc un lab POSÉ et ALIMENTÉ. Mais cela ne change RIEN à l'ordre de la marche à
+suivre : `batir_une_chaine` reste l'étape 3, et elle vient tôt. C'est elle qui produit
+les plaques dont tout le reste se paie ; attendre d'avoir fini l'arbre de recherche pour
+bâtir, c'est attendre sans rien produire.
 
-1. electronics → 2. steam-power → 3. automation-science-pack →
-4. **batir_une_centrale** (réseau électrique) → 5. poser lab + alimenter →
-6. automation → 7. steel-processing → 8. batir_une_chaine.
+L'enchaînement complet, en une ligne :
 
-**Le bois verrouille toute la suite.** small-electric-pole = 1 bois + 2 câbles.
-Pas de bois → pas de poteau → pas de réseau → pas de lab alimenté → pas de
-recherche automation → pas d'assembleuse. `se_procurer("wood")` échoue
-(« verrouillée »), `ou_sont_les_ressources("wood")` ne trouve rien (le bois
-vient des arbres, pas d'un gisement), et aucun arbre à moins de 40 tuiles du
-spawn. **Il faut abattre un arbre à la main en jeu** pour débloquer.
+  chaîne de fer (tôt) → electronics → centrale → machines électriques → automation
+
+**LE BOIS N'EST PLUS UN VERROU — corrigé le 06/08.** Tu avais écrit que
+`se_procurer("wood")` échouait et que rien n'en trouvait, donc pas de poteau, pas de
+réseau, pas de lab, pas de recherche. C'était exact, et c'était un défaut de nos outils,
+pas du jeu : le mode « miner » cherchait en jeu une entité nommée « wood », qui n'existe
+pas — les arbres portent `tree-01`, `dry-hairy-tree` et vingt-six autres noms.
+
+Vérifié en jeu depuis : `se_procurer("wood")` rend quatre bûches par arbre, et
+`wooden-chest` (2 bois) redevient fabricable. Le chemin vers l'électricité est ouvert.
 
 ## `se_deplacer` marche — ce que tu avais mesuré venait d'une partie sans avatar
 
