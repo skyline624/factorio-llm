@@ -294,6 +294,64 @@ def test_aucun_poteau_alimente_rend_none() -> None:
     assert ok
 
 
+def test_un_souterrain_a_moitie_pose_est_retire() -> None:
+    """UN SOUTERRAIN ORPHELIN NE TRANSPORTE RIEN, ET BOUCHE LA TUILE.
+
+    Vu à l'écran pendant la partie 16, puis retrouvé sur la carte :
+
+        underground-belt (-66.5,-79.5) direction west   — seul, sans paire
+
+    Il était à côté de la foreuse à charbon, sur le tracé de la ligne qui devait
+    alimenter les foreuses de fer. Un `underground-belt` fonctionne PAR PAIRE : une
+    entrée et une sortie. Isolé, il n'achemine rien — et il occupe la tuile, si bien
+    que la belt ordinaire ne peut plus y passer non plus. Le franchissement échoue
+    donc DEUX fois : il ne relie pas, et il condamne le passage.
+
+    `_enjamber` posait l'entrée, puis la sortie, et rendait `[]` si l'une des deux
+    échouait — sans retirer celle qui avait réussi. Rien dans le rapport ne le disait :
+    l'appelant voyait un franchissement raté et cherchait ailleurs, laissant derrière
+    lui une pièce inerte au milieu du tracé.
+
+    Ce qu'on pose et qu'on n'utilise pas, on le REPREND : c'est la même règle que pour
+    le coffre d'évacuation, dont l'essai suivant retire le coffre inutile.
+    """
+    from services import site_finder
+
+    retires = []
+
+    class _Api:
+        def can_place_check(self, name, x, y, direction="north"):
+            return {"can_place": True}
+
+        def run_action(self, fn, *a, **kw):
+            nom = getattr(fn, "__name__", "")
+            if nom == "place_entity_at":
+                # L'entrée passe, la sortie échoue — le cas exact observé en jeu.
+                opts = a[4] if len(a) > 4 else None
+                ok = not (isinstance(opts, dict) and opts.get("ug_type") == "output")
+                return {"ok": ok}
+            if nom == "remove_entity_at":
+                retires.append((a[0], a[1]))
+            return {"ok": True}
+
+        def place_entity_at(self, *a, **kw):
+            return {"ok": True}
+
+        def remove_entity_at(self, *a, **kw):
+            return {"ok": True}
+
+        def inspect_at(self, x, y, radius=0.5):
+            return {"entities": []}
+
+    tuiles = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0), (4.0, 0.0)]
+    pose = site_finder._enjamber(_Api(), tuiles, 2, "east", "transport-belt")
+
+    ok = pose == [] and (1.0, 0.0) in retires
+    rec("test_un_souterrain_a_moitie_pose_est_retire", ok,
+        f"pose={pose} — retiré : {retires}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_ligne_droite_connexe,

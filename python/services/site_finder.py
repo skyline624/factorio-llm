@@ -308,8 +308,23 @@ def _enjamber(api, tuiles: list, i: int, direction: str, belt: str,
                            {"ug_type": "input"}, timeout=timeout)
         b = api.run_action(api.place_entity_at, ug, sortie[0], sortie[1], direction,
                            {"ug_type": "output"}, timeout=timeout)
-        if all(isinstance(r, dict) and r.get("ok") for r in (a, b)):
+        ok_a = isinstance(a, dict) and a.get("ok")
+        ok_b = isinstance(b, dict) and b.get("ok")
+        if ok_a and ok_b:
             return [entree, sortie]
+        # CE QU'ON POSE ET QU'ON N'UTILISE PAS, ON LE REPREND. Un `underground-belt`
+        # fonctionne par PAIRE : isolé, il n'achemine rien ET il occupe la tuile, si
+        # bien que la belt ordinaire ne peut plus y passer. Le franchissement échouait
+        # donc deux fois — il ne reliait pas, et il condamnait le passage.
+        #
+        # Vu à l'écran partie 16, puis retrouvé sur la carte : « underground-belt
+        # (-66.5,-79.5) west », seul, sur le tracé de la ligne qui devait alimenter les
+        # foreuses de fer en charbon. Rien dans le rapport ne le signalait : l'appelant
+        # voyait un franchissement raté et cherchait ailleurs.
+        for pose_faite, coin in ((ok_a, entree), (ok_b, sortie)):
+            if pose_faite:
+                api.run_action(api.remove_entity_at, coin[0], coin[1], ug,
+                               timeout=timeout)
         return []
     return []
 
