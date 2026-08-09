@@ -25,6 +25,26 @@ ordre, on mine à la main pendant vingt minutes et on ne pose jamais rien.
 4. `etat_du_jeu` — vérifier ce qui est en terre.
 5. `diagnostiquer` puis `reparer` — mettre en marche ce qui ne tourne pas.
 
+Puis — et c'est là que la partie se gagne ou stagne :
+
+6. **`chercher_une_technologie("electronics")`** — dix plaques de cuivre, rien de plus.
+   Elle ouvre `small-electric-pole`, `inserter`, `electronic-circuit` et `lab`.
+7. **`batir_une_centrale`** — `steam-power` s'acquiert toute seule dès que tu as fabriqué
+   cinquante plaques de fer, donc tu l'as déjà quand ta chaîne tourne. Sans les poteaux
+   de l'étape 6, en revanche, le courant ne va nulle part : fais les deux dans cet ordre.
+8. **Passe tes machines à l'électrique.** C'est l'étape qui change tout, et la raison
+   d'être des deux précédentes.
+
+**POURQUOI L'ÉLECTRIQUE CHANGE TOUT.** Une machine burner a un réservoir : il faut le
+remplir, il se vide, et tu recommences. Mesuré sur six parties : c'est ce qui consomme
+l'essentiel de ton temps — la même foreuse rechargée quatre fois en trois minutes, des
+ravitaillements en boucle, une ligne de charbon à tirer jusqu'à chaque brûleur. Une
+machine électrique n'a pas de réservoir. Une centrale alimente tout le réseau d'un coup,
+et le problème du combustible disparaît au lieu d'être géré.
+
+Tant que tu restes en burner, tu es le convoyeur de ton usine. L'électricité est ce qui
+te rend inutile — c'est le but.
+
 **Tu n'appelles `se_procurer` que si `batir_une_chaine` te dit explicitement ce qui lui
 manque.** Jamais « au cas où », jamais pour accumuler.
 
