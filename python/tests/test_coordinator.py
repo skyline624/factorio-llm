@@ -2901,6 +2901,50 @@ def test_le_nombre_d_alimentations_revient_a_l_agent() -> None:
     assert ok
 
 
+def test_la_centrale_forge_ce_qui_lui_manque() -> None:
+    """LE PALIER ÉLECTRIQUE ÉCHOUAIT SUR LE DÉFAUT DÉJÀ CORRIGÉ TROIS FOIS.
+
+    Partie 19 : Hermes franchit enfin l'étape 7 — il débloque `electronics`, vérifie que
+    `steam-power` est acquise, et appelle `batir_une_centrale` de lui-même. Réponse en
+    une demi-seconde :
+
+        ÉCHEC — centrale non bâtie : missing={'boiler': 1, 'coal': 7,
+                'steam-engine': 1, 'small-electric-pole': 2, 'offshore-pump': 1}
+
+    `batir_une_chaine` se procure ce qui lui manque depuis longtemps — c'est même écrit
+    dans la skill : « elle fabrique elle-même ce qui lui manque, n'attends pas d'avoir
+    assez de matériel ». La centrale, elle, lisait l'inventaire et renonçait.
+
+    Quatrième occurrence du même motif après la foreuse (H15), le bras (H20) et le
+    coffre (H21). Et la plus coûteuse : elle bloque la sortie du palier burner, donc la
+    fin du problème de charbon sur lequel butent huit correctifs.
+    """
+    from agents.coordinator import Coordinator
+
+    demandes = []
+
+    class _ApiVide:
+        def get_state(self):
+            return {"inventory": {}, "tick": 1, "ready": True}
+
+    c = _coord_mesure(_ApiVide())
+    c.journal = []
+    c.fabriquer = lambda item, combien=1: (demandes.append((item, combien)),
+                                           (True, "forgé"))[1]
+    c._assurer_stock = Coordinator._assurer_stock.__get__(c)
+    c._recolte_faite = True          # la récolte est éprouvée ailleurs (H23/H24)
+
+    manque = {"boiler": 1, "steam-engine": 1, "small-electric-pole": 2,
+              "offshore-pump": 1, "coal": 7}
+    c._forger_le_manque(manque)
+
+    forges = {i for i, _ in demandes}
+    ok = {"boiler", "steam-engine", "small-electric-pole", "offshore-pump"} <= forges
+    rec("test_la_centrale_forge_ce_qui_lui_manque", ok,
+        f"pièces forgées : {sorted(forges)}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -2959,6 +3003,7 @@ def main() -> int:
         test_on_ne_pose_pas_de_coffre_sur_une_machine_deja_evacuee,
         test_un_refus_de_terrain_dit_ce_qui_bloque,
         test_le_nombre_d_alimentations_revient_a_l_agent,
+        test_la_centrale_forge_ce_qui_lui_manque,
         test_lusine_est_aussi_grande_que_ce_quon_y_a_bati,
         test_toute_construction_elargit_lusine_pas_seulement_les_chaines,
         test_le_diagnostic_trouve_lusine_ou_quelle_soit,

@@ -2190,6 +2190,28 @@ class Coordinator:
                         f"arbres ou des rochers.")
         return base
 
+    def _forger_le_manque(self, manque: dict) -> str:
+        """Fabrique les pièces qu'une pose a déclarées manquantes, et dit ce qui résiste.
+
+        QUATRIÈME FOIS LE MÊME MOTIF. Après la foreuse (H15), le bras (H20) et le coffre
+        (H21), la centrale : `batir_energie` lisait `rap.missing` et renonçait, quand
+        `batir_chaine` se procure ce qui lui manque depuis longtemps — c'est même écrit
+        dans la skill de l'agent.
+
+        Mesuré partie 19, et c'est la plus coûteuse des quatre : Hermes franchit enfin
+        l'étape 7 — il débloque `electronics`, vérifie `steam-power`, appelle
+        `batir_une_centrale` — et reçoit en une demi-seconde « missing={'boiler': 1,
+        'steam-engine': 1, 'small-electric-pole': 2, 'offshore-pump': 1} ». Le palier
+        électrique, donc la fin du problème de charbon, tombait sur quatre pièces qu'il
+        savait fabriquer.
+        """
+        rates = []
+        for nom, combien in (manque or {}).items():
+            ok, _ = self._assurer_stock(str(nom), int(combien))
+            if not ok:
+                rates.append(str(nom))
+        return ", ".join(rates)
+
     def _mettre_en_service(self, poses,
                            alimentations_max: Optional[int] = None) -> tuple[int, int, str]:
         """Donne à chaque machine posée ce dont ELLE a besoin pour tourner.
@@ -4393,6 +4415,18 @@ class Coordinator:
             # réparation que la boucle sait faire — inutile de tout donner d'un coup.
             rap = execute_micro(self.api, plan, fuel=self.combustible, fuel_count=50,
                                 generate=False, approach=False, timeout=40.0)
+            # ON FORGE CE QUI MANQUE, PUIS ON REPOSE. Sans cela la centrale renonçait sur
+            # quatre pièces que l'agent sait fabriquer — et avec elle tout le palier
+            # électrique, donc la fin du problème de charbon (mesuré partie 19).
+            if not rap.ok and rap.missing:
+                resistent = self._forger_le_manque(rap.missing)
+                if not resistent:
+                    rap = execute_micro(self.api, plan, fuel=self.combustible,
+                                        fuel_count=50, generate=False, approach=False,
+                                        timeout=40.0)
+                elif rap.missing:
+                    return False, (f"centrale non bâtie : « {resistent} » manque et n'a "
+                                   f"pas pu être fabriqué")
             if not rap.ok:
                 return False, (f"centrale non bâtie : missing={rap.missing} "
                                f"blocked={rap.blocked[:1]}")
