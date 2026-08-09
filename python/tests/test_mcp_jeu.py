@@ -84,8 +84,47 @@ def test_reparer_prefere_une_machine_a_une_belt() -> None:
     assert ok
 
 
+def test_une_lecture_ne_patiente_pas_derriere_une_construction() -> None:
+    """REGARDER PENDANT QU'ON BÂTIT — le verrou de H13 était trop large.
+
+    Partie 17, mesuré : `batir_une_chaine` dure 2261 s, et `etat_du_jeu` lancé pendant
+    ce temps répond en **457 s**. L'agent ne peut pas observer son usine pendant qu'il
+    la construit — il attend, aveugle, la fin d'une action qu'il a lui-même lancée.
+
+    H13 sérialisait TOUS les outils derrière un verrou unique, au motif que le lien RCON
+    n'est pas réentrant. C'est vrai, mais le client le gère déjà : `RconClient.query`
+    prend son propre `threading.Lock` à chaque échange, donc deux appels concurrents se
+    sérialisent au niveau de la REQUÊTE, pas de l'outil entier.
+
+    Le verrou reste indispensable entre deux ÉCRITURES — deux constructions pilotant le
+    même avatar produiraient n'importe quoi. Les lectures, elles, n'ont aucune raison
+    d'attendre : elles n'engagent pas le personnage.
+    """
+    import mcp_jeu
+
+    lecture = [t for t in ("etat_du_jeu", "regarder", "diagnostiquer",
+                           "ou_sont_les_ressources", "ce_que_l_usine_a_produit")]
+    ecriture = [t for t in ("batir_une_chaine", "se_procurer", "reparer",
+                            "se_deplacer", "batir_une_centrale")]
+
+    manquants = [n for n in lecture + ecriture if not hasattr(mcp_jeu, n)]
+    sans_verrou = [n for n in lecture if getattr(mcp_jeu, n, None) is not None
+                   and getattr(getattr(mcp_jeu, n), "__fl_ecrit__", True) is False]
+    avec_verrou = [n for n in ecriture if getattr(mcp_jeu, n, None) is not None
+                   and getattr(getattr(mcp_jeu, n), "__fl_ecrit__", False) is True]
+
+    ok = (not manquants and sorted(sans_verrou) == sorted(lecture)
+          and sorted(avec_verrou) == sorted(ecriture))
+    rec("test_une_lecture_ne_patiente_pas_derriere_une_construction", ok,
+        f"lectures libres : {len(sans_verrou)}/{len(lecture)} — "
+        f"écritures verrouillées : {len(avec_verrou)}/{len(ecriture)}"
+        + (f" — absents : {manquants}" if manquants else ""))
+    assert ok
+
+
 def main() -> int:
-    for t in (test_reparer_lit_le_nom_reel_de_la_machine,
+    for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
+              test_reparer_lit_le_nom_reel_de_la_machine,
               test_reparer_prefere_une_machine_a_une_belt):
         t()
     print("\n" + "=" * 72)

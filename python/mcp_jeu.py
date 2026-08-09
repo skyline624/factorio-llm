@@ -183,7 +183,7 @@ def _fin(nom: str, reponse: str, duree: float) -> None:
 _VERROU_JEU = threading.Lock()
 
 
-def outil(fn):
+def outil(fn=None, *, ecrit: bool = True):
     """Déclare un outil MCP et journalise chaque appel, HORS de la boucle d'événements.
 
     Enveloppe `mcp.tool()` plutôt que de le remplacer : la signature et la docstring —
@@ -203,12 +203,27 @@ def outil(fn):
 
     D'où `to_thread` : le travail part sur un thread, la boucle reste libre de répondre.
     """
+    if fn is None:                      # usage `@outil(ecrit=False)`
+        import functools as _ft
+        return _ft.partial(outil, ecrit=ecrit)
+
     import functools
     import time
 
     import anyio.to_thread
 
     def _travail(*a, **kw):
+        # LE VERROU N'EST PAS POUR TOUT LE MONDE. Il protège contre deux ÉCRITURES
+        # simultanées — deux constructions pilotant le même avatar produiraient
+        # n'importe quoi. Les LECTURES n'engagent pas le personnage, et le lien RCON
+        # gère déjà sa propre concurrence : `RconClient.query` prend un verrou à chaque
+        # échange, donc deux appels se sérialisent au niveau de la REQUÊTE.
+        #
+        # Mesuré partie 17 : `batir_une_chaine` dure 2261 s et `etat_du_jeu` lancé
+        # pendant ce temps répond en 457 s. L'agent ne pouvait pas regarder son usine
+        # pendant qu'il la construisait — aveugle sur sa propre action.
+        if not ecrit:
+            return fn(*a, **kw)
         with _VERROU_JEU:
             return fn(*a, **kw)
 
@@ -225,12 +240,13 @@ def outil(fn):
         _fin(fn.__name__, r, time.time() - t0)
         return r
 
+    enveloppe.__fl_ecrit__ = ecrit
     return mcp.tool()(enveloppe)
 
 
 # ------------------------------------------------------------------------- OBSERVER
 
-@outil
+@outil(ecrit=False)
 def etat_du_jeu() -> str:
     """L'état de l'usine : machines, énergie, diagnostic, inventaire, recherche visée.
 
@@ -241,7 +257,7 @@ def etat_du_jeu() -> str:
     return resumer_etat(_coord().observer())
 
 
-@outil
+@outil(ecrit=False)
 def diagnostiquer(x: float = 0.0, y: float = 0.0, rayon: float = 30.0) -> str:
     """Pourquoi les machines d'une zone ne tournent pas — la CAUSE, pas le symptôme.
 
@@ -259,7 +275,7 @@ def diagnostiquer(x: float = 0.0, y: float = 0.0, rayon: float = 30.0) -> str:
         for s in (diag.symptomes or [])[:20])
 
 
-@outil
+@outil(ecrit=False)
 def ou_sont_les_ressources(ressource: str, portee_max: float = 200.0) -> str:
     """Où trouver une ressource : distance depuis le joueur, et nids alentour.
 
@@ -284,7 +300,7 @@ def ou_sont_les_ressources(ressource: str, portee_max: float = 200.0) -> str:
         for g in trouves[:8])
 
 
-@outil
+@outil(ecrit=False)
 def ce_qu_il_faut_pour(item: str) -> str:
     """La chaîne complète d'un produit : tous les intermédiaires et les minerais à extraire.
 
@@ -299,7 +315,7 @@ def ce_qu_il_faut_pour(item: str) -> str:
             f"se fond en : {fondu or 'RIEN (ce minerai ne se fond pas)'}")
 
 
-@outil
+@outil(ecrit=False)
 def etat_de_la_recherche() -> str:
     """Technologies acquises, et les marches à portée avec leur coût en flacons."""
     from services import recherche
@@ -308,7 +324,7 @@ def etat_de_la_recherche() -> str:
                    "marches": [str(m) for m in (arbre.marches or [])[:12]]})
 
 
-@outil
+@outil(ecrit=False)
 def suivre_une_ligne(depart_x: float, depart_y: float,
                      cible_nom: str = "", cible_x: float = 0.0,
                      cible_y: float = 0.0) -> str:
@@ -322,7 +338,7 @@ def suivre_une_ligne(depart_x: float, depart_y: float,
     return _rendu(suivre_flux(_api(), (depart_x, depart_y), cible_nom, cible))
 
 
-@outil
+@outil(ecrit=False)
 def regarder(x: float, y: float, rayon: float = 4.0) -> str:
     """Ce qui est POSÉ à un endroit : nom, type, statut, orientation.
 
@@ -332,7 +348,7 @@ def regarder(x: float, y: float, rayon: float = 4.0) -> str:
     return _rendu(_api().inspect_at(x, y, rayon))
 
 
-@outil
+@outil(ecrit=False)
 def ce_que_l_usine_a_produit(item: str) -> str:
     """Combien de `item` l'usine a réellement produit depuis le début.
 
