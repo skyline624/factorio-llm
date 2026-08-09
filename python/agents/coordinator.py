@@ -2167,13 +2167,26 @@ class Coordinator:
             texte = str(note)
             if not texte.startswith(faisabilite):
                 continue
-            # « obstacle_blocking:per_entity:4 hits kind=water » -> 4 et water.
-            combien = "".join(c for c in texte.split(":")[-1].split()[0] if c.isdigit())
-            nature = texte.split("kind=")[-1].strip() if "kind=" in texte else ""
-            if combien or nature:
+            # LE PLANNER ÉCRIT DEUX FORMATS, et n'en lire qu'un le laisse muet sur
+            # l'autre. Mesuré partie 19 : le refus est resté « obstacle_blocking » tout
+            # court parce que la branche `terrain_check=False` rend une bbox, non un
+            # `kind=`. Un diagnostic qui ne couvre qu'un de ses propres formats se tait
+            # précisément quand l'autre survient.
+            #
+            #   obstacle_blocking:per_entity:4 hits kind=water
+            #   obstacle_blocking: bbox étage intersecte obstacle (12, -4, 15, -1)
+            if "kind=" in texte:
+                combien = "".join(c for c in texte.split(":")[-1].split()[0]
+                                  if c.isdigit())
+                nature = texte.split("kind=")[-1].strip()
                 return (f"{base} — {combien or '?'} entité(s) du plan tombent sur "
-                        f"« {nature or 'un obstacle'} ». De l'eau ou une falaise : vise "
-                        f"un autre gisement. Des arbres ou des rochers : dégage d'abord.")
+                        f"« {nature} ». De l'eau ou une falaise : vise un autre "
+                        f"gisement. Des arbres ou des rochers : dégage d'abord.")
+            if "obstacle" in texte:
+                zone = texte.split("obstacle", 1)[-1].strip()
+                return (f"{base} — l'emprise du plan chevauche un obstacle en {zone}. "
+                        f"Vise un autre gisement, ou dégage cette zone si ce sont des "
+                        f"arbres ou des rochers.")
         return base
 
     def _mettre_en_service(self, poses) -> tuple[int, int, str]:

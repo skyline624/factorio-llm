@@ -2828,16 +2828,29 @@ def test_un_refus_de_terrain_dit_ce_qui_bloque() -> None:
     """
     from agents.coordinator import Coordinator
 
-    class _Plan:
+    class _PlanParEntite:
         feasibility = "obstacle_blocking"
         notes = ["ratio:1.0", "obstacle_blocking:per_entity:4 hits kind=water"]
         entities = []
 
-    c = _coord_mesure(None)
-    motif = Coordinator._motif_de_refus(c, _Plan(), "iron-plate")
+    # LE PLANNER A DEUX FORMATS DE NOTE, et n'en traiter qu'un laisse l'autre muet.
+    # Mesuré partie 19 : le refus est reste « non implantable : obstacle_blocking »
+    # tout court, parce que la branche `terrain_check=False` ecrit une bbox et non
+    # un `kind=`. Un diagnostic qui ne couvre qu'un de ses propres formats se tait
+    # exactement quand l'autre survient.
+    class _PlanBbox:
+        feasibility = "obstacle_blocking"
+        notes = ["obstacle_blocking: bbox étage intersecte obstacle (12, -4, 15, -1)"]
+        entities = []
 
-    ok = "water" in motif and "4" in motif
-    rec("test_un_refus_de_terrain_dit_ce_qui_bloque", ok, f"« {motif[:80]} »")
+    c = _coord_mesure(None)
+    par_entite = Coordinator._motif_de_refus(c, _PlanParEntite(), "iron-plate")
+    par_bbox = Coordinator._motif_de_refus(c, _PlanBbox(), "iron-plate")
+
+    ok = ("water" in par_entite and "4" in par_entite
+          and "12" in par_bbox and len(par_bbox) > 60)
+    rec("test_un_refus_de_terrain_dit_ce_qui_bloque", ok,
+        f"per_entity « {par_entite[:55]} » | bbox « {par_bbox[:55]} »")
     assert ok
 
 
