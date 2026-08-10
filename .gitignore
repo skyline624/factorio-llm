@@ -82,3 +82,9 @@ hermes/cache/
 hermes/.skills_prompt_snapshot.json
 hermes/context_length_cache.yaml
 hermes/*.bak-*
+
+# Etat d'execution du conteneur (base de menaces de 2,5 Mo, sessions, verrous) : recree
+# a chaque lancement, sans valeur pour qui clone le depot. Commite par megarde en H41.
+hermes/.local/
+hermes/.cache/
+hermes/.config/
