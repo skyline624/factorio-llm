@@ -40,17 +40,36 @@ COMPORTEMENT = [
     ("verify_gisement_e21.py", "un gisement épuisé se voit, se nomme et se redéploie"),
     ("verify_evacuation_e21.py", "une sortie bouchée finit par recevoir un ramassage"),
     ("verify_defense_e21.py", "une défense qui ne mène à rien cède la place"),
-    ("verify_objectif_e22.py", "l'agent mesure son débit et étend sous objectif"),
     ("verify_recherche_e24.py", "l'agent débloque ce qu'il ne savait pas encore faire"),
     ("verify_alimentation_e24.py", "les ingrédients arrivent sans qu'on les porte"),
     ("verify_curriculum_recherche.py", "l'agent décide de chercher et enchaîne les technologies"),
-    ("verify_endurance.py", "l'usine ne s'éteint pas quand le combustible manque"),
-    ("verify_produire_generique.py",
-     "le produit est un paramètre : la chaîne se découvre, se bâtit et débite"),
     # En DERNIER : c'est le seul qui fige une carte sans dotation. Il la rend garnie
     # avant de sortir, mais le placer en fin de liste évite que ce rétablissement soit
     # le seul rempart entre lui et les autres.
     ("verify_bootstrap_craft.py", "les mains vides, l'agent fabrique ce qu'il pose"),
+]
+
+# CE QUE PLUS PERSONNE NE PILOTE. Ces trois-là mesurent la BOUCLE du Coordinator —
+# `tick()` qui observe, décide et agit tour après tour. C'était le pilote du projet
+# jusqu'au 06/08 ; depuis, c'est HERMES qui joue, et il n'appelle jamais `tick`. Les
+# quatorze outils MCP exposent `batir_une_chaine`, `reparer`, `se_procurer` : Hermes
+# décide lui-même quoi faire et quand. Le Coordinator est devenu une boîte à outils.
+#
+# Mesuré le 07/08, et c'est ce qui a tranché : les trois régressions de la batterie
+# portent TOUTES sur cette boucle. Le journal montre l'agent fabriquant des bras un par
+# un pendant huit tours pendant que l'usine s'étouffe — un acharnement de `decide()`
+# qu'Hermes n'a jamais eu, lui qui diagnostique et varie ses actions (parties 18 et 19).
+#
+# On ne les supprime pas : ils gardent leur valeur le jour où l'on voudra ranimer la
+# boucle, ou comparer un pilote à l'autre. Mais ils ne comptent plus dans le verdict —
+# une batterie qui pleure sur un chemin mort fait douter de ce qui vit.
+#
+#     cd python && python verify_objectif_e22.py        # à la main, si besoin
+BOUCLE_DEPRECIEE = [
+    ("verify_objectif_e22.py", "l'agent mesure son débit et étend sous objectif"),
+    ("verify_endurance.py", "l'usine ne s'éteint pas quand le combustible manque"),
+    ("verify_produire_generique.py",
+     "le produit est un paramètre : la chaîne se découvre, se bâtit et débite"),
 ]
 
 # Le bootstrap part d'un inventaire VIDE : il refabrique deux fois sa référence et va
