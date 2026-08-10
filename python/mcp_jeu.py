@@ -1149,10 +1149,30 @@ def _machine_a(api, x: float, y: float) -> str:
         proches = ((api.inspect_at(x, y, 1.5) or {}).get("entities") or [])
     except Exception:
         return ""
-    for e in proches:
-        if str(e.get("type", "")) in _TYPES_REPARABLES:
-            return str(e.get("name") or "")
-    return str(proches[0].get("name") or "") if proches else ""
+
+    # LA PLUS PROCHE, PAS LA PREMIÈRE. `inspect_at` cherche par AIRE — le mod teste
+    # l'intersection des bounding box, ce qui est la bonne question (« qu'y a-t-il À cet
+    # endroit ? ») mais ramène aussi les voisines. Deux machines 2×2 distantes de deux
+    # tuiles se retrouvent donc toutes deux dans le rayon, et l'ordre du jeu n'est pas
+    # garanti.
+    #
+    # Partie 32, boucle de plusieurs minutes : `reparer(x=-6, y=-86)` répondait
+    # « ravitaillement de stone-furnace@(-6.0,-86.0) (n°0) » alors qu'à cet endroit se
+    # trouve la FOREUSE — le four est deux tuiles plus loin. `move_items_at` cherchait donc
+    # un four là où il n'y en a pas : zéro item versé, indéfiniment, avec 78 charbons en
+    # poche et la machine à moins de trois tuiles.
+    #
+    # Désigner par position n'a de sens que si l'on répond CE QUI EST à cette position.
+    def _loin(e):
+        try:
+            return abs(float(e.get("x", 0.0)) - x) + abs(float(e.get("y", 0.0)) - y)
+        except Exception:
+            return 1e9
+
+    reparables = [e for e in proches if str(e.get("type", "")) in _TYPES_REPARABLES]
+    if reparables:
+        return str(min(reparables, key=_loin).get("name") or "")
+    return str(min(proches, key=_loin).get("name") or "") if proches else ""
 
 
 @outil

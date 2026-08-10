@@ -49,14 +49,24 @@ def _table_rase(mcp_jeu, delai: float = 6.0) -> None:
 
 
 class _ApiCarte:
-    """Le jeu répond ce qu'il y a réellement à une position."""
+    """Le jeu répond ce qu'il y a réellement à une position.
 
-    def __init__(self, entites):
+    RECHERCHE PAR AIRE, comme le mod. `inspect_at` teste l'intersection des BOUNDING BOX
+    et non la distance aux centres — le fichier Lua l'explique : « une machine 3×2 dont le
+    centre est à une tuile n'est jamais trouvée alors que le point interrogé tombe en plein
+    dedans ». Un double qui comparait les centres était plus strict que le jeu, et ne
+    pouvait donc pas révéler qu'on rendait la mauvaise machine.
+    """
+
+    def __init__(self, entites, emprise: float = 1.0):
         self.entites = entites
+        self.emprise = emprise          # demi-côté : 1.0 pour une entité 2×2
 
     def inspect_at(self, x, y, radius=0.5):
-        return {"entities": [e for e in self.entites
-                             if abs(e["x"] - x) <= radius and abs(e["y"] - y) <= radius]}
+        return {"entities": [
+            e for e in self.entites
+            if abs(e["x"] - x) <= radius + self.emprise
+            and abs(e["y"] - y) <= radius + self.emprise]}
 
 
 def test_reparer_lit_le_nom_reel_de_la_machine() -> None:
@@ -1398,6 +1408,41 @@ def test_extraire_pose_un_coffre_quand_la_ressource_ne_se_fond_pas() -> None:
     assert ok
 
 
+def test_machine_a_rend_la_PLUS_PROCHE_et_non_la_premiere() -> None:
+    """DÉSIGNER PAR POSITION N'A DE SENS QUE SI L'ON REND CE QUI EST À CETTE POSITION.
+
+    Partie 32, boucle observée pendant plusieurs minutes :
+
+        reparer(x=-6, y=-86) -> « ravitaillement de stone-furnace@(-6.0,-86.0) (n°0) »
+
+    Or à (-6,-86) il y a la FOREUSE ; le four est à (-6,-84), deux tuiles plus loin.
+    L'outil a lu le mauvais nom, puis `move_items_at` a cherché un `stone-furnace` à une
+    position où il n'y en a pas — d'où les zéro items versés, indéfiniment, avec
+    soixante-dix-huit charbons en poche et la machine à moins de trois tuiles.
+
+    La cause : `_machine_a` retenait la PREMIÈRE entité réparable du rayon, sans regarder
+    laquelle est la plus proche. Deux machines 2×2 distantes de deux tuiles ont des
+    emprises qui se recouvrent dans ce rayon, et l'ordre de retour du jeu n'est pas garanti.
+
+    On rend donc la plus proche du point demandé. C'est le sens même de « désigner par
+    position » : l'agent montre un endroit, on lui répond ce qui s'y trouve.
+    """
+    from mcp_jeu import _machine_a
+
+    api = _ApiCarte([{"name": "burner-mining-drill", "type": "mining-drill",
+                      "x": -6.0, "y": -86.0},
+                     {"name": "stone-furnace", "type": "furnace",
+                      "x": -6.0, "y": -84.0}])
+
+    sur_la_foreuse = _machine_a(api, -6.0, -86.0)
+    sur_le_four = _machine_a(api, -6.0, -84.0)
+
+    ok = sur_la_foreuse == "burner-mining-drill" and sur_le_four == "stone-furnace"
+    rec("test_machine_a_rend_la_PLUS_PROCHE_et_non_la_premiere", ok,
+        f"(-6,-86) -> « {sur_la_foreuse} » ; (-6,-84) -> « {sur_le_four} »")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
@@ -1423,7 +1468,8 @@ def main() -> int:
               test_extraire_pose_deux_entites_et_ne_forge_plus_de_bras,
               test_arreter_un_chantier_le_TUE_meme_s_il_ne_cooopere_pas,
               test_extraire_pose_meme_sans_combustible_et_le_dit,
-              test_extraire_pose_un_coffre_quand_la_ressource_ne_se_fond_pas):
+              test_extraire_pose_un_coffre_quand_la_ressource_ne_se_fond_pas,
+              test_machine_a_rend_la_PLUS_PROCHE_et_non_la_premiere):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)
