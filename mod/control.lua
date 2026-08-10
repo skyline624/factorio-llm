@@ -63,6 +63,14 @@ remote.add_interface("fl_tools", {
   production_stats = function() safe(function() return tools.production_stats() end) end,
   -- Ce que le joueur a tape dans le chat depuis la derniere lecture. Vide la file.
   read_messages = function() safe(function() return tools.read_messages() end) end,
+  -- Deposer un message SANS passer par le clavier. Deux usages reels : prouver le
+  -- canal de bout en bout sans dependre d'un humain qui tape (`require` depuis la
+  -- console RCON rend une COPIE du module, pas celui du mod -- la file deposee n'est
+  -- alors pas celle que lit l'interface, et le test passe a cote), et permettre au
+  -- lanceur d'annoncer la fin du budget.
+  push_message = function(auteur, texte)
+    safe(function() tools.push_message(auteur, texte) return json.encode({ok = true}) end)
+  end,
   -- Validation LayoutPlanner (S0b) : synchrones, non destructives (sauf measure_entity).
   can_place_check = function(name, x, y, direction)
     safe(function() return tools.can_place_check(name, x, y, direction) end)

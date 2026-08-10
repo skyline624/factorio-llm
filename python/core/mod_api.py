@@ -108,6 +108,10 @@ class ModApi:
         """Compteurs cumules de production/consommation de la force."""
         return self._call("fl_tools", "production_stats")
 
+    def push_message(self, auteur: str, texte: str) -> dict:
+        """Depose un message dans la file, sans passer par le clavier."""
+        return self._call("fl_tools", "push_message", auteur, texte)
+
     def read_messages(self) -> dict:
         """Ce que le joueur a tape dans le chat depuis la derniere lecture. VIDE la file."""
         return self._call("fl_tools", "read_messages")
