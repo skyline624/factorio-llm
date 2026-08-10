@@ -616,6 +616,57 @@ def _nom_a(api, x: float, y: float) -> str:
     return ""
 
 
+@outil
+def extraire_ici(ressource: str = "iron-ore") -> str:
+    """Pose TOUT DE SUITE une extraction minimale : foreuse + bras + four sur la sortie.
+
+    Trois entités, avec CE QUE TU AS EN POCHE — rien n'est fabriqué, rien n'est fondu.
+    S'il te manque une pièce, l'outil te le dit et n'entreprend rien.
+
+    C'est le geste du début de partie, quand tu tiens déjà une foreuse : il produit en
+    quelques secondes là où `batir_une_chaine` planifie l'usine entière, part chercher son
+    gisement au débit et fabrique ce qui lui manque avant de poser quoi que ce soit. Cette
+    dernière reste le bon outil dès que tu veux du volume ; celui-ci sert à ne pas rester
+    les mains vides pendant qu'elle travaille.
+    """
+    from services import deplacement, perception
+    from services.executor import execute_micro
+    from services.layout_planner import ResourcePatch
+    from services.micro_planner import MicroRequest, plan_micro
+
+    api = _api()
+    inv = perception.inventory(api)
+    # ON POSE AVEC CE QU'ON A. Le geste minimal perdrait tout son sens s'il déclenchait la
+    # même attente que ce qu'il remplace : c'est justement d'avoir fabriqué avant de poser
+    # qui a laissé la foreuse en poche quatre minutes durant (partie 24).
+    besoin = {"burner-mining-drill": 1, "burner-inserter": 1, "stone-furnace": 1}
+    manque = {n: c - inv.get(n, 0) for n, c in besoin.items() if inv.get(n, 0) < c}
+    if manque:
+        pieces = ", ".join(f"{n} (il t'en faut {c})" for n, c in manque.items())
+        return (f"rien posé — il te manque {pieces}. Cet outil ne fabrique pas : "
+                f"`se_procurer` d'abord, ou `batir_une_chaine` qui forge ce qu'il faut.")
+
+    trouve = api.find_nearest(ressource) or {}
+    if not trouve.get("found"):
+        return f"aucun gisement de {ressource} en vue — essaie `ou_sont_les_ressources`"
+    ancre = (float(trouve["x"]), float(trouve["y"]))
+    api.generate_terrain(ancre[0], ancre[1], 25.0)
+    deplacement.marcher_vers(api, ancre[0], ancre[1])
+
+    plan = plan_micro(MicroRequest(
+        patch=ResourcePatch(resource=ressource, tiles=[], bbox=(0, 0, 0, 0)),
+        facing=4, anchor=ancre,
+        drill_tier="burner-mining-drill", inserter_tier="burner-inserter",
+        furnace_tier="stone-furnace", drill_size=2, furnace_size=2))
+    rap = execute_micro(api, plan, fuel="coal", fuel_count=10, generate=False,
+                        approach=True, timeout=30.0)
+    poses = ", ".join(sorted({p.name for p in (rap.placed or [])}))
+    if not rap.placed:
+        return f"ÉCHEC — rien posé en ({ancre[0]:.0f},{ancre[1]:.0f}) : {rap.blocked[:1]}"
+    return (f"OK — extraction posée en ({ancre[0]:.0f},{ancre[1]:.0f}) : {poses}. "
+            f"Vérifie qu'elle tourne (`regarder`), puis évacue ou étends.")
+
+
 @outil(ecrit=False)
 def ou_en_est_le_chantier() -> str:
     """Où en est le travail lancé en fond — et ce qu'on te dit pendant ce temps.

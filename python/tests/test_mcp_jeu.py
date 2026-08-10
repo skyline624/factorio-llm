@@ -738,6 +738,96 @@ def test_suivre_un_chantier_ne_brule_pas_les_tours_de_l_agent() -> None:
     assert ok
 
 
+def test_extraire_pose_avec_ce_qu_on_a_sans_rien_fabriquer() -> None:
+    """LE GESTE MINIMAL EXISTAIT ; SEULE L'USINE COMPLÈTE ÉTAIT OFFERTE.
+
+    Partie 24, le joueur regarde l'écran et écrit : « tu as une foreuse, utilise-la sur le
+    fer tout de suite, avec le four sur la sortie ». L'agent répond que son chantier va le
+    faire. Quatre minutes plus tard, mesuré :
+
+        inventaire      : burner-mining-drill=1, coal=44, iron-plate=18
+        machines posées : 1 seule — stone-furnace (-13,78)
+
+    La foreuse est toujours en poche. `batir_une_chaine` planifie l'usine entière — le plan
+    du LayoutPlanner, ses vingt-neuf entités, sa marche vers un gisement choisi au débit —
+    et fabrique ce qui lui manque avant de poser quoi que ce soit. C'est juste quand on a
+    de quoi ; au démarrage, cela retarde de longues minutes une production que trois
+    entités suffisent à lancer.
+
+    Or ces trois entités ont leur planificateur depuis longtemps : `MicroPlanner`, drill +
+    inserter + furnace tout-burner, quatorze tests unitaires et huit en jeu. Il servait au
+    Coordinator sans jamais être offert à l'agent, dont la seule option restait l'usine
+    complète. Même cas que `demonter` : la capacité était là, pas son exposition.
+
+    L'exigence tient en une phrase : POSER AVEC CE QU'ON A. S'il manque une pièce, on le
+    dit et on ne fabrique rien — le geste minimal perd tout son sens s'il déclenche la
+    même attente que ce qu'il remplace.
+    """
+    import mcp_jeu, asyncio, time
+
+    class _ApiExtraction:
+        def __init__(self):
+            self.poses, self.terrain = [], []
+            self.inv = {"burner-mining-drill": 1, "stone-furnace": 1,
+                        "burner-inserter": 1, "coal": 40}
+        def get_state(self):
+            # L'INVENTAIRE DOIT DÉCROÎTRE. L'executor ne croit pas un `ok=True` : il
+            # vérifie que l'objet a QUITTÉ la poche, faute de quoi il conclut à une pose
+            # fantôme — la règle d'E1, où trois entités « posées » n'en faisaient qu'une
+            # sur la carte. Un double au stock figé fait donc échouer toute pose.
+            return {"tick": 1, "character": {"x": 0.0, "y": 0.0},
+                    "inventory": dict(self.inv)}
+        def find_nearest(self, nom):
+            return {"found": True, "x": 6.0, "y": 0.0, "name": nom}
+        def generate_terrain(self, *a, **kw):
+            return {"ok": True}
+        def can_place_check(self, *a, **kw):
+            return {"can_place": True}
+        def place_entity_at(self, nom, x, y, *a, **kw):
+            if self.inv.get(nom, 0) <= 0:
+                return {"ok": False, "detail": "plus en poche"}
+            self.inv[nom] -= 1
+            self.poses.append(nom)
+            self.terrain.append({"name": nom, "type": nom, "x": x, "y": y})
+            return {"ok": True}
+        def move_items_at(self, *a, **kw):
+            return {"ok": True}
+        def inspect_at(self, x=0.0, y=0.0, radius=0.5, *a, **kw):
+            # LE JEU DOIT MONTRER CE QU'ON Y A POSÉ. L'executor ne croit jamais un
+            # `ok=True` sur parole — il relit. Un double qui répond toujours « rien ici »
+            # fait donc échouer toutes les poses, et l'on mesurerait ce défaut-là plutôt
+            # que l'outil qu'on teste.
+            return {"entities": [e for e in self.terrain
+                                 if abs(e["x"] - x) <= max(radius, 2.0)
+                                 and abs(e["y"] - y) <= max(radius, 2.0)]}
+        def run_action(self, fn, *a, **kw):
+            return fn(*a, **kw)
+        def walk_to(self, x, y, **kw):
+            return {"ok": True, "x": x, "y": y}     # l'executor s'approche de chaque pose
+
+    api = _ApiExtraction()
+    vrai_api, vrai_coord = mcp_jeu._api, mcp_jeu._ETAT.get("coord")
+    mcp_jeu._api = lambda: api
+    mcp_jeu._ETAT["coord"] = None
+    mcp_jeu._AVATAR_VU[:] = [time.time(), None]
+    try:
+        brut = getattr(mcp_jeu.extraire_ici, "fn", mcp_jeu.extraire_ici)
+        r = brut("iron-ore")
+        if asyncio.iscoroutine(r):
+            r = asyncio.run(r)
+    finally:
+        mcp_jeu._api, mcp_jeu._ETAT["coord"] = vrai_api, vrai_coord
+
+    a_pose_foreuse = "burner-mining-drill" in api.poses
+    a_pose_four = "stone-furnace" in api.poses
+    immediat = len(api.poses) >= 2
+
+    ok = a_pose_foreuse and a_pose_four and immediat
+    rec("test_extraire_pose_avec_ce_qu_on_a_sans_rien_fabriquer", ok,
+        f"posé={api.poses} — réponse={str(r)[:60]!r}")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
@@ -755,7 +845,8 @@ def main() -> int:
               test_avec_avatar_le_controle_ne_gene_personne,
               test_chaque_outil_qui_agit_passe_par_le_controle_d_avatar,
               test_demonter_existe_et_rend_ce_qu_il_recupere,
-              test_suivre_un_chantier_ne_brule_pas_les_tours_de_l_agent):
+              test_suivre_un_chantier_ne_brule_pas_les_tours_de_l_agent,
+              test_extraire_pose_avec_ce_qu_on_a_sans_rien_fabriquer):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

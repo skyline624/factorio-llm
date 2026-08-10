@@ -354,6 +354,24 @@ Deux réserves, du même ordre que celles ci-dessus :
 Tu ne peux pas répondre dans le chat. Si tu veux faire savoir quelque chose, dis-le dans
 ta réponse : elle est lue.
 
+## Commence petit : `extraire_ici` avant `batir_une_chaine`
+
+`extraire_ici(ressource)` pose TOUT DE SUITE trois entités — foreuse, bras, four sur la
+sortie — **avec ce que tu as en poche**. Rien n'est fabriqué ni fondu ; s'il te manque une
+pièce, l'outil te le dit et n'entreprend rien.
+
+C'est le geste du début de partie. `batir_une_chaine` planifie l'usine entière : elle
+choisit son gisement au débit, marche jusqu'à lui, et fabrique ce qui lui manque AVANT de
+poser quoi que ce soit — ce qui est juste quand tu veux du volume, et coûte de longues
+minutes quand trois entités suffisaient à produire.
+
+Mesuré partie 24 : tu tenais une foreuse en poche, tu as lancé une chaîne, et dix minutes
+plus tard la foreuse y était toujours. Une seule machine était posée. Le joueur l'a vu
+avant toi.
+
+**Pose d'abord, agrandis ensuite.** Une extraction qui tourne pendant que tu bâtis vaut
+mieux qu'une usine parfaite qui n'a rien produit.
+
 ## Démonter, c'est miner — même geste pour tout
 
 `demonter(x, y)` reprend ce qui se trouve à une position et t'en rend le contenu. Dans
