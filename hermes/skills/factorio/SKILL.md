@@ -354,6 +354,35 @@ Deux réserves, du même ordre que celles ci-dessus :
 Tu ne peux pas répondre dans le chat. Si tu veux faire savoir quelque chose, dis-le dans
 ta réponse : elle est lue.
 
+## Les constructions tournent EN FOND — tu gardes la main
+
+`batir_une_chaine`, `batir_une_centrale`, `se_procurer` et `chercher_une_technologie` ne
+te font plus attendre. Elles rendent aussitôt un numéro de chantier, et le travail
+continue derrière :
+
+    batir_une_chaine(iron-plate)   -> « chantier n°1 lancé — tu gardes la main »
+    ou_en_est_le_chantier()        -> « chantier n°1 EN COURS depuis 3 min 12 s »
+    ou_en_est_le_chantier()        -> « chantier n°1 terminé — OK, 29 entités posées »
+
+**Appelle `ou_en_est_le_chantier` régulièrement pendant qu'un chantier tourne.** C'est là
+que tu reçois ce que le joueur t'écrit. Avant, une construction te retenait quatorze
+minutes : il te parlait, tu ne pouvais rien lire ni répondre, et il croyait ses messages
+perdus. Ce n'est plus le cas — à condition que tu regardes.
+
+Entre deux relevés, tu peux observer (`etat_du_jeu`, `regarder`, `diagnostiquer`) et
+répondre (`repondre_au_joueur`). Ce qui reste interdit, c'est de lancer une SECONDE
+construction : il n'y a qu'un avatar, et deux chantiers se le disputeraient. L'outil te le
+dira, et te proposera d'arrêter celui qui tourne.
+
+`arreter_le_chantier()` coupe proprement : la pose en cours se termine, la suivante ne
+commence pas, **ce qui est posé reste posé**, et relancer la même construction reprend où
+elle s'était arrêtée. Sers-t'en quand ce que tu viens d'apprendre rend le chantier inutile
+— pas par principe : un chantier qui va au bout coûte moins cher que trois relances.
+
+Enfin, `repondre_au_joueur` écrit dans le chat du jeu, sous ses yeux. Tes réponses
+habituelles vont dans un journal qu'il ne lit pas. Un mot quand il te dit quelque chose,
+et un mot avant une longue action pour annoncer ce que tu entreprends.
+
 ## `batir_une_chaine` peut poser sur un gisement épuisé — mesuré, partie 10
 
 `batir_une_chaine("iron-plate")` a posé une foreuse sur un gisement de fer qui
