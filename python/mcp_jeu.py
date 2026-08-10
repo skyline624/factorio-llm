@@ -901,16 +901,39 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
     # le rapport de l'executor est lui aussi une affirmation, et une extraction sans son
     # four n'extrait rien. On vérifie donc sur place, quelle que soit la cause du décalage.
     attendus = {"burner-mining-drill", receveur}
-    try:
-        vues = {e.get("name") for e in
-                (api.inspect_at(ancre[0], ancre[1], 4.0) or {}).get("entities") or []}
-    except Exception:
-        vues = set(p.name for p in (rap.placed or []))
+    # UNE VÉRIFICATION QUI SE RABAT SUR LE RAPPORT NE VÉRIFIE RIEN. Le `except` retombait
+    # sur `rap.placed`, c'est-à-dire précisément la source qu'on refuse de croire : dès que
+    # la lecture du jeu échouait, le contrôle s'annulait en silence et validait n'importe
+    # quoi. Partie 35 : « posée : burner-mining-drill, wooden-chest » alors que le coffre
+    # n'existe pas, du charbon par terre à côté de la foreuse, et l'agent l'annonce au
+    # joueur de bonne foi — « foreuse de charbon posée AVEC COFFRE, elle tourne toute
+    # seule ». Un rapport qui ment se propage jusqu'à l'humain.
+    #
+    # Deux lectures espacées : la pose est asynchrone côté mod, et une entité peut n'être
+    # visible qu'au relevé suivant. Si le jeu reste muet, on le DIT — ne pas savoir n'est
+    # pas la même chose que réussir.
+    import time as _t
+    vues, lu = set(), False
+    for essai in range(2):
+        try:
+            vues |= {e.get("name") for e in
+                     (api.inspect_at(ancre[0], ancre[1], 4.0) or {}).get("entities") or []}
+            lu = True
+            if not (attendus - vues):
+                break
+        except Exception:
+            pass
+        if essai == 0:
+            _t.sleep(1.0)
+    if not lu:
+        return (f"posé en ({ancre[0]:.0f},{ancre[1]:.0f}) d'après le rapport, mais LE JEU "
+                f"N'A PAS RÉPONDU quand j'ai voulu vérifier — regarde toi-même avec "
+                f"`regarder` avant de compter dessus.")
     absents = sorted(attendus - vues)
     if absents:
         return (f"INCOMPLET en ({ancre[0]:.0f},{ancre[1]:.0f}) — posé : "
                 f"{', '.join(sorted(vues & attendus)) or 'rien'} ; MANQUE "
-                f"{', '.join(absents)}. Sans le four sur sa sortie, la foreuse crache son "
+                f"{', '.join(absents)}. Sans receveur sur sa sortie, la foreuse crache son "
                 f"minerai par terre et se bloque. Relance `extraire_ici` pour compléter.")
 
     dit_forge = f" (forgé au passage : {', '.join(forge)})" if forge else ""

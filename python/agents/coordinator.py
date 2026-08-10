@@ -2823,7 +2823,18 @@ class Coordinator:
                 return self.ouvrir_la_recette(item)
             return False, f"{item} ne peut pas être fabriqué : {e}"
         if not steps:
-            return False, f"{item} : rien à faire, l'inventaire en contient déjà assez"
+            # AVOIR DÉJÀ CE QU'ON DEMANDE N'EST PAS UN ÉCHEC. Le mot décide de la suite :
+            # un agent qui lit « échec » cherche une cause, un contournement, ou renonce —
+            # c'est ce que sa skill lui demande de faire d'un échec. Ici il n'y a rien à
+            # contourner, l'objectif était atteint avant l'appel.
+            #
+            # Partie 35 : le joueur demande une foreuse et un coffre pour le charbon ;
+            # l'agent vérifie ses pièces, demande le bois qu'il possède déjà, et lit
+            # « ÉCHEC — wood ». C'est le pendant du piège H36/H41 — `se_procurer` vise un
+            # TOTAL — et demander ce qu'on a est le cas NORMAL quand on vérifie avant
+            # d'agir, précisément ce qu'on lui recommande.
+            return True, (f"{item} : tu en as déjà assez en poche "
+                          f"({inv.get(item, 0)}), rien à fabriquer")
 
         avant = inv.get(item, 0)
         resultats = self.builder.act(steps)

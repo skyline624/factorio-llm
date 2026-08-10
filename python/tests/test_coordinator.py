@@ -3213,6 +3213,47 @@ def test_le_plafond_de_belts_ne_doit_pas_decider_a_la_place_de_l_agent() -> None
     assert ok
 
 
+def test_avoir_deja_ce_qu_on_demande_n_est_pas_un_echec() -> None:
+    """« ÉCHEC — wood : rien à faire, l'inventaire en contient déjà assez ».
+
+    Partie 35, mesuré : le joueur demande une foreuse et un coffre pour le charbon.
+    L'agent fabrique la foreuse, puis demande le bois du coffre — et lit un ÉCHEC alors
+    qu'il a déjà ce bois en poche. Rien n'a manqué, rien n'a raté : l'objectif était
+    atteint avant l'appel.
+
+    Le mot compte, parce qu'il décide de la suite. Un agent qui lit « échec » cherche une
+    cause, une contournement, ou renonce — c'est ce que la skill lui demande de faire d'un
+    échec. Ici il n'y a rien à contourner. La même phrase, classée réussite, lui dit
+    simplement « passe à l'étape suivante ».
+
+    C'est le pendant du piège H36/H41 : `se_procurer` vise un TOTAL, pas un delta. En
+    demander autant qu'on possède déjà est donc le cas NORMAL quand on vérifie ses pièces
+    avant d'agir — précisément ce qu'on lui recommande de faire.
+    """
+    from agents.coordinator import Coordinator
+
+    class _ApiPleine:
+        def get_state(self):
+            return {"inventory": {"wood": 4}, "tick": 1, "ready": True}
+
+    c = _coord_mesure(_ApiPleine())
+    c.journal = []
+    c._fabrications = {}
+    c._derniere_recolte = 1e9          # pas de récolte parasite dans ce banc
+    c._horloge = lambda: 1e9
+
+    ok, detail = Coordinator.fabriquer(c, "wood", 1)
+
+    reussite = ok is True
+    le_dit = "déjà" in detail or "en poche" in detail
+    pas_alarmant = "échec" not in detail.lower()
+
+    resultat = reussite and le_dit and pas_alarmant
+    rec("test_avoir_deja_ce_qu_on_demande_n_est_pas_un_echec", resultat,
+        f"ok={ok} — « {detail} »")
+    assert resultat
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -3268,6 +3309,7 @@ def main() -> int:
         test_un_manque_se_dit_en_phrase_et_pas_en_dict_python,
         test_l_arret_mord_aussi_pendant_la_fabrication,
         test_le_plafond_de_belts_ne_doit_pas_decider_a_la_place_de_l_agent,
+        test_avoir_deja_ce_qu_on_demande_n_est_pas_un_echec,
         test_le_coffre_d_evacuation_essaie_aussi_les_diagonales,
         test_la_foreuse_a_charbon_recoit_un_bras_de_retour,
         test_l_evacuation_s_approche_avant_de_poser_son_coffre,
