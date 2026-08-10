@@ -3254,6 +3254,61 @@ def test_avoir_deja_ce_qu_on_demande_n_est_pas_un_echec() -> None:
     assert resultat
 
 
+def test_la_recolte_va_CHERCHER_les_plaques_au_lieu_de_les_attendre() -> None:
+    """CENT PLAQUES DANS LE FOUR, ET IL MINE DU MINERAI À LA MAIN À VINGT-SEPT TUILES.
+
+    Partie 35, mesuré pendant que le joueur regardait :
+
+        position : (20,-45) immobile — delta 10 s : iron-ore +5
+        son four : (14,-18) no_ingredients, 100 PLAQUES en sortie
+
+    H38 devait justement récolter les fours avant de miner. Il ne s'est pas déclenché :
+    la récolte CHERCHE bien les machines autour de la zone d'usine, mais `empty_output_at`
+    exige d'être à portée de bras — une dizaine de tuiles. À vingt-sept, elle ne vide
+    rien, ne dit rien, et la fabrication enchaîne sur le minage.
+
+    Le joueur l'avait déjà signalé partie 22 (« 381 plaques produites, 10 en poche »).
+    J'avais corrigé pour un agent RESTÉ PRÈS DE SON USINE ; dès qu'un chantier l'emmène
+    ailleurs — bâtir une centrale, par exemple — le correctif redevient inopérant. Même
+    oubli que H12 et H27 : agir sans s'approcher.
+
+    On va donc CHERCHER : si le four est hors de portée, on marche jusqu'à lui. Cent
+    plaques valent quelques secondes de marche ; les miner à la pioche en coûte des
+    minutes.
+    """
+    from agents.coordinator import Coordinator
+
+    marches, vidages = [], []
+
+    class _ApiLoin:
+        def get_state(self):
+            return {"inventory": {"iron-plate": 0},
+                    "character": {"position": {"x": 20.0, "y": -45.0}}, "tick": 1}
+        def inspect_at(self, x, y, r=0.5):
+            return {"entities": [{"name": "stone-furnace", "type": "furnace",
+                                  "x": 14.0, "y": -18.0}]}
+        def empty_output_at(self, x, y, nom, **kw):
+            vidages.append((x, y))
+            return {"ok": True}
+        def run_action(self, fn, *a, **kw):
+            return fn(*a, **kw)
+
+    c = _coord_mesure(_ApiLoin())
+    c.zone = (14.0, -18.0)
+    c.rayon = 25.0
+    c._marcher = lambda x, y: (marches.append((x, y)), (x, y))[1]
+
+    Coordinator._recolter_la_production(c, "iron-plate")
+
+    a_marche = bool(marches)
+    a_vide = bool(vidages)
+
+    ok = a_marche and a_vide
+    rec("test_la_recolte_va_CHERCHER_les_plaques_au_lieu_de_les_attendre", ok,
+        f"marches={marches} vidages={vidages}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -3310,6 +3365,7 @@ def main() -> int:
         test_l_arret_mord_aussi_pendant_la_fabrication,
         test_le_plafond_de_belts_ne_doit_pas_decider_a_la_place_de_l_agent,
         test_avoir_deja_ce_qu_on_demande_n_est_pas_un_echec,
+        test_la_recolte_va_CHERCHER_les_plaques_au_lieu_de_les_attendre,
         test_le_coffre_d_evacuation_essaie_aussi_les_diagonales,
         test_la_foreuse_a_charbon_recoit_un_bras_de_retour,
         test_l_evacuation_s_approche_avant_de_poser_son_coffre,

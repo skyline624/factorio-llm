@@ -1502,6 +1502,11 @@ class Coordinator:
     # plaques). Le chiffre transforme « trop loin » en calcul plutôt qu'en nombre rond.
     PLAQUES_PAR_BELT = 3.0
 
+    # Portée d'interaction du personnage, MESURÉE : au-delà, le mod refuse de vider ou de
+    # remplir une machine (« impossible de s'en approcher assez »). On marche plutôt que
+    # de subir le refus.
+    PORTEE_BRAS = 9.0
+
     # Combien de belts on accepte de FABRIQUER d'un coup. Mesuré : demander 73 belts
     # lance le minage et la fonte de 219 plaques à la main — 217 tâches, une heure de
     # jeu, l'usine toujours éteinte pendant ce temps. Vingt belts (60 plaques) restent
@@ -2242,6 +2247,8 @@ class Coordinator:
         On ne vide que les machines susceptibles de tenir l'item — inutile de démonter
         une chaîne voisine qui alimentait autre chose.
         """
+        from services import deplacement
+
         avant = perception.inventory(self.api).get(item, 0)
         try:
             proches = ((self.api.inspect_at(self.zone[0], self.zone[1], self.rayon)
@@ -2251,8 +2258,27 @@ class Coordinator:
         for e in proches:
             if str(e.get("type", "")) not in ("furnace", "assembling-machine"):
                 continue
-            # `full_output` et `waiting_for_space_in_destination` disent la même chose de
-            # deux points de vue : la machine ne peut plus poser ce qu'elle a fabriqué.
+            # ON VA CHERCHER, ON N'ATTEND PAS. `empty_output_at` exige d'être à portée de
+            # bras — une dizaine de tuiles. La récolte trouvait bien les fours (elle
+            # cherche autour de la zone d'usine) mais ne s'approchait jamais : hors de
+            # portée, elle ne vidait rien et ne le disait pas.
+            #
+            # Partie 35, mesuré pendant que le joueur regardait : cent plaques dans le
+            # four à (14,-18), l'agent immobile à (20,-45) en train de miner du minerai à
+            # la main, +5 en dix secondes. Le joueur l'avait déjà signalé partie 22 (« 381
+            # produites, 10 en poche ») ; j'avais corrigé pour un agent RESTÉ PRÈS DE SON
+            # USINE, et dès qu'un chantier l'emmène ailleurs le correctif redevient
+            # inopérant. Même oubli que H12 et H27 : agir sans s'approcher.
+            #
+            # Cent plaques valent quelques secondes de marche ; les miner à la pioche en
+            # coûte des minutes.
+            try:
+                cx, cy = deplacement.position(self.api)
+                if math.hypot(float(e.get("x", 0.0)) - cx,
+                              float(e.get("y", 0.0)) - cy) > self.PORTEE_BRAS:
+                    self._marcher(float(e.get("x", 0.0)), float(e.get("y", 0.0)))
+            except Exception:
+                pass          # ne pas savoir marcher n'empêche pas d'essayer de vider
             self.api.run_action(self.api.empty_output_at, e.get("x"), e.get("y"),
                                 e.get("name"), timeout=20.0)
         return perception.inventory(self.api).get(item, 0) - avant
