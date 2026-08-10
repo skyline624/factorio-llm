@@ -374,6 +374,54 @@ def test_aucune_tuile_aucune_ancre() -> None:
     assert ok
 
 
+def test_un_four_pose_sur_le_drop_recoit_sans_bras() -> None:
+    """« TU N'AS PAS BESOIN DU BRAS » — et le joueur avait raison contre nos notes.
+
+    Le MicroPlanner porte depuis des mois cette affirmation :
+
+        « drop-direct drill→furnace IMPOSSIBLE en Factorio 2.0. L'inserter au milieu est
+          la solution ; le MicroPlanner l'intègre par construction. »
+
+    Mais la note du même épisode dit autre chose : « four posé à vue de nez derrière un
+    drill = drop au sol — cause réelle : four 1 TUILE TROP LOIN + drop hors axe ». Une
+    conclusion d'impossibilité tirée d'un mauvais placement : exactement le genre de fausse
+    règle qui survit des mois parce que personne ne la remesure.
+
+    La géométrie tranche. Foreuse 2×2 en (0,0) orientée sud, drop = centre + u*1.25 +
+    perp*0.5 = (0.5, 1.25). Le plan actuel met l'inserteur en (0.5, 2.5) et le four en
+    (0,4) — deux tuiles au-delà du drop. Un four 2×2 posé en (0,2) couvre
+    x ∈ [-1,1] × y ∈ [1,3] : il CONTIENT la tuile de drop, et ne chevauche pas la foreuse
+    (qui occupe y ∈ [-1,1]) puisqu'ils ne partagent qu'une frontière.
+
+    On teste la RELATION — le four couvre-t-il le drop ? — et non des constantes, pour les
+    quatre orientations. C'est la règle de ce dépôt : tester ce qui doit être vrai, pas ce
+    qui l'est aujourd'hui.
+    """
+    import math
+    from services.micro_planner import MicroRequest, plan_micro, drop_de
+    from services.layout_planner import ResourcePatch
+
+    couvre = []
+    for facing in (0, 2, 4, 6):
+        mp = plan_micro(MicroRequest(
+            patch=ResourcePatch(resource="iron-ore", tiles=[], bbox=(0, 0, 0, 0)),
+            facing=facing, anchor=(0.0, 0.0), drill_tier="burner-mining-drill",
+            furnace_tier="stone-furnace", drill_size=2, furnace_size=2,
+            sans_bras=True))
+        roles = {e.role: e for e in mp.entities}
+        assert "inserter" not in roles, f"facing={facing} : un bras subsiste"
+        four = roles["machine"]
+        dx, dy = drop_de(mp)
+        dedans = (abs(dx - four.x) <= 1.0 + 1e-6) and (abs(dy - four.y) <= 1.0 + 1e-6)
+        couvre.append((facing, dedans, (round(dx, 2), round(dy, 2)), (four.x, four.y)))
+
+    ok = all(d for _, d, _, _ in couvre)
+    rec("test_un_four_pose_sur_le_drop_recoit_sans_bras", ok,
+        " | ".join(f"f{f}:drop{d}->four{q}{'OK' if c else ' RATE'}"
+                   for f, c, d, q in couvre))
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_micro_3_entities,

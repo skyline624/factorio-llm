@@ -498,8 +498,9 @@ def execute_micro(api, plan, *, fuel: str = "coal", fuel_count: int = 5,
                 loin = math.hypot(px - cx0, py - cy0)
                 if loin > PORTEE_POSE:
                     part = max(0.0, (loin - RECUL_POSE) / loin)
-                    ax, ay = deplacement.marcher_vers(api, cx0 + (px - cx0) * part,
-                                                      cy0 + (py - cy0) * part)
+                    ax, ay = deplacement.marcher_vers(
+                        api, cx0 + (px - cx0) * part, cy0 + (py - cy0) * part,
+                        interrompu_par=interrompu_par)
                     report.steps.append(f"approche {e.name}@({px},{py}) -> "
                                         f"({ax:.0f},{ay:.0f})")
             except Exception as exc:

@@ -76,6 +76,9 @@ class MicroRequest:
     facing: int = 4                                   # côté de drop du drill (0=N, 2=E, 4=S, 6=W)
     drill_tier: str = "burner-mining-drill"
     inserter_tier: str = "burner-inserter"            # burner = pas de pole
+    # LE BRAS N'EST PAS TOUJOURS NÉCESSAIRE — cf. `plan_micro`. Le four posé SUR la tuile
+    # de drop reçoit directement ; le bras ne sert qu'à éloigner le four du drill.
+    sans_bras: bool = False
     furnace_tier: str = "stone-furnace"
     drill_size: int = 2                               # emprise RÉELLE drill (mesurée 2×2)
     furnace_size: int = 2                             # emprise RÉELLE furnace (mesurée 2×2)
@@ -99,6 +102,10 @@ class MicroPlan:
     l'executor fait can_place_check + retry de position).
     """
     entities: list[LayoutEntity] = field(default_factory=list)
+    # Centre de la TUILE où la foreuse dépose. Portée par le plan pour qu'un banc puisse
+    # vérifier la RELATION « le four couvre-t-il le drop ? » plutôt que des constantes de
+    # position — une constante reste vraie quand la relation a cessé de l'être.
+    drop: tuple[float, float] = (0.0, 0.0)
     connections: list[tuple[int, int, str]] = field(default_factory=list)  # (from_idx, to_idx, item)
     totals: dict[str, int] = field(default_factory=dict)        # {entity_name: count}
     bbox: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
@@ -121,6 +128,15 @@ def _snap(v: float, size: int) -> float:
     se retrouve désalignée (constat live : inserter demandé en -69.0, posé en -68.5).
     """
     return float(round(v)) if size % 2 == 0 else math.floor(v) + 0.5
+
+
+def drop_de(plan) -> tuple[float, float]:
+    """Centre de la tuile où la foreuse du plan dépose. Exposé pour être VÉRIFIABLE.
+
+    Sans lui, un banc ne peut tester que des constantes de position — et une constante
+    reste vraie quand la relation qu'elle exprimait a cessé de l'être.
+    """
+    return plan.drop
 
 
 def plan_micro(request: MicroRequest, geometry: Optional[GeometryBase] = None) -> MicroPlan:
@@ -192,7 +208,21 @@ def plan_micro(request: MicroRequest, geometry: Optional[GeometryBase] = None) -
     # 4. Furnace : sa tuile de bord amont doit être la tuile où l'inserter DÉPOSE
     #    (= ins + u*1, mesuré drop à u*1.1 donc même tuile). Centre = tuile de dépôt
     #    + u*(demi_f - 0.5), recentré latéralement sur l'axe du drill (-perp*lat_f).
-    put_x, put_y = ins_x + ux * 1.0, ins_y + uy * 1.0
+    # SANS BRAS, LE FOUR SE POSE SUR LA TUILE DE DROP ELLE-MÊME.
+    #
+    # Ce fichier affirmait « drop-direct drill→furnace IMPOSSIBLE en Factorio 2.0 ». La
+    # note du même épisode disait pourtant autre chose : « four posé à vue de nez derrière
+    # un drill = drop au sol — cause réelle : four 1 TUILE TROP LOIN + drop hors axe ».
+    # Une conclusion d'impossibilité tirée d'un mauvais placement, qui a survécu des mois
+    # parce que personne ne l'a remesurée. Le joueur l'a corrigée en une phrase, en
+    # regardant l'écran : « tu n'as pas besoin du bras, pose une foreuse et un four devant ».
+    #
+    # Le four doit COUVRIR la tuile de drop, pas se poser après elle. Son centre est donc
+    # calé pour que son emprise contienne (drop_x, drop_y) sans chevaucher le drill.
+    if request.sans_bras:
+        put_x, put_y = drop_x, drop_y
+    else:
+        put_x, put_y = ins_x + ux * 1.0, ins_y + uy * 1.0
     furnace_x = _snap(put_x + ux * (demi_f - 0.5) - px * lat_f, request.furnace_size)
     furnace_y = _snap(put_y + uy * (demi_f - 0.5) - py * lat_f, request.furnace_size)
 
@@ -200,8 +230,10 @@ def plan_micro(request: MicroRequest, geometry: Optional[GeometryBase] = None) -
     entities: list[LayoutEntity] = []
     drill_idx = _add(entities, request.drill_tier, dx, dy, facing, "drill",
                      node_item=request.patch.resource)
-    ins_idx = _add(entities, request.inserter_tier, ins_x, ins_y, ins_dir, "inserter",
-                   node_item=request.patch.resource)
+    ins_idx = None
+    if not request.sans_bras:
+        ins_idx = _add(entities, request.inserter_tier, ins_x, ins_y, ins_dir, "inserter",
+                       node_item=request.patch.resource)
     # SANS FONTE, PAS DE FOUR — et pas d'inserteur non plus : il n'aurait plus où
     # déposer, et un bras qui pousse dans le vide bloque la foreuse aussi sûrement qu'un
     # four bouché. La chaîne se réduit alors à EXTRAIRE ; ce que devient le minerai
@@ -236,5 +268,5 @@ def plan_micro(request: MicroRequest, geometry: Optional[GeometryBase] = None) -
 
     return MicroPlan(
         entities=entities, connections=connections, totals=totals,
-        bbox=bbox, feasibility="ok", notes=notes,
+        bbox=bbox, feasibility="ok", notes=notes, drop=(drop_x, drop_y),
     )

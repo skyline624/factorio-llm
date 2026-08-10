@@ -1762,7 +1762,7 @@ class Coordinator:
             marge = 6.0
             x2 = max(e.x for e in ents) + marge
             y0 = sum(e.y for e in ents) / len(ents)
-            deplacement.marcher_vers(self.api, x2, y0)
+            self._marcher(x2, y0)
 
         _s_ecarter()
         rap = poser()
@@ -2131,6 +2131,22 @@ class Coordinator:
         from services.executor import execute_micro
         kw.setdefault("interrompu_par", getattr(self, "interrompu_par", None))
         return execute_micro(self.api, plan, **kw)
+
+    def _marcher(self, x: float, y: float) -> tuple[float, float]:
+        """Toute marche passe par ici — c'est ce qui rend l'arrêt possible EN CHEMIN.
+
+        Sixième fois que le même défaut revenait : un point d'arrêt posé là où
+        l'exécution ne passe pas. H42 l'avait mis dans la boucle de pose, H50 dans la
+        forge — mais partie 28, le fer était à 109 tuiles, le joueur a écrit « alors
+        arrête le », et deux minutes plus tard le chantier marchait encore.
+
+        Trois appels à `marcher_vers` traversaient ce fichier. Les corriger un par un,
+        c'était s'exposer à en oublier un — et un seul oubli rend l'arrêt muet sur ce
+        chemin-là, ce qui est exactement l'histoire de H10, H23, H27, H49 et H50.
+        """
+        from services import deplacement
+        return deplacement.marcher_vers(
+            self.api, x, y, interrompu_par=getattr(self, "interrompu_par", None))
 
     def _foreuse_existante(self, ancre: tuple[float, float], foreur: str):
         """La foreuse déjà posée sur cette ancre, s'il y en a une — sinon None.
@@ -3314,7 +3330,7 @@ class Coordinator:
 
             ou = perception.nearest(self.api, minerai)
             if ou is not None and ou[2] > 40:
-                deplacement.marcher_vers(self.api, ou[0], ou[1])
+                self._marcher(ou[0], ou[1])
 
             precedente = self.ressource
             try:
@@ -3941,7 +3957,7 @@ class Coordinator:
             cx, cy = deplacement.position(self.api)
             if math.hypot(x - cx, y - cy) <= portee:
                 return True
-            ax, ay = deplacement.marcher_vers(self.api, x, y)
+            ax, ay = self._marcher(x, y)
             return math.hypot(x - ax, y - ay) <= portee
         except Exception as e:
             self.journal.append(f"approche de ({x:.0f},{y:.0f}) impossible : "

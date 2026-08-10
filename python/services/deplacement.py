@@ -44,9 +44,26 @@ def position(api) -> tuple[float, float]:
     return float(p.get("x", 0.0)), float(p.get("y", 0.0))
 
 
-def marcher_vers(api, x: float, y: float, bonds: int = 40) -> tuple[float, float]:
-    """Génère puis marche par bonds jusqu'à (x, y). Rend où l'on est VRAIMENT."""
+def marcher_vers(api, x: float, y: float, bonds: int = 40,
+                 interrompu_par=None) -> tuple[float, float]:
+    """Génère puis marche par bonds jusqu'à (x, y). Rend où l'on est VRAIMENT.
+
+    `interrompu_par` permet d'ARRÊTER EN CHEMIN. Sans lui, un arrêt demandé restait sans
+    effet tant que le personnage marchait : partie 28, le fer était à 109 tuiles, le joueur
+    a écrit « alors arrête le », et deux minutes plus tard le chantier avançait encore. Les
+    points de sortie posés jusque-là étaient dans la POSE puis dans la FORGE — or quand le
+    gisement est loin, tout le temps se passe ici.
+
+    On sort ENTRE deux bonds, jamais au milieu. Le personnage reste où il est arrivé : un
+    état parfaitement valide, c'est ce que fait un joueur qui s'arrête en chemin.
+    """
     for _ in range(bonds):
+        if interrompu_par is not None:
+            try:
+                if interrompu_par():
+                    return position(api)
+            except Exception:
+                pass          # un interrupteur cassé n'immobilise personne
         cx, cy = position(api)
         reste = math.hypot(x - cx, y - cy)
         if reste <= TOLERANCE:
