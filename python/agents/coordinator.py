@@ -1358,14 +1358,34 @@ class Coordinator:
             if not self._approcher(c.x, c.y):
                 return False, (f"{c.name}@({c.x},{c.y}) : impossible de s'en approcher "
                                f"assez pour la ravitailler")
+            # UNE DOSE, PAS TOUTE LA POCHE. Le versement plafonnait à CINQUANTE, si bien
+            # que la première machine prenait tout et que les suivantes trouvaient la
+            # poche vide. Partie 36, vu par le joueur avant nous — « tu as placé tout le
+            # charbon dans la foreuse » :
+            #
+            #     foreuse : fuel = 35     four : fuel = 0, 28 minerais en attente
+            #     joueur  : coal = 14     (il en avait quarante)
+            #
+            # L'agent en a conclu une panne, de bonne foi : « le four reste sans charbon
+            # malgré 3 ravitaillements ». Aucun outil ne mentait ; le premier servi avait
+            # tout pris. `_gaver_les_bruleurs` répartit pourtant déjà — c'est ce chemin-ci,
+            # appelé machine par machine, qui ignorait les suivantes.
+            #
+            # Vingt-cinq charbons valent près d'une minute de marche pour un brûleur. On
+            # DIT ce qui reste : rappeler est l'arbitrage de l'agent, pas notre limite.
+            avant = perception.inventory(self.api).get(self.combustible, 0)
+            dose = max(1, min(self.CHARBON_PAR_BRULEUR, avant))
             r = self.api.run_action(self.api.move_items_at, self.combustible, c.name,
-                                    c.x, c.y, 50, True, timeout=30.0)
+                                    c.x, c.y, dose, True, timeout=30.0)
             ok = isinstance(r, dict) and r.get("ok") is True
             if ok:
                 cle = (c.name, round(c.x), round(c.y))
                 self._ravitaillements[cle] = self._ravitaillements.get(cle, 0) + 1
+            reste = perception.inventory(self.api).get(self.combustible, 0)
             return ok, (f"ravitaillement de {c.name}@({c.x},{c.y}) "
-                        f"(n°{self._ravitaillements.get((c.name, round(c.x), round(c.y)), 0)})")
+                        f"(n°{self._ravitaillements.get((c.name, round(c.x), round(c.y)), 0)}) "
+                        f"— {dose} {self.combustible} versé(s), il t'en reste {reste} en "
+                        f"poche pour les autres machines")
         if d.action == "relier":
             return self.relier(c)
 

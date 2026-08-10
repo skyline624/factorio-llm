@@ -3377,6 +3377,62 @@ def test_la_recolte_ne_se_limite_pas_a_un_rayon_arbitraire() -> None:
     assert ok
 
 
+def test_ravitailler_donne_une_dose_et_ne_vide_pas_la_poche() -> None:
+    """« TU AS PLACÉ TOUT LE CHARBON DANS LA FOREUSE » — le joueur, partie 36.
+
+    Mesuré au même instant :
+
+        foreuse : fuel = 35
+        four    : fuel = 0, no_fuel, 28 minerais en attente
+        joueur  : coal = 14
+
+    Il avait quarante charbons. Le premier ravitaillement en a versé trente-cinq dans la
+    foreuse — `move_items_at` avec un plafond de CINQUANTE — et il n'est rien resté pour
+    le four. L'agent a conclu de bonne foi à une panne : « le four reste sans charbon
+    malgré 3 ravitaillements ». Aucun outil ne mentait ; le premier servi avait tout pris.
+
+    `_gaver_les_bruleurs` répartit pourtant déjà (`part = disponible // len(bruleurs)`).
+    C'est `reparer ravitailler`, appelé machine par machine, qui ignorait les suivantes.
+
+    Une dose suffit : `CHARBON_PAR_BRULEUR` vaut vingt-cinq, soit près d'une minute de
+    marche pour un brûleur. Et l'on DIT ce qui reste en poche — l'agent saura rappeler,
+    c'est son arbitrage, pas une limite qu'on lui impose.
+    """
+    from agents.coordinator import Coordinator
+    from services.factory_doctor import Symptome
+
+    verses = []
+
+    class _ApiDose:
+        def get_state(self):
+            return {"inventory": {"coal": 40}, "tick": 1,
+                    "character": {"position": {"x": 0.0, "y": 0.0}}}
+        def move_items_at(self, item, nom, x, y, count, vers, **kw):
+            verses.append(count)
+            return {"ok": True}
+        def run_action(self, fn, *a, **kw):
+            return fn(*a, **kw)
+
+    c = _coord_mesure(_ApiDose())
+    c._ravitaillements = {}
+    c._approcher = lambda x, y: True
+    cible = Symptome(name="burner-mining-drill", x=0.0, y=0.0,
+                     cause="sans_combustible", gravite=3, detail="")
+
+    from agents.coordinator import Decision
+    ok, detail = Coordinator.agir(c, Decision(action="ravitailler", raison="banc",
+                                              cible=cible))
+
+    une_dose = verses and verses[0] <= c.CHARBON_PAR_BRULEUR
+    laisse_de_quoi = verses and verses[0] < 40
+    dit_le_reste = "reste" in detail.lower() or "poche" in detail.lower()
+
+    resultat = bool(une_dose and laisse_de_quoi and dit_le_reste)
+    rec("test_ravitailler_donne_une_dose_et_ne_vide_pas_la_poche", resultat,
+        f"versé={verses} (dose max {c.CHARBON_PAR_BRULEUR}) — « {detail} »")
+    assert resultat
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -3435,6 +3491,7 @@ def main() -> int:
         test_avoir_deja_ce_qu_on_demande_n_est_pas_un_echec,
         test_la_recolte_va_CHERCHER_les_plaques_au_lieu_de_les_attendre,
         test_la_recolte_ne_se_limite_pas_a_un_rayon_arbitraire,
+        test_ravitailler_donne_une_dose_et_ne_vide_pas_la_poche,
         test_le_coffre_d_evacuation_essaie_aussi_les_diagonales,
         test_la_foreuse_a_charbon_recoit_un_bras_de_retour,
         test_l_evacuation_s_approche_avant_de_poser_son_coffre,
