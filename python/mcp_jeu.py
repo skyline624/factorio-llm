@@ -549,6 +549,47 @@ def repondre_au_joueur(texte: str) -> str:
     return f"dit dans le jeu : « {texte} »"
 
 
+@outil
+def demonter(x: float, y: float, combien: int = 1) -> str:
+    """Démonte ce qui se trouve à cette position et en RÉCUPÈRE le contenu.
+
+    Même geste que dans le jeu : miner une épave, un four que tu as posé ou un rocher, ce
+    n'est qu'une seule et même action. Sert à récupérer les ressources d'un
+    `crash-site-spaceship`, à reprendre une machine mal placée, ou à dégager un obstacle.
+
+    Tu désignes par POSITION, jamais par nom : le jeu sait ce qui s'y trouve. Il faut être
+    à portée — une dizaine de tuiles — sans quoi le jeu refuse.
+    """
+    api = _api()
+    quoi = _machine_a(api, x, y) or _nom_a(api, x, y)
+    if not quoi:
+        return f"rien à démonter en ({x:.0f},{y:.0f})"
+    from services import deplacement
+    deplacement.marcher_vers(api, x, y)
+    r = api.run_action(api.mine_entity, quoi, int(combien))
+    ok = isinstance(r, dict) and r.get("ok") is not False
+    return (f"{'OK' if ok else 'ÉCHEC'} — démonté {quoi} en ({x:.0f},{y:.0f}) ; "
+            f"ce qu'il en reste va dans ton inventaire" if ok else
+            f"ÉCHEC — {quoi} en ({x:.0f},{y:.0f}) non démonté : {r}")
+
+
+def _nom_a(api, x: float, y: float) -> str:
+    """Le nom de CE QUI EST LÀ, même quand ce n'est pas une machine.
+
+    `_machine_a` ne retient que ce qui peut tomber en panne — c'est ce qu'il faut pour
+    réparer, pas pour démonter. Une épave, un rocher ou une belt se minent tout autant.
+    """
+    try:
+        vues = (api.inspect_at(x, y, 1.0) or {}).get("entities") or []
+    except Exception:
+        return ""
+    for e in vues:
+        nom = str(e.get("name") or "")
+        if nom and nom != "character":
+            return nom
+    return ""
+
+
 @outil(ecrit=False)
 def ou_en_est_le_chantier() -> str:
     """Où en est le travail lancé en fond — et ce qu'on te dit pendant ce temps.

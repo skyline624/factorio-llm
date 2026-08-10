@@ -354,6 +354,18 @@ Deux réserves, du même ordre que celles ci-dessus :
 Tu ne peux pas répondre dans le chat. Si tu veux faire savoir quelque chose, dis-le dans
 ta réponse : elle est lue.
 
+## Démonter, c'est miner — même geste pour tout
+
+`demonter(x, y)` reprend ce qui se trouve à une position et t'en rend le contenu. Dans
+Factorio, miner une épave, un four que tu as posé ou un rocher est une seule et même
+action ; l'outil ne fait pas de différence non plus.
+
+Trois usages : vider un `crash-site-spaceship` (il contient des ressources de départ, dont
+souvent une foreuse), reprendre une machine mal placée, dégager un obstacle.
+
+Tu désignes par POSITION, jamais par nom — le jeu sait ce qui s'y trouve. Il faut être à
+portée, une dizaine de tuiles ; l'outil s'approche de lui-même.
+
 ## Les constructions tournent EN FOND — tu gardes la main
 
 `batir_une_chaine`, `batir_une_centrale`, `se_procurer` et `chercher_une_technologie` ne

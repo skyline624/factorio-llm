@@ -601,6 +601,66 @@ def test_chaque_outil_qui_agit_passe_par_le_controle_d_avatar() -> None:
     assert ok
 
 
+def test_demonter_existe_et_rend_ce_qu_il_recupere() -> None:
+    """LE GESTE EXISTAIT DÉJÀ — il n'était offert à personne.
+
+    Partie 23, le joueur souffle « demonte le vaisseau ». L'agent va vérifier, trouve bien
+    un `crash-site-spaceship` à (-5,-6), et répond : « je n'ai aucun outil de démontage
+    dans ma panoplie ». C'était vrai de sa panoplie, et faux du dépôt — `mine_entity` est
+    dans le mod depuis E2, et `knowledge` s'en sert pour récupérer un four déjà posé. Dans
+    Factorio, miner une épave, un four ou un rocher est le MÊME geste.
+
+    Ce qui manquait n'était donc pas une capacité mais son exposition. On la donne, avec
+    deux exigences.
+
+    D'abord elle désigne par POSITION, pas par nom de prototype : l'agent voit « il y a
+    quelque chose là », il n'a pas à connaître `crash-site-spaceship`. C'est la leçon de
+    `reparer`, où le mot « machine » servait de nom d'entité et faisait échouer chaque
+    ravitaillement.
+
+    Ensuite elle MINE, elle ne détruit pas. `remove_entity_at` existe et reste hors
+    frontière : il fait disparaître l'entité et son contenu. `mine_entity` rend les objets
+    — c'est tout l'intérêt d'une épave, qui contient les ressources de départ.
+    """
+    import mcp_jeu
+
+    class _ApiDemonte:
+        def __init__(self):
+            self.mine = []
+        def get_state(self):
+            return {"tick": 1, "character": {"x": 0.0, "y": 0.0},
+                    "inventory": {"iron-plate": 8}}
+        def inspect_at(self, x, y, radius=0.5):
+            return {"entities": [{"name": "crash-site-spaceship",
+                                  "type": "simple-entity", "x": -5.0, "y": -6.0}]}
+        def run_action(self, fn, *a, **kw):
+            return fn(*a, **kw)
+        def mine_entity(self, nom, count=1):
+            self.mine.append((nom, count))
+            return {"ok": True}
+
+    api = _ApiDemonte()
+    vrai = mcp_jeu._api
+    mcp_jeu._api = lambda: api
+    mcp_jeu._AVATAR_VU[:] = [0.0, None]
+    try:
+        brut = getattr(mcp_jeu.demonter, "fn", mcp_jeu.demonter)
+        import asyncio
+        r = brut(-5.0, -6.0)
+        if asyncio.iscoroutine(r):
+            r = asyncio.run(r)
+    finally:
+        mcp_jeu._api = vrai
+
+    a_mine = api.mine and api.mine[0][0] == "crash-site-spaceship"
+    dit_quoi = "crash-site-spaceship" in str(r)
+
+    ok = bool(a_mine and dit_quoi)
+    rec("test_demonter_existe_et_rend_ce_qu_il_recupere", ok,
+        f"miné={api.mine} — réponse={str(r)[:70]!r}")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
@@ -616,7 +676,8 @@ def main() -> int:
               test_arreter_le_chantier_atteint_vraiment_la_pose,
               test_sans_avatar_les_outils_le_disent_au_lieu_de_mentir,
               test_avec_avatar_le_controle_ne_gene_personne,
-              test_chaque_outil_qui_agit_passe_par_le_controle_d_avatar):
+              test_chaque_outil_qui_agit_passe_par_le_controle_d_avatar,
+              test_demonter_existe_et_rend_ce_qu_il_recupere):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)
