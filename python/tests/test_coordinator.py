@@ -3018,6 +3018,64 @@ def test_on_recolte_a_nouveau_quand_l_usine_a_reproduit() -> None:
     assert ok
 
 
+def test_la_ligne_forge_ses_poteaux_et_ne_ment_pas_sur_la_cause() -> None:
+    """LA CENTRALE DE LA PARTIE 22 ÉTAIT ISOLÉE : 40 tuiles, un seul poteau.
+
+        11:49:24  batir_une_centrale  OK — centrale bâtie (12 entités) à 40 tuiles,
+                                      ligne de 1 poteaux (INTERROMPUE)
+
+    Vérifié dans le jeu au même instant : steam-engine `working`, boiler `full_output`
+    avec 45 charbons, offshore-pump `working`, réseau id=1, production 0 kW. Ce n'est pas
+    une panne — un générateur ne produit que ce qui est consommé, et rien n'était branché.
+
+    Deux défauts, dont le second est le pire :
+
+    1. `place_pole_line` ne regarde jamais l'inventaire. H35 a appris à la centrale à
+       forger `boiler`, `steam-engine` et `offshore-pump` quand ils manquent, mais s'est
+       arrêté aux pièces : les poteaux de la ligne, eux, ne sont pas forgés. L'agent avait
+       deux poteaux en poche pour quarante tuiles à couvrir.
+
+    2. Le rapport annonce « INTERROMPUE par un obstacle ». Il n'y avait pas d'obstacle :
+       il n'y avait plus de poteaux. Une fausse cause envoie chercher un contournement de
+       terrain qui n'existe pas — c'est le défaut que je reproche partout ailleurs.
+
+    On exige donc : la ligne forge de quoi couvrir la distance AVANT de tracer, et quand
+    elle s'arrête quand même, elle dit laquelle des deux causes l'a arrêtée.
+    """
+    forges = []
+
+    class _ApiLigne:
+        def get_state(self):
+            return {"inventory": {}, "tick": 1, "ready": True}
+
+    c = _coord_mesure(_ApiLigne())
+    c.journal = []
+    c.zone = (40.0, 0.0)                      # 40 tuiles de la centrale
+
+    def _forge(nom, combien=1):
+        forges.append((nom, combien))
+        return True, ""
+    c._assurer_stock = _forge
+
+    import services.site_finder as sf
+    vrai = sf.place_pole_line
+    sf.place_pole_line = lambda api, dep, arr, **kw: ([(0.5, 0.5)], False)
+    try:
+        ligne, complete, cause = c._relier_la_centrale((0.0, 0.0))
+    finally:
+        sf.place_pole_line = vrai
+
+    # Assez de poteaux pour 40 tuiles à 6 de pas : au moins 6, pas 2.
+    forge = [n for n, _ in forges].count("small-electric-pole")
+    assez = any(n == "small-electric-pole" and q >= 6 for n, q in forges)
+    honnete = "poteau" in (cause or "").lower()
+
+    ok = forge >= 1 and assez and honnete
+    rec("test_la_ligne_forge_ses_poteaux_et_ne_ment_pas_sur_la_cause", ok,
+        f"forgé={forges} cause={cause!r}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -3069,6 +3127,7 @@ def main() -> int:
         test_on_recolte_l_usine_avant_de_miner_a_la_main,
         test_fabriquer_recolte_avant_de_planifier,
         test_on_recolte_a_nouveau_quand_l_usine_a_reproduit,
+        test_la_ligne_forge_ses_poteaux_et_ne_ment_pas_sur_la_cause,
         test_le_coffre_d_evacuation_essaie_aussi_les_diagonales,
         test_la_foreuse_a_charbon_recoit_un_bras_de_retour,
         test_l_evacuation_s_approche_avant_de_poser_son_coffre,

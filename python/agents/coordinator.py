@@ -2044,6 +2044,42 @@ class Coordinator:
     _DIRS_COFFRE = ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
                     (1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0))
 
+
+    def _relier_la_centrale(self, depart: tuple[float, float]
+                            ) -> tuple[list[tuple[float, float]], bool, str]:
+        """Relie la centrale à la zone de travail. Rend (poteaux, complète, cause).
+
+        DEUX DÉFAUTS MESURÉS PARTIE 22, où la centrale tournait — steam-engine
+        `working`, boiler plein de 45 charbons, offshore-pump `working` — mais isolée à
+        quarante tuiles, ligne d'UN SEUL poteau, réseau à 0 kW faute d'être branché.
+
+        Le premier : `place_pole_line` ne regarde jamais l'inventaire, elle pose jusqu'à
+        ce que le jeu refuse. H35 a appris à la centrale à forger ses pièces quand elles
+        manquent, mais s'arrêtait aux pièces ; la ligne, elle, partait avec ce qui traînait
+        en poche. On compte donc ce que la distance exige et on le forge d'abord.
+
+        Le second, plus grave : le rapport annonçait « INTERROMPUE par un obstacle » alors
+        qu'il n'y avait pas d'obstacle mais plus de poteaux. Une fausse cause envoie
+        chercher un contournement de terrain qui n'existe pas. On relit l'inventaire au
+        point d'arrêt pour nommer celle des deux qui a réellement arrêté la ligne.
+        """
+        from services import site_finder
+
+        # +2 : les décalages d'évitement rallongent le tracé, et un poteau de rab coûte
+        # une plaque de cuivre là où un maillon manquant coûte tout le réseau.
+        distance = math.hypot(self.zone[0] - depart[0], self.zone[1] - depart[1])
+        besoin = int(math.ceil(distance / site_finder.POLE_PAS)) + 2
+        self._assurer_stock("small-electric-pole", besoin)
+
+        ligne, complete = site_finder.place_pole_line(self.api, depart, self.zone)
+        if complete:
+            return ligne, True, ""
+
+        reste = perception.inventory(self.api).get("small-electric-pole", 0)
+        cause = ("plus de poteaux en poche" if reste <= 0
+                 else f"obstacle infranchissable ({reste} poteau(x) restant(s))")
+        return ligne, False, cause
+
     def _foreuse_existante(self, ancre: tuple[float, float], foreur: str):
         """La foreuse déjà posée sur cette ancre, s'il y en a une — sinon None.
 
@@ -4460,12 +4496,13 @@ class Coordinator:
             # Relier la centrale à la zone de travail, sans quoi elle n'alimente rien.
             depart = next(((p.x, p.y) for p in rap.placed if p.role == "pole"),
                           site.origine)
-            ligne, complete = site_finder.place_pole_line(self.api, depart, self.zone)
+            ligne, complete, cause = self._relier_la_centrale(depart)
             self.derniere_centrale = rap
             self.dernier_poteau = ligne[-1] if ligne else depart
             return True, (f"centrale bâtie ({len(rap.placed)} entités) à "
                           f"{site.distance_a(self.zone):.0f} tuiles, ligne de "
-                          f"{len(ligne)} poteaux ({'complète' if complete else 'INTERROMPUE'})")
+                          f"{len(ligne)} poteaux "
+                          + ("(complète)" if complete else f"(INTERROMPUE : {cause})"))
 
         # batir_production : micro-chaîne électrique ancrée sur du minerai réel.
         #
