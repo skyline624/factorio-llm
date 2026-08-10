@@ -687,6 +687,8 @@ def test_demonter_existe_et_rend_ce_qu_il_recupere() -> None:
                                   "type": "simple-entity", "x": -5.0, "y": -6.0}]}
         def run_action(self, fn, *a, **kw):
             return fn(*a, **kw)
+        def get_recipe(self, item):
+            return {}      # `fond_en` interroge les recettes du JEU
         def mine_entity(self, nom, count=1):
             self.mine.append((nom, count))
             return {"ok": True}
@@ -848,9 +850,14 @@ def test_extraire_pose_avec_ce_qu_on_a_sans_rien_fabriquer() -> None:
                                  and abs(e["y"] - y) <= max(radius, 2.0)]}
         def run_action(self, fn, *a, **kw):
             return fn(*a, **kw)
+        def get_recipe(self, item):
+            return {}      # `fond_en` interroge les recettes du JEU
         def walk_to(self, x, y, **kw):
             return {"ok": True, "x": x, "y": y}     # l'executor s'approche de chaque pose
 
+    import services.knowledge as _kn
+    _vrai_fond = _kn.fond_en
+    _kn.fond_en = lambda a, m: "iron-plate"   # le fer se fond : four, pas coffre
     api = _ApiExtraction()
     vrai_api, vrai_coord = mcp_jeu._api, mcp_jeu._ETAT.get("coord")
     mcp_jeu._api = lambda: api
@@ -863,6 +870,7 @@ def test_extraire_pose_avec_ce_qu_on_a_sans_rien_fabriquer() -> None:
             r = asyncio.run(r)
     finally:
         mcp_jeu._api, mcp_jeu._ETAT["coord"] = vrai_api, vrai_coord
+        _kn.fond_en = _vrai_fond
 
     a_pose_foreuse = "burner-mining-drill" in api.poses
     a_pose_four = "stone-furnace" in api.poses
@@ -1040,6 +1048,9 @@ def test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros() -> None:
             # mesure ici. La pose elle-même a son propre banc.
             return {}          # le mod rend une table VIDE quand il n'a rien vu
 
+    import services.knowledge as _kn
+    _vrai_fond = _kn.fond_en
+    _kn.fond_en = lambda a, m: "iron-plate"   # le fer se fond : four, pas coffre
     api = _ApiPresque()
     vrai_api, vrai_coord = mcp_jeu._api, mcp_jeu._ETAT.get("coord")
 
@@ -1071,6 +1082,7 @@ def test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros() -> None:
             r2 = asyncio.run(r2)
     finally:
         mcp_jeu._api, mcp_jeu._ETAT["coord"] = vrai_api, vrai_coord
+        _kn.fond_en = _vrai_fond
 
     forge_bras = any(n == "stone-furnace" for n, _ in forges_premier)
     # On mesure l'ACTE, pas le vocabulaire : un premier jet exigeait que le mot « forg »
@@ -1136,7 +1148,12 @@ def test_extraire_pose_deux_entites_et_ne_forge_plus_de_bras() -> None:
                                  and abs(e["y"] - y) <= max(radius, 2.0)]}
         def run_action(self, fn, *a, **kw):
             return fn(*a, **kw)
+        def get_recipe(self, item):
+            return {}      # `fond_en` interroge les recettes du JEU
 
+    import services.knowledge as _kn
+    _vrai_fond = _kn.fond_en
+    _kn.fond_en = lambda a, m: "iron-plate"   # le fer se fond : four, pas coffre
     api = _ApiDeux()
 
     class _CoordFactice:
@@ -1159,6 +1176,7 @@ def test_extraire_pose_deux_entites_et_ne_forge_plus_de_bras() -> None:
             r = asyncio.run(r)
     finally:
         mcp_jeu._api, mcp_jeu._ETAT["coord"] = vrai_api, vrai_coord
+        _kn.fond_en = _vrai_fond
 
     foreuse = "burner-mining-drill" in api.poses
     four = "stone-furnace" in api.poses
@@ -1271,7 +1289,12 @@ def test_extraire_pose_meme_sans_combustible_et_le_dit() -> None:
                                  and abs(e["y"] - y) <= max(radius, 2.0)]}
         def run_action(self, fn, *a, **kw):
             return fn(*a, **kw)
+        def get_recipe(self, item):
+            return {}      # `fond_en` interroge les recettes du JEU
 
+    import services.knowledge as _kn
+    _vrai_fond = _kn.fond_en
+    _kn.fond_en = lambda a, m: "iron-plate"   # le fer se fond : four, pas coffre
     api = _ApiSansCharbon()
     vrai_api, vrai_coord = mcp_jeu._api, mcp_jeu._ETAT.get("coord")
     mcp_jeu._api = lambda: api
@@ -1284,6 +1307,7 @@ def test_extraire_pose_meme_sans_combustible_et_le_dit() -> None:
             r = asyncio.run(r)
     finally:
         mcp_jeu._api, mcp_jeu._ETAT["coord"] = vrai_api, vrai_coord
+        _kn.fond_en = _vrai_fond
 
     a_pose = "burner-mining-drill" in api.poses and "stone-furnace" in api.poses
     previent = "combustible" in str(r).lower() or "charbon" in str(r).lower()
@@ -1291,6 +1315,86 @@ def test_extraire_pose_meme_sans_combustible_et_le_dit() -> None:
     ok = a_pose and previent
     rec("test_extraire_pose_meme_sans_combustible_et_le_dit", ok,
         f"posé={api.poses} — réponse={str(r)[:90]!r}")
+    assert ok
+
+
+def test_extraire_pose_un_coffre_quand_la_ressource_ne_se_fond_pas() -> None:
+    """UN FOUR DERRIÈRE UNE FOREUSE À CHARBON BOUCHE TOUTE LA CHAÎNE.
+
+    C'est mesuré et documenté dans `knowledge.fond_en` depuis longtemps : sur un gisement
+    de charbon, la foreuse finit `waiting_for_space_in_destination` avec 33 charbons en
+    sortie, le four `full_output`, trois machines arrêtées en cascade — 66 tours sur 120
+    passés à tenter de vider un four qui ne fera jamais rien de son contenu.
+
+    Le `MicroPlanner` a appris la leçon (`fondre: bool`). `extraire_ici` l'ignorait : il
+    imposait `stone-furnace` en dur, quelle que soit la ressource. Partie 32, le joueur
+    demande « une foreuse sur le charbon avec un coffre à la sortie » — exactement le bon
+    montage, et l'outil aurait posé un four.
+
+    On demande donc au JEU ce qui se fond, plutôt que de le supposer : un four derrière ce
+    qui fond, un coffre derrière le reste. Le geste est le même — une entité qui reçoit sur
+    la tuile de drop — seule sa nature change.
+    """
+    import mcp_jeu, asyncio, time
+
+    poses = []
+
+    class _ApiCharbon:
+        def __init__(self):
+            self.terrain = []
+            self.inv = {"burner-mining-drill": 1, "wooden-chest": 1, "coal": 10}
+        def get_state(self):
+            return {"tick": 1, "character": {"position": {"x": 0.0, "y": 0.0}},
+                    "inventory": dict(self.inv)}
+        def find_nearest(self, nom):
+            return {"name": nom, "x": 6.0, "y": 0.0, "distance": 6}
+        def generate_terrain(self, *a, **kw):
+            return {"ok": True}
+        def can_place_check(self, *a, **kw):
+            return {"can_place": True}
+        def place_entity_at(self, nom, x, y, *a, **kw):
+            if self.inv.get(nom, 0) <= 0:
+                return {"ok": False, "detail": "plus en poche"}
+            self.inv[nom] -= 1
+            poses.append(nom)
+            self.terrain.append({"name": nom, "type": nom, "x": x, "y": y})
+            return {"ok": True}
+        def move_items_at(self, *a, **kw):
+            return {"ok": True}
+        def walk_to(self, x, y, **kw):
+            return {"ok": True}
+        def inspect_at(self, x=0.0, y=0.0, radius=0.5, *a, **kw):
+            return {"entities": [e for e in self.terrain
+                                 if abs(e["x"] - x) <= max(radius, 2.0)
+                                 and abs(e["y"] - y) <= max(radius, 2.0)]}
+        def run_action(self, fn, *a, **kw):
+            return fn(*a, **kw)
+        def get_recipe(self, item):
+            return {}          # `_assurer_stock` consulte les recettes
+
+    api = _ApiCharbon()
+    vrai_api, vrai_coord = mcp_jeu._api, mcp_jeu._ETAT.get("coord")
+    import services.knowledge as _kn
+    _vrai_fond = _kn.fond_en
+    _kn.fond_en = lambda a, m: None         # le charbon ne se fond pas — c'est le jeu qui le dit
+    mcp_jeu._api = lambda: api
+    mcp_jeu._ETAT["coord"] = None
+    _table_rase(mcp_jeu)
+    try:
+        brut = getattr(mcp_jeu.extraire_ici, "fn", mcp_jeu.extraire_ici)
+        r = brut("coal")
+        if asyncio.iscoroutine(r):
+            r = asyncio.run(r)
+    finally:
+        mcp_jeu._api, mcp_jeu._ETAT["coord"] = vrai_api, vrai_coord
+        _kn.fond_en = _vrai_fond
+
+    pas_de_four = "stone-furnace" not in poses
+    un_receveur = any("chest" in n for n in poses)
+
+    ok = pas_de_four and un_receveur
+    rec("test_extraire_pose_un_coffre_quand_la_ressource_ne_se_fond_pas", ok,
+        f"posé={poses} — réponse={str(r)[:80]!r}")
     assert ok
 
 
@@ -1318,7 +1422,8 @@ def main() -> int:
               test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros,
               test_extraire_pose_deux_entites_et_ne_forge_plus_de_bras,
               test_arreter_un_chantier_le_TUE_meme_s_il_ne_cooopere_pas,
-              test_extraire_pose_meme_sans_combustible_et_le_dit):
+              test_extraire_pose_meme_sans_combustible_et_le_dit,
+              test_extraire_pose_un_coffre_quand_la_ressource_ne_se_fond_pas):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

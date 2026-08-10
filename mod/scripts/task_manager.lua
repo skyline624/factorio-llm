@@ -463,8 +463,20 @@ local function state_mining(char, params)
     params.stall_ticks = 0
     -- La plus proche LIBRE, et non la plus proche tout court : sinon une foreuse posee
     -- sur le bord du gisement suffit a bloquer un minage manuel que rien n'empechait.
-    local target, couvertes = utils_entity.nearest_free_entity(
-      char.surface, char.force, char.position, ents, 6)
+    --
+    -- MAIS CETTE GARDE PROTEGE LE MINERAI, PAS LES MACHINES (cf. `state_walk_to_mine`) :
+    -- une foreuse posee sur un gisement est toujours « couverte », donc introuvable quand
+    -- on veut la reprendre. Le meme correctif doit valoir sur LES DEUX chemins -- le
+    -- corriger ici seulement, c'est le laisser muet en test_mode, et c'est exactement le
+    -- defaut qu'on a paye six fois aujourd'hui (H10, H23, H27, H49, H50, H52).
+    local target, couvertes
+    if ents[1] and ents[1].type == "resource" then
+      target, couvertes = utils_entity.nearest_free_entity(
+        char.surface, char.force, char.position, ents, 6)
+    else
+      target, couvertes = utils_entity.nearest_idle_entity(
+        char.surface, char.force, char.position, ents)
+    end
     -- Et si c'est une MACHINE qu'on reprend, jamais une qui sert : voir en_service.
     if target and target.type ~= "resource" then
       local libre, occupees = utils_entity.nearest_idle_entity(
@@ -514,8 +526,22 @@ local function state_mining(char, params)
   if not target_pos then
     local ents = utils_entity.find_target_entities(char.surface, char.position, MINING_REACH, params.entity_name)
     if #ents == 0 then return end -- stall grandit
-    local target, couvertes = utils_entity.nearest_free_entity(
-      char.surface, char.force, char.position, ents, 6)
+    -- LA GARDE « MINERAI SOUS FOREUSE » PROTEGE LE MINERAI, PAS LES MACHINES.
+    -- `nearest_free_entity` ecarte ce qui est COUVERT par une machine : juste quand on
+    -- mine du minerai (inutile de creuser sous une foreuse qui l'exploite), absurde quand
+    -- on veut reprendre LA MACHINE elle-meme -- posee sur un gisement, elle est toujours
+    -- « couverte », donc introuvable. Partie 32 : le joueur demande de remplacer un four
+    -- par un coffre, et `demonter` refuse six fois de suite « minerai sous foreuse
+    -- (1 tuile couverte, aucune libre a portee) ». Aucune entite posee sur un gisement
+    -- n'etait recuperable, ce qui condamnait tout montage a rester tel quel.
+    local target, couvertes
+    if ents[1] and ents[1].type == "resource" then
+      target, couvertes = utils_entity.nearest_free_entity(
+        char.surface, char.force, char.position, ents, 6)
+    else
+      target, couvertes = utils_entity.nearest_idle_entity(
+        char.surface, char.force, char.position, ents)
+    end
     if target and target.type ~= "resource" then
       local libre, occupees = utils_entity.nearest_idle_entity(
         char.surface, char.force, char.position, ents)

@@ -822,7 +822,21 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
     # orientations (cf. test_micro_planner).
     #
     # Il ne reste donc que le four à forger au besoin — et le kit de départ en contient un.
-    petit = {"stone-furnace": 1}
+    # UN FOUR DERRIÈRE UNE FOREUSE À CHARBON BOUCHE TOUTE LA CHAÎNE. Mesuré et documenté
+    # dans `knowledge.fond_en` : sur un gisement de charbon, la foreuse finit
+    # `waiting_for_space_in_destination` avec 33 charbons en sortie, le four `full_output`,
+    # trois machines arrêtées en cascade. Le `MicroPlanner` a appris la leçon ; cet outil
+    # imposait `stone-furnace` en dur, quelle que soit la ressource.
+    #
+    # On demande donc au JEU ce qui se fond, plutôt que de le supposer. Le geste ne change
+    # pas — une entité qui reçoit sur la tuile de drop — seule sa nature change.
+    from services import knowledge
+    try:
+        se_fond = knowledge.fond_en(api, ressource) is not None
+    except Exception:
+        se_fond = True                      # dans le doute, le comportement d'avant
+    receveur = "stone-furnace" if se_fond else "wooden-chest"
+    petit = {receveur: 1}
     forge = []
     for nom, combien in petit.items():
         if inv.get(nom, 0) >= combien:
@@ -856,7 +870,7 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
     plan = plan_micro(MicroRequest(
         patch=ResourcePatch(resource=ressource, tiles=[], bbox=(0, 0, 0, 0)),
         facing=4, anchor=ancre, drill_tier="burner-mining-drill",
-        furnace_tier="stone-furnace", drill_size=2, furnace_size=2,
+        furnace_tier=receveur, drill_size=2, furnace_size=1 if not se_fond else 2,
         sans_bras=True))
     # POSER ET ALIMENTER SONT DEUX GESTES. Réclamer dix charbons pour amorcer le four
     # faisait refuser la POSE entière — or le kit de départ n'en contient aucun
@@ -886,7 +900,7 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
     # C'est la règle d'E1 — ne jamais croire un `ok=True` — appliquée un cran plus haut :
     # le rapport de l'executor est lui aussi une affirmation, et une extraction sans son
     # four n'extrait rien. On vérifie donc sur place, quelle que soit la cause du décalage.
-    attendus = {"burner-mining-drill", "stone-furnace"}
+    attendus = {"burner-mining-drill", receveur}
     try:
         vues = {e.get("name") for e in
                 (api.inspect_at(ancre[0], ancre[1], 4.0) or {}).get("entities") or []}

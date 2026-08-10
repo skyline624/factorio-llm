@@ -388,6 +388,26 @@ Aucune des deux n'est « la bonne » : elles ne répondent pas à la même quest
 mesuré, c'est le coût — quelques secondes contre plusieurs minutes — et ce qu'on perd à
 attendre. La décision est la tienne, comme celle du débit ou du nombre d'alimentations.
 
+**CORRIGÉ par le joueur, partie 25 — `extraire_ici` même après avoir lancé une chaîne.**
+À la partie 24, tu tenais une foreuse en poche, tu as lancé une chaîne, et elle est restée
+inutilisée dix minutes. La partie 25, même erreur : tu relances la chaîne et laisses la
+foreuse en poche pendant qu'elle forge ce qui lui manque (un four, un inserteur, du
+charbon). Le joueur l'a vu et t'a dit : « dépose une foreuse sur le fer et un four à la
+sortie », puis « arrête le chantier ». Tu as arrêté la chaîne, posé `extraire_ici`, et ça
+produisait déjà des plaques pendant que la chaîne reprenait.
+
+Deux leçons : (1) si tu as une foreuse en poche, pose `extraire_ici` AVANT d'attendre
+quoi que ce soit — c'est quelques secondes de travail qui produisent pendant des minutes ;
+(2) même après avoir lancé une chaîne, il vaut mieux l'arrêter pour poser l'extraction
+minimale que de laisser la foreuse dormir : ce qui est posé reste posé, et relancer
+reprend où c'était. Le joueur voit l'écran et juge mieux que toi quand la foreuse dort —
+quand il te dit de poser, pose.
+
+Autre fait mesuré partie 25 : `extraire_ici` forge lui-même le four quand il manque —
+`se_procurer("stone-furnace")` avait échoué (rien miné, 0->0), puis `extraire_ici("iron-ore")`
+a posé foreuse + four d'un coup. Ne te bloque pas sur l'absence de four en poche :
+`extraire_ici` s'en charge.
+
 ## Démonter, c'est miner — même geste pour tout
 
 `demonter(x, y)` reprend ce qui se trouve à une position et t'en rend le contenu. Dans
@@ -399,6 +419,19 @@ souvent une foreuse), reprendre une machine mal placée, dégager un obstacle.
 
 Tu désignes par POSITION, jamais par nom — le jeu sait ce qui s'y trouve. Il faut être à
 portée, une dizaine de tuiles ; l'outil s'approche de lui-même.
+
+## `demonter` a un décalage de +2 en y par rapport à `regarder` — mesuré, partie 25
+
+`regarder` montre une entité à une position, `demonter` ne la trouve pas à cette
+position mais deux tuiles plus haut (y décalé de +2). Mesuré : le four du charbon
+apparaissait à (-28,-92) dans `regarder`, et `demonter(-28,-90)` l'a démonté ; à
+(-28,-92) il visait la foreuse (qui, elle, est à -94 dans `regarder`). Le même
+décalage se voit sur `reparer`, qui lit des entités aux mêmes positions décalées.
+
+**Ce qu'il faut retenir** : quand `demonter`/`reparer` disent « impossible » ou visent
+la mauvaise entité à la position que `regarder` a montrée, retente à y+2 (deux tuiles
+au nord). Ne crois pas que la machine est introuvable : c'est l'outil qui lit en
+décalé. À l'inverse, `regarder` reste fiable pour savoir ce qui est réellement posé.
 
 ## Les constructions tournent EN FOND — tu gardes la main
 
