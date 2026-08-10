@@ -959,6 +959,88 @@ def test_aucune_action_ne_se_glisse_pendant_un_chantier() -> None:
     assert ok
 
 
+def test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros() -> None:
+    """UN OUTIL QUI REFUSE AU MOMENT OÙ IL SERT NE SERT À RIEN.
+
+    Parties 24 à 27, l'agent prend `batir_une_chaine` en ouverture. J'ai corrigé trois
+    fois au mauvais endroit — le prompt, la description de l'outil, puis la procédure —
+    avant de mesurer l'inventaire de départ :
+
+        burner-mining-drill=1, stone-furnace=1, wood=1
+
+    Pas de `burner-inserter`. La procédure dit « SI tu as foreuse, bras et four » : il a
+    vérifié, la condition n'était pas remplie, il est passé à l'étape suivante. Son
+    raisonnement était juste quatre fois de suite, et c'est mon outil qui était
+    inutilisable au moment précis où il servait.
+
+    Mon exigence « ne fabrique rien » visait la longue attente de `batir_une_chaine`, qui
+    forge tout un plan avant de poser. Un `burner-inserter` coûte une plaque et un
+    engrenage : quelques secondes. Refuser pour cela, c'est renvoyer vers l'outil de dix
+    minutes pour économiser dix secondes.
+
+    La limite reste, mais au bon endroit : on forge le PETIT qui manque — bras, four — et
+    jamais la foreuse, qui suppose de miner et de fondre. Sans foreuse en poche, il n'y a
+    pas de geste minimal, et le dire honnêtement vaut mieux que le simuler longuement.
+    """
+    import mcp_jeu, asyncio, time
+
+    forges = []
+
+    class _ApiPresque:
+        def __init__(self):
+            self.inv = {"burner-mining-drill": 1, "stone-furnace": 1, "coal": 20}
+        def get_state(self):
+            return {"tick": 1, "character": {"x": 0.0, "y": 0.0},
+                    "inventory": dict(self.inv)}
+        def find_nearest(self, nom):
+            # Aucun gisement : l'outil s'arrête juste APRÈS la forge, qui est ce qu'on
+            # mesure ici. La pose elle-même a son propre banc.
+            return {"found": False}
+
+    api = _ApiPresque()
+    vrai_api, vrai_coord = mcp_jeu._api, mcp_jeu._ETAT.get("coord")
+
+    class _CoordFactice:
+        def fabriquer(self, item, combien=1):
+            forges.append((item, combien))
+            api.inv[item] = combien
+            return True, f"{item} forgé"
+    mcp_jeu._api = lambda: api
+    mcp_jeu._ETAT["coord"] = _CoordFactice()
+    mcp_jeu._AVATAR_VU[:] = [time.time(), None]
+    try:
+        for _ in range(60):
+            if not mcp_jeu._chantier_tourne():
+                break
+            time.sleep(0.1)
+        brut = getattr(mcp_jeu.extraire_ici, "fn", mcp_jeu.extraire_ici)
+        r = brut("iron-ore")
+        if asyncio.iscoroutine(r):
+            r = asyncio.run(r)
+        # On garde la trace AVANT de la remettre à zéro : sans cela le rapport final
+        # afficherait une liste vide et l'on conclurait que rien n'a été forgé.
+        forges_premier = list(forges)
+        # Sans foreuse, en revanche, il renonce et le dit — il ne mine pas.
+        api.inv.pop("burner-mining-drill")
+        forges.clear()
+        r2 = brut("iron-ore")
+        if asyncio.iscoroutine(r2):
+            r2 = asyncio.run(r2)
+    finally:
+        mcp_jeu._api, mcp_jeu._ETAT["coord"] = vrai_api, vrai_coord
+
+    forge_bras = any(n == "burner-inserter" for n, _ in forges_premier)
+    # On mesure l'ACTE, pas le vocabulaire : un premier jet exigeait que le mot « forg »
+    # soit absent du refus, alors que celui-ci dit très justement « le forger suppose de
+    # miner puis fondre ». Ce qui compte est qu'aucune fabrication n'ait été lancée.
+    renonce_sans_foreuse = "burner-mining-drill" in str(r2) and not forges
+
+    ok = forge_bras and renonce_sans_foreuse
+    rec("test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros", ok,
+        f"forgé={forges_premier} — sans foreuse : {str(r2)[:70]!r}")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
@@ -979,7 +1061,8 @@ def main() -> int:
               test_suivre_un_chantier_ne_brule_pas_les_tours_de_l_agent,
               test_extraire_pose_avec_ce_qu_on_a_sans_rien_fabriquer,
               test_la_fin_d_un_chantier_se_dit_sans_qu_on_la_demande,
-              test_aucune_action_ne_se_glisse_pendant_un_chantier):
+              test_aucune_action_ne_se_glisse_pendant_un_chantier,
+              test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

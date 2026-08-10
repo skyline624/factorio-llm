@@ -19,10 +19,10 @@ ordre, on mine à la main pendant vingt minutes et on ne pose jamais rien.
 
 1. `etat_du_jeu` — voir où l'on est.
 2. `ou_sont_les_ressources("iron-ore")` — savoir où est le fer.
-3. **`extraire_ici("iron-ore")`** — SI tu as déjà une foreuse, un bras et un four en
-   poche. Trois entités, quelques secondes, et le fer se met à couler pendant que tu
-   prépares la suite. Regarde ton inventaire avant : l'outil ne fabrique rien et te dira
-   ce qui manque.
+3. **`extraire_ici("iron-ore")`** — dès que tu as une FOREUSE en poche, ce qui est le cas
+   au départ. Trois entités, quelques secondes, et le fer se met à couler pendant que tu
+   prépares la suite. Le bras et le four manquants, il les forge lui-même : ils coûtent
+   une plaque et un engrenage. Seule la foreuse lui est indispensable.
 4. **`batir_une_chaine("iron-plate")`** — l'usine, pour le volume. Elle fabrique
    elle-même ce qui lui manque : n'attends pas d'avoir « assez de matériel » pour
    l'appeler, c'est son travail. Mais elle forge AVANT de poser, donc elle prend des
@@ -362,8 +362,9 @@ ta réponse : elle est lue.
 ## Commence petit : `extraire_ici` avant `batir_une_chaine`
 
 `extraire_ici(ressource)` pose TOUT DE SUITE trois entités — foreuse, bras, four sur la
-sortie — **avec ce que tu as en poche**. Rien n'est fabriqué ni fondu ; s'il te manque une
-pièce, l'outil te le dit et n'entreprend rien.
+sortie. Il te faut une FOREUSE ; le bras et le four, il les forge au besoin, ils coûtent
+une plaque et un engrenage. Sans foreuse en revanche il renonce et te le dit : en fabriquer
+une suppose de miner puis de fondre, c'est-à-dire la longue attente qu'il sert à éviter.
 
 C'est le geste du début de partie. `batir_une_chaine` planifie l'usine entière : elle
 choisit son gisement au débit, marche jusqu'à lui, et fabrique ce qui lui manque AVANT de

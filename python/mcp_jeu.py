@@ -679,12 +679,30 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
     # ON POSE AVEC CE QU'ON A. Le geste minimal perdrait tout son sens s'il déclenchait la
     # même attente que ce qu'il remplace : c'est justement d'avoir fabriqué avant de poser
     # qui a laissé la foreuse en poche quatre minutes durant (partie 24).
-    besoin = {"burner-mining-drill": 1, "burner-inserter": 1, "stone-furnace": 1}
-    manque = {n: c - inv.get(n, 0) for n, c in besoin.items() if inv.get(n, 0) < c}
-    if manque:
-        pieces = ", ".join(f"{n} (il t'en faut {c})" for n, c in manque.items())
-        return (f"rien posé — il te manque {pieces}. Cet outil ne fabrique pas : "
-                f"`se_procurer` d'abord, ou `batir_une_chaine` qui forge ce qu'il faut.")
+    # SANS FOREUSE, PAS DE GESTE MINIMAL. En forger une suppose de miner et de fondre :
+    # on retombe dans la longue attente que cet outil existe justement pour éviter, et le
+    # dire honnêtement vaut mieux que la simuler.
+    if inv.get("burner-mining-drill", 0) < 1:
+        return ("rien posé — il te manque burner-mining-drill, et le forger suppose de "
+                "miner puis fondre. Passe par `batir_une_chaine`, qui fait tout cela, ou "
+                "`se_procurer` si tu veux garder la main entre-temps.")
+
+    # LE PETIT QUI MANQUE, ON LE FORGE. Refuser pour un `burner-inserter` — une plaque et
+    # un engrenage, quelques secondes — c'était renvoyer vers l'outil de dix minutes pour
+    # en économiser dix. Mesuré parties 24 à 27 : le kit de départ ne contient JAMAIS de
+    # bras, donc la condition n'était jamais remplie et l'outil restait lettre morte au
+    # moment précis où il servait. L'agent, lui, avait raison de passer son chemin.
+    petit = {"burner-inserter": 1, "stone-furnace": 1}
+    forge = []
+    for nom, combien in petit.items():
+        if inv.get(nom, 0) >= combien:
+            continue
+        ok, detail = _coord().fabriquer(nom, combien)
+        if not ok:
+            return (f"rien posé — {nom} manque et n'a pas pu être fabriqué : {detail}")
+        forge.append(nom)
+    if forge:
+        inv = perception.inventory(api)
 
     trouve = api.find_nearest(ressource) or {}
     if not trouve.get("found"):
@@ -703,7 +721,8 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
     poses = ", ".join(sorted({p.name for p in (rap.placed or [])}))
     if not rap.placed:
         return f"ÉCHEC — rien posé en ({ancre[0]:.0f},{ancre[1]:.0f}) : {rap.blocked[:1]}"
-    return (f"OK — extraction posée en ({ancre[0]:.0f},{ancre[1]:.0f}) : {poses}. "
+    dit_forge = f" (forgé au passage : {', '.join(forge)})" if forge else ""
+    return (f"OK — extraction posée en ({ancre[0]:.0f},{ancre[1]:.0f}) : {poses}{dit_forge}. "
             f"Vérifie qu'elle tourne (`regarder`), puis évacue ou étends.")
 
 
