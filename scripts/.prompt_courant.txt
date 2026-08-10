@@ -1,6 +1,15 @@
 Tu joues une nouvelle partie de Factorio. Carte neuve, tu pars de rien.
 
-Ton but : une usine qui produit des plaques de fer toute seule, et qui tient sans toi.
+Ton but : une usine ÉLECTRIQUE qui produit des plaques de fer toute seule, et qui tient
+sans toi. Elle est atteinte quand, tous ensemble :
+
+  - les fours, les foreuses et les bras sont électriques — plus aucun réservoir à remplir ;
+  - une centrale produit le courant qu'ils consomment, et tu peux le mesurer ;
+  - la chaudière reçoit son charbon AUTOMATIQUEMENT, sans que tu ailles la nourrir.
+
+Ce dernier point est celui qui fait la différence entre une usine et une corvée : tant que
+c'est toi qui portes le charbon, rien ne tient sans toi. Une chaîne de fer qui produit est
+une étape, pas l'arrivée — ne t'arrête pas là.
 
 Six choses ont changé depuis ta dernière partie, toutes de notre côté, pas du jeu :
 

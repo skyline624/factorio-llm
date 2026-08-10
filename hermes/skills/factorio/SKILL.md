@@ -462,6 +462,21 @@ Enfin, `repondre_au_joueur` écrit dans le chat du jeu, sous ses yeux. Tes répo
 habituelles vont dans un journal qu'il ne lit pas. Un mot quand il te dit quelque chose,
 et un mot avant une longue action pour annoncer ce que tu entreprends.
 
+## `batir_une_chaine` peut annoncer des échecs qui n'en sont pas — mesuré, partie 26
+
+Le rapport de fin de chantier peut dire « 0 machine(s) raccordée(s), 0 alimentée(s) en
+coal — alimentation refusée : aucun gisement de coal à moins de 20 tuiles », et la chaîne
+produire quand même parfaitement. Mesuré : la chaîne iron-plate a rendu ce texte exact,
+puis a produit 185 plaques de fer sans intervention, les foreuses `working` sur un
+gisement riche (oreUnder >2000), le four `working` avec recipe iron-plate.
+
+**Ce qu'il faut retenir** : les compteurs « raccordée / alimentée » du rapport de
+chantier ne sont pas la vérité de l'usine — ils reflètent ce que l'outil a jugé utile de
+poser en plus (la chaîne s'amorce au charbon de poche et les foreuses de charbon ont leur
+bras de retour). La preuve de production, c'est `ce_que_l_usine_a_produit` qui monte, ou
+`regarder` qui montre des machines `working`. Ne démonte rien ni ne relance la chaîne sur
+la seule foi d'un rapport alarmiste : vérifie la production d'abord.
+
 ## `batir_une_chaine` peut poser sur un gisement épuisé — mesuré, partie 10
 
 `batir_une_chaine("iron-plate")` a posé une foreuse sur un gisement de fer qui
