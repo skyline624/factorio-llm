@@ -103,6 +103,19 @@ class Diagnostic:
         return [s for s in self.symptomes if s.racine and s.gravite > 0]
 
     def resume(self) -> str:
+        # « RIEN VU » ET « TOUT VA BIEN » NE SE DISENT PAS PAREIL. Partie 23, l'agent croit
+        # tenir une contradiction de nos outils : `etat_du_jeu` annonce « 3/10 en panne »
+        # et le diagnostic « 0 machine(s), aucune en panne ». Aucun des deux ne ment — il
+        # avait diagnostiqué autour de (0,0) quand son usine était à (-36,-84), hors du
+        # rayon. Le diagnostic n'avait RIEN VU et l'a dit d'une phrase qui rassure.
+        #
+        # C'est le pire genre de défaut pour qui apprend : deux outils qui semblent se
+        # contredire sur le même fait. On en tire soit qu'un outil est cassé, soit qu'il
+        # faut croire l'un plutôt que l'autre — deux règles fausses, et durables.
+        if not self.machines:
+            return ("aucune machine dans ce rayon — rien n'a pu être diagnostiqué ; "
+                    "l'usine est peut-être ailleurs, élargis le rayon ou centre-le sur "
+                    "une machine connue")
         if self.sain:
             return f"{self.machines} machine(s), aucune en panne"
         tetes = self.causes[:3]

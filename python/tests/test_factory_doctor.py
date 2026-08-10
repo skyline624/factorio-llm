@@ -196,6 +196,42 @@ def test_resume_lisible() -> None:
     assert ok
 
 
+def test_une_zone_vide_ne_se_dit_pas_saine() -> None:
+    """« RIEN VU » ET « TOUT VA BIEN » NE SE DISENT PAS PAREIL.
+
+    Partie 23, l'agent relève ce qu'il croit être une contradiction de nos outils :
+
+        etat_du_jeu   -> « 3/10 machine(s) en panne »
+        diagnostiquer -> « 0 machine(s), aucune en panne »
+
+    Aucun des deux ne ment. Il avait diagnostiqué autour de (0,0) — le centre de la carte —
+    quand son usine était à (-36,-84), hors du rayon. Le diagnostic n'avait donc RIEN VU,
+    et l'a dit d'une phrase qui se lit « tout va bien ».
+
+    C'est le pire genre de défaut pour un agent qui apprend : deux outils qui semblent se
+    contredire sur le même fait. Il en tire soit qu'un outil est cassé, soit qu'il faut
+    croire l'un plutôt que l'autre — deux règles fausses, et durables. Celui-là lui a coûté
+    plusieurs relevés et une conclusion erronée avant qu'il passe à autre chose.
+
+    Une zone sans machine dit donc qu'elle est VIDE, et rappelle que le rayon est peut-être
+    en cause.
+    """
+    from services.factory_doctor import Diagnostic
+
+    vide = Diagnostic(machines=0, en_panne=0).resume()
+    saine = Diagnostic(machines=7, en_panne=0).resume()
+
+    dit_vide = "aucune machine" in vide.lower() or "vide" in vide.lower()
+    pas_rassurant = "aucune en panne" not in vide
+    conseille = "rayon" in vide.lower() or "ailleurs" in vide.lower()
+    saine_intacte = "aucune en panne" in saine and "7" in saine
+
+    ok = dit_vide and pas_rassurant and conseille and saine_intacte
+    rec("test_une_zone_vide_ne_se_dit_pas_saine", ok,
+        f"vide={vide!r} — saine={saine!r}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_usine_saine_aucun_symptome,
