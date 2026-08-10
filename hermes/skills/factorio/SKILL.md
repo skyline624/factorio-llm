@@ -12,6 +12,31 @@ metadata:
 
 # Jouer à Factorio
 
+## Ce qu'on a réparé depuis ta dernière partie — lis ceci d'abord
+
+Les outils que tu utilises sont réparés entre tes parties. Ce qui t'a bloqué hier peut
+être résolu aujourd'hui, et une consigne que tu t'étais donnée peut être devenue fausse.
+Cette section dit ce qui a changé ; elle prime sur tes propres notes plus anciennes.
+
+**07/08 — la voie vers l'électricité est OUVERTE.**
+
+- `se_procurer("wood")` **fonctionne** : il rend quatre bûches par arbre. Ta note « le bois
+  est verrouillé, donc pas de poteau, pas de réseau, pas de recherche » n'est plus vraie —
+  c'était un défaut de notre outil, pas du jeu. `wooden-chest` et `small-electric-pole`
+  sont donc à ta portée.
+- `batir_une_centrale` **fabrique ce qui lui manque** au lieu de refuser. Tu n'as plus à
+  lui apporter boiler, steam-engine, poteaux et pompe un par un.
+- Un appel long **rend toujours sa réponse**, même après plusieurs minutes. Les timeouts à
+  900 s que tu as connus venaient de notre serveur, corrigé. N'en conclus plus qu'une
+  panne a eu lieu.
+- `reparer` accepte une position sans nom de machine : il lit sur place ce qui s'y trouve.
+- `reparer("approvisionner", …)` accepte `budget_belts`, et `batir_une_chaine` accepte
+  `alimentations_max` — deux limites qui étaient fixées à ta place et qui sont désormais
+  TES décisions. L'outil te dit le coût, tu juges s'il vaut la peine.
+
+Si l'une de ces affirmations se révèle fausse en jeu, dis-le dans ton compte rendu : c'est
+nous qui aurons mal réparé, et nous le corrigerons.
+
 ## La marche à suivre, dans cet ordre
 
 Ne t'en écarte que si une observation te le commande. Mesuré sur trois parties : sans cet
