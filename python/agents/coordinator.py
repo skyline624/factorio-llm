@@ -1890,7 +1890,12 @@ class Coordinator:
                       f"gisements {', '.join(gisements) or 'aucun'}, "
                       f"objectif {debit}/s, {branchees} machine(s) raccordée(s), "
                       f"{ravitaillees} alimentée(s) en {self.combustible}"
-                      f"{fabriques}{echecs_r}{echecs_e}")
+                      f"{fabriques}{echecs_r}{echecs_e}"
+                      # CE QU'ON LAISSE DERRIÈRE SOI COMPTE AUTANT QUE CE QU'ON POSE.
+                      # Le plan ignore l'existant : sans ce rappel, l'agent croit que tout
+                      # ce qui tourne appartient à sa chaîne, et une extraction posée dix
+                      # minutes plus tôt sature en silence à six tuiles de là.
+                      + self._dire_les_orphelines(getattr(rap, "placed", []) or []))
 
     def _a_deja_une_sortie(self, x: float, y: float) -> bool:
         """Un bras PUISE-t-il déjà dans la machine en (x, y) ?
@@ -2192,6 +2197,51 @@ class Coordinator:
         from services import deplacement
         return deplacement.marcher_vers(
             self.api, x, y, interrompu_par=getattr(self, "interrompu_par", None))
+
+    def _dire_les_orphelines(self, posees) -> str:
+        """Nomme les machines déjà en terre que le chantier n'a PAS reprises.
+
+        « Pourquoi il a créé un autre four ? » — la question du joueur, partie 36. Parce
+        que `FactoryBuilder` planifie sans savoir ce qui existe : il pose son plan entier,
+        et l'extraction minimale posée quelques minutes plus tôt devient orpheline.
+
+            stone-furnace(-78,-16)  no_fuel  fuel=0   ← 28 minerais en attente
+            stone-furnace(-74,-22)  working  fuel=4   ← neuf, six tuiles plus loin
+            burner-mining-drill(-78,-18)  waiting_for_space_in_destination
+
+        Deux montages côte à côte, aucun complet, une foreuse qui sature faute de pouvoir
+        déposer. Intégrer l'existant au plan est un chantier de fond — le planificateur
+        raisonne sur du terrain vierge, c'est sa nature.
+
+        Ce qu'on peut faire sans mentir, c'est le DIRE. L'agent décidera de démonter pour
+        récupérer les pièces, de ravitailler, ou de laisser : c'est son arbitrage. Le
+        nôtre est de ne pas lui laisser croire que tout ce qui tourne appartient à sa
+        chaîne — il a déjà conclu à une panne sur des prémisses fausses aujourd'hui.
+        """
+        try:
+            tout = perception.parc(self.api) or []
+        except Exception:
+            return ""
+        neuves = {(round(float(getattr(p, "x", 0.0))),
+                   round(float(getattr(p, "y", 0.0)))) for p in (posees or [])}
+        dehors = []
+        for e in tout:
+            if str(e.get("type", "")) not in ("furnace", "mining-drill"):
+                continue
+            cle = (round(float(e.get("x", 0.0))), round(float(e.get("y", 0.0))))
+            if cle in neuves:
+                continue
+            etat = str(e.get("status") or "")
+            # On ne signale que ce qui SOUFFRE : une machine qui tourne hors de la chaîne
+            # ne pose de problème à personne, et tout lister noierait l'information.
+            if etat in ("no_fuel", "waiting_for_space_in_destination", "no_ingredients"):
+                dehors.append(f"{e.get('name')}@({cle[0]},{cle[1]}) {etat}")
+        if not dehors:
+            return ""
+        return (" — HORS DE LA CHAÎNE, et en souffrance : " + ", ".join(dehors[:4])
+                + ". Ces machines ne font pas partie du plan qu'on vient de poser ; "
+                  "à toi de voir si tu les ravitailles, les démontes pour récupérer les "
+                  "pièces, ou les laisses.")
 
     def _foreuse_existante(self, ancre: tuple[float, float], foreur: str):
         """La foreuse déjà posée sur cette ancre, s'il y en a une — sinon None.

@@ -3433,6 +3433,58 @@ def test_ravitailler_donne_une_dose_et_ne_vide_pas_la_poche() -> None:
     assert resultat
 
 
+def test_batir_une_chaine_signale_ce_qu_elle_laisse_orphelin() -> None:
+    """« POURQUOI IL A CRÉÉ UN AUTRE FOUR ? » — parce que le plan ignore l'existant.
+
+    Partie 36, mesuré après que le joueur l'a vu :
+
+        stone-furnace(-78,-16)  no_fuel  fuel=0   ← l'extraction, 28 minerais en attente
+        stone-furnace(-74,-22)  working  fuel=4   ← posé par le chantier, six tuiles plus loin
+        burner-mining-drill(-78,-18)  waiting_for_space_in_destination
+
+    `FactoryBuilder` planifie sans savoir ce qui est déjà en terre : il pose son plan
+    entier, et l'extraction minimale devient orpheline. Deux montages côte à côte, aucun
+    complet, et une foreuse qui sature faute de pouvoir déposer.
+
+    Intégrer l'existant au plan est un chantier de fond — le planificateur raisonne sur du
+    terrain vierge. Ce qu'on peut faire sans mentir, c'est le DIRE : nommer les machines
+    laissées de côté et leur position. L'agent décide alors s'il les démonte pour
+    récupérer les pièces, les ravitaille, ou les laisse. C'est son arbitrage ; le nôtre
+    est de ne pas le laisser croire que tout ce qui tourne appartient à sa chaîne.
+    """
+    from agents.coordinator import Coordinator
+
+    class _ApiDeuxMontages:
+        def get_state(self):
+            return {"inventory": {}, "tick": 1}
+
+    import services.perception as _perc
+    _vrai = _perc.parc
+    _perc.parc = lambda api: [
+        {"name": "stone-furnace", "type": "furnace", "x": -78.0, "y": -16.0,
+         "status": "no_fuel"},
+        {"name": "burner-mining-drill", "type": "mining-drill", "x": -78.0, "y": -18.0,
+         "status": "waiting_for_space_in_destination"},
+    ]
+    try:
+        c = _coord_mesure(_ApiDeuxMontages())
+        # Ce que le chantier vient de poser, loin des deux machines ci-dessus.
+        class _P:
+            def __init__(self, x, y, name):
+                self.x, self.y, self.name, self.role = x, y, name, "machine"
+        posees = [_P(-74.0, -22.0, "stone-furnace")]
+        texte = Coordinator._dire_les_orphelines(c, posees)
+    finally:
+        _perc.parc = _vrai
+
+    nomme = "stone-furnace" in texte and "-78" in texte
+    dit_le_souci = "sature" in texte.lower() or "orphelin" in texte.lower()         or "hors de la chaîne" in texte.lower()
+
+    ok = bool(nomme and dit_le_souci)
+    rec("test_batir_une_chaine_signale_ce_qu_elle_laisse_orphelin", ok, repr(texte))
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -3492,6 +3544,7 @@ def main() -> int:
         test_la_recolte_va_CHERCHER_les_plaques_au_lieu_de_les_attendre,
         test_la_recolte_ne_se_limite_pas_a_un_rayon_arbitraire,
         test_ravitailler_donne_une_dose_et_ne_vide_pas_la_poche,
+        test_batir_une_chaine_signale_ce_qu_elle_laisse_orphelin,
         test_le_coffre_d_evacuation_essaie_aussi_les_diagonales,
         test_la_foreuse_a_charbon_recoit_un_bras_de_retour,
         test_l_evacuation_s_approche_avant_de_poser_son_coffre,
