@@ -341,6 +341,10 @@ def test_un_chantier_rend_la_main_tout_de_suite() -> None:
     """
     import mcp_jeu, time
 
+    # On mesure la latence du CHANTIER, pas celle du RCON : sans jeu lancé, la
+    # lecture d'état met quatre secondes à échouer et masquerait la mesure.
+    mcp_jeu._AVATAR_VU[:] = [time.time(), None]
+
     def _long():
         time.sleep(0.4)
         return "chaîne bâtie : 29 entités"
@@ -369,6 +373,10 @@ def test_le_chantier_dit_ou_il_en_est_puis_son_resultat() -> None:
     """
     import mcp_jeu, time
 
+    # On mesure la latence du CHANTIER, pas celle du RCON : sans jeu lancé, la
+    # lecture d'état met quatre secondes à échouer et masquerait la mesure.
+    mcp_jeu._AVATAR_VU[:] = [time.time(), None]
+
     mcp_jeu._lancer_chantier("batir_une_chaine", lambda: (time.sleep(0.3), "29 entités")[1])
     pendant = mcp_jeu.ou_en_est_le_chantier.fn() if hasattr(
         mcp_jeu.ou_en_est_le_chantier, "fn") else mcp_jeu._etat_chantier()
@@ -396,6 +404,10 @@ def test_deux_chantiers_ne_pilotent_pas_le_meme_avatar() -> None:
     comment reprendre la main. Un refus qui n'explique pas se retente en boucle.
     """
     import mcp_jeu, time
+
+    # On mesure la latence du CHANTIER, pas celle du RCON : sans jeu lancé, la
+    # lecture d'état met quatre secondes à échouer et masquerait la mesure.
+    mcp_jeu._AVATAR_VU[:] = [time.time(), None]
 
     mcp_jeu._lancer_chantier("batir_une_chaine", lambda: (time.sleep(0.5), "fini")[1])
     refus = mcp_jeu._lancer_chantier("batir_une_centrale", lambda: "jamais")
@@ -447,6 +459,148 @@ def test_arreter_le_chantier_atteint_vraiment_la_pose() -> None:
     assert ok
 
 
+def test_sans_avatar_les_outils_le_disent_au_lieu_de_mentir() -> None:
+    """UN OUTIL DÉFAILLANT PRODUIT UN APPRENTISSAGE FAUX — et la règle fausse survit.
+
+    Partie 23, le client du joueur se déconnecte en cours de route. Trois outils réagissent
+    de trois façons, dont deux trompeuses :
+
+        se_deplacer(80,-80)   -> « arrivé en (0,0) »        ment : il n'a pas bougé
+        se_procurer(coal)     -> « nearest coal = None »    masque : ce n'est pas le charbon
+        reparer(evacuer)      -> « aucun avatar IA »        seul honnête des trois
+
+    L'agent a fini par conclure juste, mais en croisant trois symptômes dissemblables sur
+    vingt minutes — et il en a tiré une règle qu'il a écrite dans sa skill comme une loi du
+    jeu, alors que c'était un incident de montage. C'est exactement le mécanisme qui lui a
+    déjà coûté des parties entières : « deux timeouts crashent le jeu », « le bois est
+    verrouillé donc pas d'électricité ». Une observation juste, une règle fausse, et elle
+    lui survit.
+
+    On ne répare donc pas trois outils, on supprime la devinette : rien qui touche à
+    l'avatar ne s'exécute sans avatar, et le refus le NOMME. Un agent qui lit « aucun
+    joueur connecté » ne peut pas en tirer de loi sur le jeu.
+    """
+    import mcp_jeu
+
+    class _ApiSansAvatar:
+        def get_state(self):
+            return {"tick": 42, "inventory": {}, "character": None}
+
+    vrai = mcp_jeu._api
+    mcp_jeu._api = lambda: _ApiSansAvatar()
+    mcp_jeu._AVATAR_VU[:] = [0.0, None]      # le cache d'un autre test fausserait celui-ci
+    try:
+        souci = mcp_jeu._avatar_absent()
+    finally:
+        mcp_jeu._api = vrai
+
+    detecte = bool(souci)
+    nomme = detecte and "avatar" in souci.lower()
+    dit_qui_repare = detecte and ("joueur" in souci.lower() or "connect" in souci.lower())
+    pas_le_jeu = detecte and ("montage" in souci.lower() or "pas un" in souci.lower())
+
+    ok = detecte and nomme and dit_qui_repare and pas_le_jeu
+    rec("test_sans_avatar_les_outils_le_disent_au_lieu_de_mentir", ok, repr(souci))
+    assert ok
+
+
+def test_avec_avatar_le_controle_ne_gene_personne() -> None:
+    """LE CONTRÔLE SE GREFFE SUR CHAQUE ACTION — il doit être invisible quand tout va bien.
+
+    Il tourne avant tout outil qui touche à l'avatar, c'est-à-dire des centaines de fois
+    par partie. S'il coûtait un aller-retour RCON à chaque appel, ou s'il bloquait quand
+    la lecture échoue, il ferait plus de mal que le défaut qu'il corrige. Un garde-fou ne
+    doit jamais être plus fragile que ce qu'il protège.
+    """
+    import mcp_jeu
+
+    class _ApiOk:
+        def get_state(self):
+            return {"tick": 42, "inventory": {}, "character": {"x": 1.0, "y": 2.0}}
+
+    class _ApiCassee:
+        def get_state(self):
+            raise RuntimeError("RCON coupé")
+
+    vrai = mcp_jeu._api
+    try:
+        mcp_jeu._api = lambda: _ApiOk()
+        mcp_jeu._AVATAR_VU[:] = [0.0, None]
+        avec = mcp_jeu._avatar_absent()
+        mcp_jeu._api = lambda: _ApiCassee()
+        mcp_jeu._AVATAR_VU[:] = [0.0, None]
+        casse = mcp_jeu._avatar_absent()
+    finally:
+        mcp_jeu._api = vrai
+
+    ok = avec is None and casse is None      # dans le doute, on laisse passer
+    rec("test_avec_avatar_le_controle_ne_gene_personne", ok,
+        f"avec_avatar={avec!r} lecture_cassee={casse!r}")
+    assert ok
+
+
+def test_chaque_outil_qui_agit_passe_par_le_controle_d_avatar() -> None:
+    """UNE GARDE NON BRANCHÉE EST UNE GARDE INEXISTANTE.
+
+    Trois fois cette semaine un correctif juste s'est révélé inerte : H10 posé sous un
+    drapeau que l'appelant met à False, H23 dans une méthode que `batir_chaine` ne traverse
+    pas, H27 dans une branche jamais prise. Chacun a été cru bon pendant une partie entière
+    avant qu'on mesure qu'il ne s'exécutait jamais.
+
+    On vérifie donc que le contrôle est réellement TRAVERSÉ par tout outil qui agit — pas
+    qu'il existe. Les outils de lecture, eux, doivent continuer de répondre sans avatar :
+    c'est précisément ce qui permet à l'agent de constater la panne et de la nommer.
+    """
+    import mcp_jeu
+
+    vus = []
+
+    class _ApiSansAvatar:
+        def get_state(self):
+            return {"tick": 42, "inventory": {}, "character": None}
+
+    vrai_api, vrai_garde = mcp_jeu._api, mcp_jeu._avatar_absent
+    mcp_jeu._api = lambda: _ApiSansAvatar()
+
+    def _garde_tracee():
+        vus.append(1)
+        return vrai_garde()
+    mcp_jeu._avatar_absent = _garde_tracee
+
+    # ON APPELLE L'ENVELOPPE RÉELLE, pas la fonction brute : c'est l'enveloppe qui porte
+    # le contrôle. Un premier jet mesurait l'une pour les uns et l'autre pour les autres,
+    # et rendait « 4/6 » sans que cela veuille dire quoi que ce soit.
+    import asyncio
+    agit = ["batir_une_chaine", "se_procurer", "batir_une_centrale",
+            "chercher_une_technologie", "se_deplacer", "reparer"]
+    arguments = {"batir_une_chaine": ("iron-plate",), "se_procurer": ("iron-plate",),
+                 "chercher_une_technologie": ("electronics",), "batir_une_centrale": (),
+                 "se_deplacer": (0.0, 0.0), "reparer": ("ravitailler", 0.0, 0.0)}
+    refus = {}
+    try:
+        for nom in agit:
+            objet = getattr(mcp_jeu, nom)
+            enveloppe = getattr(objet, "fn", objet)
+            mcp_jeu._AVATAR_VU[:] = [0.0, None]
+            avant = len(vus)
+            try:
+                r = enveloppe(*arguments[nom])
+                if asyncio.iscoroutine(r):
+                    r = asyncio.run(r)
+            except Exception as e:
+                r = f"exception {e}"
+            refus[nom] = (len(vus) > avant, "avatar" in str(r).lower())
+    finally:
+        mcp_jeu._api, mcp_jeu._avatar_absent = vrai_api, vrai_garde
+
+    manquants = [n for n, (traverse, dit) in refus.items() if not (traverse and dit)]
+    ok = bool(refus) and not manquants
+    rec("test_chaque_outil_qui_agit_passe_par_le_controle_d_avatar", ok,
+        f"{len(refus) - len(manquants)}/{len(refus)} contrôlés"
+        + (f" — sans garde : {manquants}" if manquants else ""))
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
@@ -459,7 +613,10 @@ def main() -> int:
               test_un_chantier_rend_la_main_tout_de_suite,
               test_le_chantier_dit_ou_il_en_est_puis_son_resultat,
               test_deux_chantiers_ne_pilotent_pas_le_meme_avatar,
-              test_arreter_le_chantier_atteint_vraiment_la_pose):
+              test_arreter_le_chantier_atteint_vraiment_la_pose,
+              test_sans_avatar_les_outils_le_disent_au_lieu_de_mentir,
+              test_avec_avatar_le_controle_ne_gene_personne,
+              test_chaque_outil_qui_agit_passe_par_le_controle_d_avatar):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

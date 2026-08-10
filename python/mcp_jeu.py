@@ -242,6 +242,60 @@ def _chantier_tourne() -> bool:
     return bool(fil is not None and fil.is_alive())
 
 
+# (instant de la dernière lecture, motif ou None) — cf. _avatar_absent.
+_AVATAR_VU = [0.0, None]
+
+
+def _avatar_absent():
+    """Rend le motif si aucun avatar n'est connecté, `None` si tout va bien.
+
+    UN OUTIL DÉFAILLANT PRODUIT UN APPRENTISSAGE FAUX — et la règle fausse survit. Partie
+    23, le client du joueur se déconnecte ; trois outils réagissent de trois façons, dont
+    deux trompeuses :
+
+        se_deplacer(80,-80)   -> « arrivé en (0,0) »        ment : il n'a pas bougé
+        se_procurer(coal)     -> « nearest coal = None »    masque : ce n'est pas le charbon
+        reparer(evacuer)      -> « aucun avatar IA »        seul honnête des trois
+
+    L'agent a fini par conclure juste, mais en croisant trois symptômes dissemblables sur
+    vingt minutes — et il en a tiré une règle écrite dans sa skill comme une loi du jeu,
+    alors que c'était un incident de montage. Même mécanisme que « deux timeouts crashent
+    le jeu » ou « le bois est verrouillé donc pas d'électricité » : une observation juste,
+    une règle fausse, et elle lui survit des parties entières.
+
+    On ne répare donc pas trois outils, on supprime la devinette. Un agent qui lit
+    « aucun joueur connecté » ne peut en tirer aucune loi sur le jeu.
+
+    DANS LE DOUTE, ON LAISSE PASSER. Ce contrôle tourne avant chaque action, des centaines
+    de fois par partie : s'il bloquait quand la lecture d'état échoue, il ferait plus de
+    mal que le défaut qu'il corrige. Un garde-fou ne doit jamais être plus fragile que ce
+    qu'il protège.
+    """
+    # UN CONTRÔLE QUI COÛTE UN ALLER-RETOUR RCON EST PIRE QUE LE DÉFAUT. Mesuré au banc :
+    # 4,07 s pour lancer un chantier, contre 0,00 s sans lui — sur des centaines d'actions
+    # par partie. On garde donc la réponse quelques secondes : un avatar ne se déconnecte
+    # pas dix fois par seconde, et le pire cas est de refuser une action de trop juste
+    # après une reconnexion.
+    import time as _t
+    quand, valeur = _AVATAR_VU
+    if _t.time() - quand < 5.0:
+        return valeur
+    try:
+        etat = _api().get_state() or {}
+    except Exception:
+        _AVATAR_VU[:] = [_t.time(), None]
+        return None
+    if etat.get("character"):
+        _AVATAR_VU[:] = [_t.time(), None]
+        return None
+    motif = ("aucun avatar connecté au serveur de jeu — rien ne peut marcher, miner, "
+            "poser ni vider tant qu'un joueur n'est pas là. Les outils de LECTURE "
+            "continuent de répondre. C'est un problème de MONTAGE, pas du jeu : dis-le "
+            "à l'humain qui te regarde, il peut reconnecter le client.")
+    _AVATAR_VU[:] = [_t.time(), motif]
+    return motif
+
+
 def _lancer_chantier(nom: str, travail) -> str:
     """Démarre `travail` en fond et rend la main TOUT DE SUITE.
 
@@ -252,6 +306,9 @@ def _lancer_chantier(nom: str, travail) -> str:
     reprendre la main : un refus qui n'explique pas se retente en boucle.
     """
     import time as _t
+    souci = _avatar_absent()
+    if souci:
+        return f"refusé : {souci}"
     with _VERROU_CHANTIER:
         if _chantier_tourne():
             depuis = _t.time() - _CHANTIER["debut"]
@@ -436,6 +493,13 @@ def outil(fn=None, *, ecrit: bool = True):
         # pendant qu'il la construisait — aveugle sur sa propre action.
         if not ecrit:
             return fn(*a, **kw)
+        # UNE GARDE NON BRANCHÉE EST UNE GARDE INEXISTANTE. Trois correctifs justes se
+        # sont révélés inertes cette semaine (H10, H23, H27), chacun cru bon pendant une
+        # partie entière. On la pose donc là où TOUTE action passe, plutôt que dans chaque
+        # outil où il suffit d'en oublier un.
+        souci = _avatar_absent()
+        if souci:
+            return f"refusé : {souci}"
         with _VERROU_JEU:
             return fn(*a, **kw)
 
