@@ -2449,6 +2449,11 @@ def test_on_recolte_l_usine_avant_de_miner_a_la_main() -> None:
             return {"ok": True}
 
     api = _ApiUsine()
+    import services.perception as _perc
+    _vrai_parc = _perc.parc
+    _perc.parc = lambda api: [{"name": "stone-furnace", "type": "furnace",
+                               "x": 0.0, "y": 0.0}]
+
     c = _coord_mesure(api)
     c.journal = []
     c.zone, c.rayon = (0.0, 0.0), 30.0
@@ -2456,6 +2461,7 @@ def test_on_recolte_l_usine_avant_de_miner_a_la_main() -> None:
 
     gagne = c._recolter_la_production("iron-plate")
     ok = bool(vidages) and gagne > 0
+    _perc.parc = _vrai_parc
     rec("test_on_recolte_l_usine_avant_de_miner_a_la_main", ok,
         f"{len(vidages)} machine(s) vidée(s), {gagne:+d} plaque(s) récupérée(s)")
     assert ok
@@ -3293,12 +3299,20 @@ def test_la_recolte_va_CHERCHER_les_plaques_au_lieu_de_les_attendre() -> None:
         def run_action(self, fn, *a, **kw):
             return fn(*a, **kw)
 
+    import services.perception as _perc
+    _vrai_parc = _perc.parc
+    _perc.parc = lambda api: [{"name": "stone-furnace", "type": "furnace",
+                               "x": 14.0, "y": -18.0}]
+
     c = _coord_mesure(_ApiLoin())
     c.zone = (14.0, -18.0)
     c.rayon = 25.0
     c._marcher = lambda x, y: (marches.append((x, y)), (x, y))[1]
 
-    Coordinator._recolter_la_production(c, "iron-plate")
+    try:
+        Coordinator._recolter_la_production(c, "iron-plate")
+    finally:
+        _perc.parc = _vrai_parc
 
     a_marche = bool(marches)
     a_vide = bool(vidages)
@@ -3306,6 +3320,60 @@ def test_la_recolte_va_CHERCHER_les_plaques_au_lieu_de_les_attendre() -> None:
     ok = a_marche and a_vide
     rec("test_la_recolte_va_CHERCHER_les_plaques_au_lieu_de_les_attendre", ok,
         f"marches={marches} vidages={vidages}")
+    assert ok
+
+
+def test_la_recolte_ne_se_limite_pas_a_un_rayon_arbitraire() -> None:
+    """POURQUOI LIMITER LA PORTÉE ? — la question du joueur, et elle est juste.
+
+    La récolte cherchait les fours dans `self.rayon` (25 tuiles) autour de `self.zone`,
+    une position FIGÉE à la création du Coordinator — celle du personnage au démarrage.
+    Deux plafonds pour le prix d'un : au-delà de vingt-cinq tuiles elle ne voit rien, et
+    si l'usine se bâtit ailleurs que là où l'on se tenait au début, elle ne voit rien non
+    plus. Dans les deux cas, silence : ni plaques récoltées, ni motif donné.
+
+    Rien ne justifie ce rayon. Ce n'est pas une contrainte du jeu — contrairement à la
+    portée de bras, qui est réelle et vaut une dizaine de tuiles — c'est un nombre que le
+    code s'arroge. Et `perception.parc()` liste déjà toutes les machines de la surface,
+    sans limite.
+
+    On cherche donc PARTOUT et l'on marche jusqu'à ce qu'on trouve. La seule vraie borne
+    reste physique : il faut être à portée pour vider, d'où le déplacement de H62.
+    """
+    from agents.coordinator import Coordinator
+
+    vidages = []
+
+    class _ApiVaste:
+        def get_state(self):
+            return {"inventory": {"iron-plate": 0},
+                    "character": {"position": {"x": 0.0, "y": 0.0}}, "tick": 1}
+        def inspect_at(self, x, y, r=0.5):
+            return {"entities": []}          # le rayon ne voit RIEN : four trop loin
+        def empty_output_at(self, x, y, nom, **kw):
+            vidages.append((x, y))
+            return {"ok": True}
+        def run_action(self, fn, *a, **kw):
+            return fn(*a, **kw)
+
+    import services.perception as perc
+    vrai_parc = perc.parc
+    # Le four est à 300 tuiles : hors de tout rayon, mais bien dans le parc.
+    perc.parc = lambda api: [{"name": "stone-furnace", "type": "furnace",
+                              "x": 300.0, "y": -200.0}]
+
+    c = _coord_mesure(_ApiVaste())
+    c.zone = (0.0, 0.0)
+    c.rayon = 25.0
+    c._marcher = lambda x, y: (x, y)
+    try:
+        Coordinator._recolter_la_production(c, "iron-plate")
+    finally:
+        perc.parc = vrai_parc
+
+    ok = vidages == [(300.0, -200.0)]
+    rec("test_la_recolte_ne_se_limite_pas_a_un_rayon_arbitraire", ok,
+        f"vidages={vidages} (attendu le four a 300 tuiles)")
     assert ok
 
 
@@ -3366,6 +3434,7 @@ def main() -> int:
         test_le_plafond_de_belts_ne_doit_pas_decider_a_la_place_de_l_agent,
         test_avoir_deja_ce_qu_on_demande_n_est_pas_un_echec,
         test_la_recolte_va_CHERCHER_les_plaques_au_lieu_de_les_attendre,
+        test_la_recolte_ne_se_limite_pas_a_un_rayon_arbitraire,
         test_le_coffre_d_evacuation_essaie_aussi_les_diagonales,
         test_la_foreuse_a_charbon_recoit_un_bras_de_retour,
         test_l_evacuation_s_approche_avant_de_poser_son_coffre,

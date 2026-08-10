@@ -2250,11 +2250,23 @@ class Coordinator:
         from services import deplacement
 
         avant = perception.inventory(self.api).get(item, 0)
+        # POURQUOI LIMITER LA PORTÉE ? On cherchait dans `self.rayon` (25 tuiles) autour de
+        # `self.zone` — une position FIGÉE à la création du Coordinator, celle du
+        # personnage au démarrage. Deux plafonds pour le prix d'un : au-delà de vingt-cinq
+        # tuiles on ne voit rien, et si l'usine se bâtit ailleurs qu'au point de départ on
+        # ne voit rien non plus. Dans les deux cas en silence.
+        #
+        # Rien ne justifiait ce rayon. La seule borne réelle est PHYSIQUE — il faut être à
+        # portée de bras pour vider — et elle se franchit en marchant. `perception.parc`
+        # liste déjà toutes les machines de la surface : on s'en sert.
         try:
-            proches = ((self.api.inspect_at(self.zone[0], self.zone[1], self.rayon)
-                        or {}).get("entities") or [])
+            proches = perception.parc(self.api) or []
         except Exception:
-            return 0
+            try:
+                proches = ((self.api.inspect_at(self.zone[0], self.zone[1], self.rayon)
+                            or {}).get("entities") or [])
+            except Exception:
+                return 0
         for e in proches:
             if str(e.get("type", "")) not in ("furnace", "assembling-machine"):
                 continue
