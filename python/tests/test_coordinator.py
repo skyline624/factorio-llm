@@ -2006,7 +2006,7 @@ def test_une_chaine_burner_est_approvisionnee_pas_branchee() -> None:
     c.journal = []
     relies, approvisionnes = [], []
     c.relier = lambda s: (relies.append(s.name), (True, "relié"))[1]
-    c.approvisionner = lambda cible, item="coal": (approvisionnes.append(cible.name),
+    c.approvisionner = lambda cible, item="coal", **kw: (approvisionnes.append(cible.name),
                                                    (True, "approvisionné"))[1]
 
     class _Pose:
@@ -2885,7 +2885,7 @@ def test_le_nombre_d_alimentations_revient_a_l_agent() -> None:
         api = _ApiEnergie({"burner-mining-drill": "burner"})
         c = _coord_mesure(api)
         c.journal = []
-        c.approvisionner = lambda cible, item="coal": (servies.append(cible.name),
+        c.approvisionner = lambda cible, item="coal", **kw: (servies.append(cible.name),
                                                        (True, "ok"))[1]
         c._gaver_les_bruleurs = lambda poses: 0
         c._mettre_en_service = Coordinator._mettre_en_service.__get__(c)
@@ -3166,6 +3166,53 @@ def test_l_arret_mord_aussi_pendant_la_fabrication() -> None:
     assert ok
 
 
+def test_le_plafond_de_belts_ne_doit_pas_decider_a_la_place_de_l_agent() -> None:
+    """« AUCUN GISEMENT DE COAL À MOINS DE 20 TUILES » — sur des cartes où il est à 90.
+
+    Partie 34, rapport du chantier, après dix minutes de forge :
+
+        29 entité(s) posée(s) … 0 alimentée(s) en coal
+        — alimentation refusée : aucun gisement de coal à moins de 20 tuiles
+          (0 belt(s) en poche)
+
+    Ces vingt tuiles ne sont pas une distance mesurée : c'est `BELTS_FABRICABLES = 20`,
+    un plafond que le code s'arroge. Le charbon est à 80-100 tuiles sur ces cartes, donc
+    l'alimentation est refusée SYSTÉMATIQUEMENT, quelle que soit la partie. L'usine tourne
+    alors sur le charbon porté à la main — la corvée même que l'objectif désigne comme la
+    ligne d'arrivée : « tant que c'est toi qui portes le charbon, rien ne tient sans toi ».
+    Zéro foreuse à charbon après deux chantiers complets, mesuré.
+
+    Le message ajoute l'injure au dommage : « rappelle avec `budget_belts` si tu en veux
+    davantage » — or `budget_belts` n'existe que sur `reparer`, pas sur `batir_une_chaine`.
+    L'agent lit un remède qu'il ne peut pas appliquer.
+
+    Ce que le joueur répète depuis deux jours : écrire le FAIT et son COÛT, jamais l'ordre
+    qu'on en tire. Une ligne de 90 tuiles coûte 270 plaques — c'est une information, et
+    l'arbitrage appartient à l'agent, qui seul sait s'il les a et s'il en veut.
+    """
+    from agents.coordinator import Coordinator
+
+    class _ApiVide:
+        def get_state(self):
+            return {"inventory": {}, "tick": 1, "ready": True}
+
+    c = _coord_mesure(_ApiVide())
+
+    # Sans budget dit, le plafond ne doit plus enfermer : la portée suit ce que l'agent
+    # possède, et le refus doit CHIFFRER ce qu'il faudrait plutôt que trancher.
+    portee_defaut = Coordinator._portee_appro(c)
+    portee_dite = Coordinator._portee_appro(c, budget_belts=90)
+
+    ecoute_l_agent = portee_dite >= 90
+    ne_plafonne_pas_a_20 = portee_defaut != 20.0
+
+    ok = ecoute_l_agent and ne_plafonne_pas_a_20
+    rec("test_le_plafond_de_belts_ne_doit_pas_decider_a_la_place_de_l_agent", ok,
+        f"portée par défaut={portee_defaut} (20 = plafond arrogé) — "
+        f"avec budget 90 = {portee_dite}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -3220,6 +3267,7 @@ def main() -> int:
         test_la_ligne_forge_ses_poteaux_et_ne_ment_pas_sur_la_cause,
         test_un_manque_se_dit_en_phrase_et_pas_en_dict_python,
         test_l_arret_mord_aussi_pendant_la_fabrication,
+        test_le_plafond_de_belts_ne_doit_pas_decider_a_la_place_de_l_agent,
         test_le_coffre_d_evacuation_essaie_aussi_les_diagonales,
         test_la_foreuse_a_charbon_recoit_un_bras_de_retour,
         test_l_evacuation_s_approche_avant_de_poser_son_coffre,

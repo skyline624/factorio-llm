@@ -2024,7 +2024,27 @@ class Coordinator:
         # existait, l'usine mourait de faim, et le refus venait d'un seuil que personne
         # n'avait choisi. L'écart entre gisements DÉPEND DE LA CARTE : si elle les
         # éloigne, il n'y a pas d'alternative à une longue ligne.
-        forgeables = self.BELTS_FABRICABLES if budget_belts is None else int(budget_belts)
+        # VINGT TUILES N'ÉTAIT PAS UNE MESURE, C'ÉTAIT UN CHIFFRE. `BELTS_FABRICABLES = 20`
+        # bornait la portée à vingt tuiles quand la poche est vide — or le charbon est à
+        # 80-100 tuiles sur ces cartes. L'alimentation était donc refusée SYSTÉMATIQUEMENT,
+        # quelle que soit la partie : « aucun gisement de coal à moins de 20 tuiles ».
+        # Partie 34, mesuré : zéro foreuse à charbon après DEUX chantiers complets, et une
+        # usine qui tourne sur le charbon porté à la main — la corvée même que l'objectif
+        # désigne comme la ligne à franchir.
+        #
+        # Le message ajoutait « rappelle avec `budget_belts` », un paramètre qui n'existe
+        # que sur `reparer` : l'agent lisait un remède qu'il ne pouvait pas appliquer.
+        #
+        # Ce qu'on peut forger n'est pas un nombre arbitraire, c'est ce que le FER permet :
+        # une belt coûte 3 plaques la tuile (1 plaque + 1 engrenage pour deux tuiles). On
+        # dérive donc la portée du stock réel, et le plafond de sécurité `PORTEE_APPRO`
+        # reste seul garde-fou — au-delà, c'est un problème de train quel que soit l'or.
+        if budget_belts is not None:
+            forgeables = int(budget_belts)
+        else:
+            inv = perception.inventory(self.api)
+            fer = inv.get("iron-plate", 0) + 2 * inv.get("iron-gear-wheel", 0)
+            forgeables = int(fer // self.PLAQUES_PAR_BELT)
         portee = stock + forgeables
         # Le plafond de sécurité ne s'applique qu'à notre propre prudence : un budget
         # explicite de l'agent l'emporte, c'est lui qui paie.
@@ -2413,7 +2433,12 @@ class Coordinator:
                                   f"`alimentations_max` si tu en veux davantage")
                     continue
                 restant -= 1
-                ok_a, detail_a = self.approvisionner(cible, self.combustible)
+                # LE BUDGET DE L'AGENT DOIT ARRIVER JUSQU'ICI. C'est cet appel qui
+                # décide de la portée, et il ne recevait rien : le `budget_belts` passé
+                # à `batir_une_chaine` se perdait en route, comme H10 sous son drapeau.
+                ok_a, detail_a = self.approvisionner(
+                    cible, self.combustible,
+                    budget_belts=getattr(self, "budget_belts", None))
                 if ok_a:
                     ravitaillees += 1
                 elif not echecs:

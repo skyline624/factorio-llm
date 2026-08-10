@@ -1060,13 +1060,18 @@ def ce_que_l_usine_a_produit(item: str) -> str:
 
 @outil
 def batir_une_chaine(item: str, debit: float = 0.5,
-                     alimentations_max: int = 0) -> str:
+                     alimentations_max: int = 0, budget_belts: int = 0) -> str:
     """Bâtit une usine complète pour produire `item` : extraction, fonte, transport.
 
     Pour du VOLUME. Elle choisit son gisement au débit visé, marche jusqu'à lui, et forge
     ce qui lui manque avant de poser — plusieurs minutes, parfois plus de dix. Si tu tiens
     déjà une foreuse et que tu veux produire tout de suite, `extraire_ici` pose trois
     entités avec ce que tu as, en quelques secondes ; les deux se complètent.
+
+    `budget_belts` : combien de tuiles de convoyeur tu acceptes de faire FORGER pour
+    amener le charbon jusqu'aux machines. Une tuile coûte 3 plaques de fer. Sans lui, la
+    chaîne ne tire que ce que ton fer permet déjà — et si le gisement est plus loin, elle
+    te le dit avec la distance, à toi de juger si la ligne vaut son prix.
 
     Le placement, l'orientation et les raccords sont calculés — ne demande jamais de
     position. Rend ce qui a été posé, ou ce qui a manqué.
@@ -1078,7 +1083,13 @@ def batir_une_chaine(item: str, debit: float = 0.5,
     cela n'a plus de sens.
     """
     def _travail():
-        ok, detail = _coord().batir_chaine(
+        # `budget_belts` DOIT EXISTER ICI. Le refus d'alimentation naît dans ce chantier
+        # et conseille « rappelle avec `budget_belts` » — or le paramètre n'existait que
+        # sur `reparer`. L'agent lisait un remède inapplicable, et l'usine restait sans
+        # charbon automatique : mesuré partie 34, deux chantiers, zéro foreuse à charbon.
+        coord = _coord()
+        coord.budget_belts = int(budget_belts) if budget_belts else None
+        ok, detail = coord.batir_chaine(
             item, debit,
             alimentations_max=(int(alimentations_max) if alimentations_max else None))
         return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
