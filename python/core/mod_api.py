@@ -108,6 +108,10 @@ class ModApi:
         """Compteurs cumules de production/consommation de la force."""
         return self._call("fl_tools", "production_stats")
 
+    def read_messages(self) -> dict:
+        """Ce que le joueur a tape dans le chat depuis la derniere lecture. VIDE la file."""
+        return self._call("fl_tools", "read_messages")
+
     # ----- fl_tools : validation LayoutPlanner (S0b) -----
     # Commandes synchrones non destructives (sauf measure_entity qui pose puis detruit,
     # reserve au mode test). Valident qu'un blueprint est placable + mesurent les

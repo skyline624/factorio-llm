@@ -122,10 +122,91 @@ def test_une_lecture_ne_patiente_pas_derriere_une_construction() -> None:
     assert ok
 
 
+def test_le_joueur_peut_couper_la_parole_a_l_agent() -> None:
+    """LE CHAT DU JEU EST LE SEUL CANAL VERS UN AGENT QUI JOUE DÉJÀ.
+
+    Sans lui, corriger le tir coûte une manche entière : arrêter la partie, réécrire la
+    skill, remonter carte + client + serveur MCP. Partie 22 le montre — 534 plaques
+    produites par l'usine, zéro en poche, et l'agent repart miner cent cinquante plaques
+    à la pioche. Une phrase aurait suffi : « vide tes fours ».
+
+    Le point dur n'est pas de lire les messages, c'est de les LIVRER. Un outil dédié
+    `lire_les_messages` ne sert à rien : l'agent ne l'appellerait que s'il pense à
+    demander, or c'est précisément quand il s'enlise qu'il cesse de demander. Le message
+    part donc en tête de la PROCHAINE réponse d'outil, quelle qu'elle soit — il coupe la
+    parole plutôt que d'attendre son tour.
+
+    Et il ne se répète pas. Un conseil relivré à chaque appel deviendrait un bruit de
+    fond que l'agent apprendrait à sauter ; la file se vide à la lecture.
+    """
+    import mcp_jeu
+
+    file = [{"joueur": "pier", "texte": "vide tes fours au lieu de miner"}]
+
+    class _ApiChat:
+        def read_messages(self):
+            lu, file[:] = list(file), []
+            return {"messages": lu}
+
+    vrai = mcp_jeu._api
+    mcp_jeu._api = lambda: _ApiChat()
+    try:
+        premier = mcp_jeu._bandeau_du_joueur("machines en service : 12")
+        second = mcp_jeu._bandeau_du_joueur("machines en service : 12")
+    finally:
+        mcp_jeu._api = vrai
+
+    livre = "vide tes fours" in premier
+    garde = "machines en service : 12" in premier
+    en_tete = premier.index("vide tes fours") < premier.index("machines en service")
+    silence = "vide tes fours" not in second
+
+    ok = livre and garde and en_tete and silence
+    rec("test_le_joueur_peut_couper_la_parole_a_l_agent", ok,
+        f"livré={livre} résultat_conservé={garde} en_tête={en_tete} pas_de_répétition={silence}")
+    assert ok
+
+
+def test_un_chat_muet_ne_coute_rien_a_l_agent() -> None:
+    """LE CANAL EST OUVERT EN PERMANENCE — il doit donc être invisible quand il est vide.
+
+    Le bandeau se greffe sur CHAQUE réponse d'outil. S'il ajoutait ne serait-ce qu'une
+    ligne à vide, l'agent la lirait des centaines de fois par partie pour rien, et une
+    panne du canal ferait tomber tous les outils avec elle. Quand personne ne parle, la
+    réponse doit sortir à l'octet près comme si le chat n'existait pas ; et quand la
+    lecture échoue, l'outil répond quand même.
+    """
+    import mcp_jeu
+
+    class _ApiMuette:
+        def read_messages(self):
+            return {"messages": []}
+
+    class _ApiCassee:
+        def read_messages(self):
+            raise RuntimeError("RCON coupé")
+
+    vrai = mcp_jeu._api
+    try:
+        mcp_jeu._api = lambda: _ApiMuette()
+        muet = mcp_jeu._bandeau_du_joueur("état : rien à signaler")
+        mcp_jeu._api = lambda: _ApiCassee()
+        casse = mcp_jeu._bandeau_du_joueur("état : rien à signaler")
+    finally:
+        mcp_jeu._api = vrai
+
+    ok = muet == "état : rien à signaler" and casse == "état : rien à signaler"
+    rec("test_un_chat_muet_ne_coute_rien_a_l_agent", ok,
+        f"muet={muet!r} canal_casse={casse!r}")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
-              test_reparer_prefere_une_machine_a_une_belt):
+              test_reparer_prefere_une_machine_a_une_belt,
+              test_le_joueur_peut_couper_la_parole_a_l_agent,
+              test_un_chat_muet_ne_coute_rien_a_l_agent):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

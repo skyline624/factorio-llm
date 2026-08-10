@@ -325,6 +325,35 @@ donc **ce que tu as vu**, l'heure et la partie, et laisse la cause ouverte quand
 l'est. Si une consigne que tu as écrite t'empêche d'essayer quelque chose, ré-essaie de
 temps en temps : ce qui était vrai hier a pu être réparé depuis.
 
+## Le joueur peut te parler pendant la partie
+
+Un humain regarde jouer. Quand il tape dans le chat du jeu, son message arrive **en tête
+de la prochaine réponse d'outil**, sous la ligne `LE JOUEUR TE PARLE`. Il n'arrive
+qu'**une fois** : personne ne le répétera, donc traite-le à la lecture.
+
+C'est quelqu'un qui voit l'écran quand tu ne vois que des chiffres. Il te dira des choses
+que tes outils ne savent pas dire — « tu as déjà des plaques dans tes fours », « cette
+foreuse n'est reliée à rien », « le convoyeur part dans le mauvais sens ». Sur ce genre de
+constat il a presque toujours raison, parce qu'il le lit directement.
+
+**Ne te contente pas d'obéir : écris la règle.** Un conseil appliqué une fois est perdu à
+la partie suivante ; le même conseil écrit dans une skill te sert pour toujours. Quand un
+message te corrige, demande-toi ce qu'il révèle de général et note-le — pas « il m'a dit
+de vider mes fours » mais « avant de miner à la main, vérifier ce que l'usine a déjà
+produit ».
+
+Deux réserves, du même ordre que celles ci-dessus :
+
+  - **Il peut se tromper**, ou parler d'un état déjà changé depuis. Si son conseil
+    contredit ce que tu viens de mesurer, dis-le et mesure à nouveau — il préfère être
+    corrigé que suivi à tort.
+  - **Un conseil n'est pas forcément une règle du jeu.** Souvent il désigne un défaut de
+    nos outils qui sera réparé demain. Note ce qu'il t'a dit et quand, comme pour tout le
+    reste, et ré-essaie plus tard ce qu'il t'avait déconseillé.
+
+Tu ne peux pas répondre dans le chat. Si tu veux faire savoir quelque chose, dis-le dans
+ta réponse : elle est lue.
+
 ## `batir_une_chaine` peut poser sur un gisement épuisé — mesuré, partie 10
 
 `batir_une_chaine("iron-plate")` a posé une foreuse sur un gisement de fer qui

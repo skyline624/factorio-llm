@@ -61,6 +61,8 @@ remote.add_interface("fl_tools", {
     safe(function() return tools.get_technologies(pretes ~= false) end)
   end,
   production_stats = function() safe(function() return tools.production_stats() end) end,
+  -- Ce que le joueur a tape dans le chat depuis la derniere lecture. Vide la file.
+  read_messages = function() safe(function() return tools.read_messages() end) end,
   -- Validation LayoutPlanner (S0b) : synchrones, non destructives (sauf measure_entity).
   can_place_check = function(name, x, y, direction)
     safe(function() return tools.can_place_check(name, x, y, direction) end)
@@ -235,4 +237,14 @@ script.on_event(defines.events.on_player_joined_game, function(event)
   if storage.fl.test_mode then return end
   local player = game.get_player(event.player_index)
   if player then player_mod.on_player_joined(player) end
+end)
+
+-- ===== Le joueur parle a l'agent =====
+-- `on_console_chat` porte AUSSI les messages du serveur et des commandes ; on ne retient
+-- que ceux qui viennent d'un joueur, sans quoi l'agent lirait ses propres notifications.
+script.on_event(defines.events.on_console_chat, function(event)
+  if not event.player_index then return end
+  local player = game.get_player(event.player_index)
+  if not player or not event.message or event.message == "" then return end
+  tools.push_message(player.name, event.message)
 end)

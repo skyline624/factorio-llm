@@ -1245,6 +1245,33 @@ end
 --
 -- `pret` dit que TOUS les prerequis sont acquis -- c'est-a-dire recherchable MAINTENANT,
 -- la seule categorie sur laquelle une decision peut porter.
+
+-- ===== Messages du joueur (chat du jeu) =====
+-- Le joueur tape dans le chat, l'agent lit. C'est le seul canal par lequel un humain
+-- s'adresse a lui EN COURS DE PARTIE : sans cela il faut arreter, changer sa skill et
+-- tout relancer, ce qui coute une manche entiere pour une phrase.
+--
+-- La file se VIDE a la lecture. Un conseil repete a chaque tour deviendrait un bruit de
+-- fond que l'agent apprendrait a ignorer -- on veut qu'il le lise une fois et agisse.
+
+function M.push_message(joueur, texte)
+  storage.fl = storage.fl or {}
+  storage.fl.messages = storage.fl.messages or {}
+  -- Plafond bas et volontaire : si personne ne lit, c'est que l'agent est occupe ailleurs,
+  -- et vingt messages en attente ne l'aideront pas davantage que les cinq derniers.
+  if #storage.fl.messages >= 20 then table.remove(storage.fl.messages, 1) end
+  table.insert(storage.fl.messages, {
+    tick = game.tick, joueur = joueur or "?", texte = texte or "",
+  })
+end
+
+function M.read_messages()
+  storage.fl = storage.fl or {}
+  local file = storage.fl.messages or {}
+  storage.fl.messages = {}
+  return json.encode({messages = file})
+end
+
 function M.get_technologies(seulement_pretes)
   local force = player_mod.get_ai_force()
   local acquises, ouvertes = {}, {}

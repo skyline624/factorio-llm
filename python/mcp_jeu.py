@@ -183,6 +183,39 @@ def _fin(nom: str, reponse: str, duree: float) -> None:
 _VERROU_JEU = threading.Lock()
 
 
+
+def _bandeau_du_joueur(resultat):
+    """Fait précéder `resultat` de ce que le joueur a tapé dans le chat, s'il a parlé.
+
+    LE POINT DUR N'EST PAS DE LIRE LES MESSAGES, C'EST DE LES LIVRER. Un outil dédié que
+    l'agent appellerait « quand il y pense » ne sert à rien : c'est précisément quand il
+    s'enlise qu'il cesse de regarder autour de lui. Partie 22 en donne la mesure — 534
+    plaques produites par son usine, zéro en poche, et il repart en miner cent cinquante
+    à la pioche sans jamais rien demander à personne. Le message part donc en tête de la
+    PROCHAINE réponse d'outil, quelle qu'elle soit : il coupe la parole.
+
+    Il ne se répète pas — la file se vide à la lecture. Un conseil relivré à chaque appel
+    deviendrait un bruit de fond que l'agent apprendrait à sauter, et on aurait dépensé
+    le seul canal dont on dispose pour le rendre inaudible.
+
+    ET IL S'EFFACE QUAND IL N'A RIEN À DIRE. Ce bandeau se greffe sur CHAQUE outil : une
+    ligne ajoutée à vide serait lue des centaines de fois par partie pour rien, et une
+    panne du canal ferait tomber tous les outils avec elle. D'où le retour à l'identique
+    et le `except` large — le chat est un confort, jamais une dépendance.
+    """
+    if not isinstance(resultat, str):
+        return resultat
+    try:
+        msgs = (_api().read_messages() or {}).get("messages") or []
+    except Exception:
+        return resultat
+    if not msgs:
+        return resultat
+    dits = "\n".join(f"  [{m.get('joueur', '?')}] {m.get('texte', '')}" for m in msgs)
+    return ("LE JOUEUR TE PARLE — tiens-en compte avant de poursuivre :\n"
+            f"{dits}\n\n{resultat}")
+
+
 def outil(fn=None, *, ecrit: bool = True):
     """Déclare un outil MCP et journalise chaque appel, HORS de la boucle d'événements.
 
@@ -238,7 +271,7 @@ def outil(fn=None, *, ecrit: bool = True):
             _fin(fn.__name__, f"ERREUR {type(e).__name__}: {e}", time.time() - t0)
             raise
         _fin(fn.__name__, r, time.time() - t0)
-        return r
+        return _bandeau_du_joueur(r)
 
     enveloppe.__fl_ecrit__ = ecrit
     return mcp.tool()(enveloppe)
