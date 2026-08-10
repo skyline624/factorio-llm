@@ -1219,6 +1219,81 @@ def test_arreter_un_chantier_le_TUE_meme_s_il_ne_cooopere_pas() -> None:
     assert ok
 
 
+def test_extraire_pose_meme_sans_combustible_et_le_dit() -> None:
+    """POSER ET ALIMENTER SONT DEUX GESTES — les confondre bloque le seul qui compte.
+
+    Partie 30, le joueur écrit « pose une foreuse sur du fer et un four devant sa sortie ».
+    L'agent obéit dans la seconde, marche jusqu'au gisement… et l'outil rend :
+
+        ÉCHEC — rien posé en (94,-0) : []
+
+    Deux fautes en une ligne. D'abord `extraire_ici` réclamait dix charbons pour amorcer
+    le four, or LE KIT DE DÉPART N'EN CONTIENT AUCUN — burner-mining-drill, stone-furnace,
+    wood. Le pré-vol refusait donc la pose entière pour un combustible qui n'a rien à voir
+    avec elle : une foreuse posée sans charbon est une foreuse posée, qu'on ravitaille
+    ensuite. Poser est le geste rare et précieux ; alimenter se répare à tout moment.
+
+    Ensuite le message : `[]` est le `blocked` vide, tandis que la vraie cause dormait dans
+    `missing`. L'agent lit un échec sans motif, ne peut rien en faire, et réessaie à
+    l'identique — ce qu'il a fait vingt-neuf secondes plus tard.
+
+    On pose donc sans exiger de combustible, et l'on DIT qu'il en faudra.
+    """
+    import mcp_jeu, asyncio, time
+
+    class _ApiSansCharbon:
+        def __init__(self):
+            self.poses, self.terrain = [], []
+            self.inv = {"burner-mining-drill": 1, "stone-furnace": 1, "wood": 1}
+        def get_state(self):
+            return {"tick": 1, "character": {"position": {"x": 0.0, "y": 0.0}},
+                    "inventory": dict(self.inv)}
+        def find_nearest(self, nom):
+            return {"name": nom, "x": 6.0, "y": 0.0, "distance": 6}
+        def generate_terrain(self, *a, **kw):
+            return {"ok": True}
+        def can_place_check(self, *a, **kw):
+            return {"can_place": True}
+        def place_entity_at(self, nom, x, y, *a, **kw):
+            if self.inv.get(nom, 0) <= 0:
+                return {"ok": False, "detail": "plus en poche"}
+            self.inv[nom] -= 1
+            self.poses.append(nom)
+            self.terrain.append({"name": nom, "type": nom, "x": x, "y": y})
+            return {"ok": True}
+        def move_items_at(self, *a, **kw):
+            return {"ok": True}
+        def walk_to(self, x, y, **kw):
+            return {"ok": True}
+        def inspect_at(self, x=0.0, y=0.0, radius=0.5, *a, **kw):
+            return {"entities": [e for e in self.terrain
+                                 if abs(e["x"] - x) <= max(radius, 2.0)
+                                 and abs(e["y"] - y) <= max(radius, 2.0)]}
+        def run_action(self, fn, *a, **kw):
+            return fn(*a, **kw)
+
+    api = _ApiSansCharbon()
+    vrai_api, vrai_coord = mcp_jeu._api, mcp_jeu._ETAT.get("coord")
+    mcp_jeu._api = lambda: api
+    mcp_jeu._ETAT["coord"] = None
+    _table_rase(mcp_jeu)
+    try:
+        brut = getattr(mcp_jeu.extraire_ici, "fn", mcp_jeu.extraire_ici)
+        r = brut("iron-ore")
+        if asyncio.iscoroutine(r):
+            r = asyncio.run(r)
+    finally:
+        mcp_jeu._api, mcp_jeu._ETAT["coord"] = vrai_api, vrai_coord
+
+    a_pose = "burner-mining-drill" in api.poses and "stone-furnace" in api.poses
+    previent = "combustible" in str(r).lower() or "charbon" in str(r).lower()
+
+    ok = a_pose and previent
+    rec("test_extraire_pose_meme_sans_combustible_et_le_dit", ok,
+        f"posé={api.poses} — réponse={str(r)[:90]!r}")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
@@ -1242,7 +1317,8 @@ def main() -> int:
               test_aucune_action_ne_se_glisse_pendant_un_chantier,
               test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros,
               test_extraire_pose_deux_entites_et_ne_forge_plus_de_bras,
-              test_arreter_un_chantier_le_TUE_meme_s_il_ne_cooopere_pas):
+              test_arreter_un_chantier_le_TUE_meme_s_il_ne_cooopere_pas,
+              test_extraire_pose_meme_sans_combustible_et_le_dit):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

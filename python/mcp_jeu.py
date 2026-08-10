@@ -824,14 +824,31 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
         facing=4, anchor=ancre, drill_tier="burner-mining-drill",
         furnace_tier="stone-furnace", drill_size=2, furnace_size=2,
         sans_bras=True))
-    rap = execute_micro(api, plan, fuel="coal", fuel_count=10, generate=False,
+    # POSER ET ALIMENTER SONT DEUX GESTES. Réclamer dix charbons pour amorcer le four
+    # faisait refuser la POSE entière — or le kit de départ n'en contient aucun
+    # (burner-mining-drill, stone-furnace, wood). Partie 30 : le joueur demande « pose une
+    # foreuse sur du fer et un four devant sa sortie », l'agent obéit dans la seconde,
+    # marche jusqu'au gisement, et l'outil rend « rien posé ». Une foreuse posée sans
+    # charbon reste une foreuse posée, qu'on ravitaille ensuite ; poser est le geste rare,
+    # alimenter se répare à tout moment.
+    charbon = min(10, int(perception.inventory(api).get("coal", 0)))
+    rap = execute_micro(api, plan, fuel="coal", fuel_count=charbon, generate=False,
                         approach=True, timeout=30.0)
     poses = ", ".join(sorted({p.name for p in (rap.placed or [])}))
     if not rap.placed:
-        return f"ÉCHEC — rien posé en ({ancre[0]:.0f},{ancre[1]:.0f}) : {rap.blocked[:1]}"
+        # `blocked` était vide et la cause dormait dans `missing` : l'agent lisait un
+        # échec sans motif, n'en tirait rien, et réessayait à l'identique — trois fois en
+        # quatre-vingt-dix secondes, mesuré.
+        souci = (", ".join(f"{n} (il t'en manque {c})"
+                           for n, c in (rap.missing or {}).items())
+                 or (str(rap.blocked[0]) if rap.blocked else "cause inconnue"))
+        return f"ÉCHEC — rien posé en ({ancre[0]:.0f},{ancre[1]:.0f}) : {souci}"
     dit_forge = f" (forgé au passage : {', '.join(forge)})" if forge else ""
-    return (f"OK — extraction posée en ({ancre[0]:.0f},{ancre[1]:.0f}) : {poses}{dit_forge}. "
-            f"Vérifie qu'elle tourne (`regarder`), puis évacue ou étends.")
+    manque_feu = (" — ELLES N'ONT PAS DE COMBUSTIBLE : sans charbon dans la foreuse et le "
+                  "four, rien ne tourne. `se_procurer('coal')` puis `reparer('ravitailler')`."
+                  if charbon <= 0 else "")
+    return (f"OK — extraction posée en ({ancre[0]:.0f},{ancre[1]:.0f}) : {poses}{dit_forge}"
+            f"{manque_feu}. Vérifie qu'elle tourne (`regarder`), puis évacue ou étends.")
 
 
 @outil(ecrit=False)
