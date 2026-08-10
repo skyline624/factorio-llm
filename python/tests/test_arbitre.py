@@ -396,6 +396,44 @@ def test_les_mesures_sont_bornees_et_le_repli_tient() -> None:
     assert ok
 
 
+def test_l_etat_donne_les_deux_couts_et_ne_conclut_pas() -> None:
+    """UNE INFORMATION VRAIE PEUT ÊTRE TROMPEUSE SI ELLE EST SEULE.
+
+    Partie 32, ce que l'agent lit avant de choisir :
+
+        pour bâtir une chaîne il faut : burner-mining-drill×1, stone-furnace×1,
+                                        burner-inserter×1, coal×20
+        inventaire : burner-mining-drill=1, stone-furnace=1, wood=1
+
+    Rien de faux : c'est bien le coût de `batir_une_chaine`. Mais c'est le SEUL coût
+    affiché, et il conclut à sa place — il manque un bras et vingt charbons, donc rien
+    n'est possible tout de suite. Or depuis que le four se pose sur la tuile de drop, une
+    extraction ne demande ni bras ni combustible : il tenait exactement de quoi produire.
+
+    On donne donc les deux coûts, et l'on s'arrête là. Ce qui est mesuré s'écrit ; ce qu'on
+    en tire appartient à l'agent — même règle que pour les plafonds de fabrication et le
+    nombre d'alimentations, retirés à la demande de l'utilisateur.
+    """
+    from services.arbitre import resumer_etat
+
+    class _Etat:
+        machines = 0
+        besoins_production = (("burner-mining-drill", 1), ("stone-furnace", 1),
+                              ("burner-inserter", 1), ("coal", 20))
+        inventaire = {"burner-mining-drill": 1, "stone-furnace": 1, "wood": 1}
+
+    texte = resumer_etat(_Etat())
+
+    dit_l_usine = "burner-inserter" in texte
+    dit_l_extraction = "extraction" in texte.lower()
+    ne_conclut_pas = "tu dois" not in texte.lower() and "commence par" not in texte.lower()
+
+    ok = dit_l_usine and dit_l_extraction and ne_conclut_pas
+    rec("test_l_etat_donne_les_deux_couts_et_ne_conclut_pas", ok,
+        f"usine={dit_l_usine} extraction={dit_l_extraction} neutre={ne_conclut_pas}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_choix_valide_est_suivi,

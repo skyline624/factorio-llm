@@ -150,8 +150,23 @@ def resumer_etat(etat) -> str:
         lignes.append(f"débit {debit:.2f}/s pour {objectif:.2f} demandés")
     besoins = getattr(etat, "besoins_production", ()) or ()
     if besoins:
-        lignes.append("pour bâtir une chaîne il faut : "
+        lignes.append("pour bâtir une chaîne (usine) il faut : "
                       + ", ".join(f"{n}×{q}" for n, q in besoins))
+        # UNE INFORMATION VRAIE PEUT ÊTRE TROMPEUSE SI ELLE EST SEULE. Partie 32 : l'agent
+        # lit qu'il lui manque un bras et vingt charbons, et en conclut que rien n'est
+        # possible tout de suite. C'est exact pour l'USINE — et faux pour une extraction
+        # minimale, qui ne demande ni bras ni combustible depuis que le four se pose sur la
+        # tuile de drop. Il tenait de quoi produire et ne pouvait pas le savoir.
+        #
+        # On donne donc les deux coûts et l'on s'arrête là : ce qui est mesuré s'écrit, ce
+        # qu'on en tire appartient à l'agent.
+        inv = getattr(etat, "inventaire", {}) or {}
+        a_foreuse = any(str(n).endswith("mining-drill") and inv.get(str(n), 0) > 0
+                        for n, _ in besoins) or inv.get("burner-mining-drill", 0) > 0
+        lignes.append("pour une extraction minimale (`extraire_ici`) : une foreuse suffit, "
+                      + ("tu en as une en poche" if a_foreuse else "tu n'en as pas")
+                      + " — le four se pose sur sa sortie et se forge au besoin, sans bras "
+                        "ni combustible pour la pose")
 
     # L'INVENTAIRE ENTIER, sans liste de noms choisie d'avance. Mesuré en jeu : l'option
     # proposée était « chercher automation — coût 10 × automation-science-pack », l'agent
