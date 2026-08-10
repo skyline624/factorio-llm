@@ -658,10 +658,11 @@ def _nom_a(api, x: float, y: float) -> str:
 
 @outil
 def extraire_ici(ressource: str = "iron-ore") -> str:
-    """Pose TOUT DE SUITE une extraction minimale : foreuse + bras + four sur la sortie.
+    """Pose TOUT DE SUITE une extraction minimale : une foreuse, un four sur sa sortie.
 
-    Trois entités, avec CE QUE TU AS EN POCHE — rien n'est fabriqué, rien n'est fondu.
-    S'il te manque une pièce, l'outil te le dit et n'entreprend rien.
+    DEUX entités, avec ce que tu as en poche — le four posé sur la tuile où la foreuse
+    dépose reçoit le minerai directement, aucun bras n'est nécessaire. Il te faut une
+    foreuse ; le four, il le forge au besoin.
 
     C'est le geste du début de partie, quand tu tiens déjà une foreuse : il produit en
     quelques secondes là où `batir_une_chaine` planifie l'usine entière, part chercher son
@@ -687,12 +688,17 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
                 "miner puis fondre. Passe par `batir_une_chaine`, qui fait tout cela, ou "
                 "`se_procurer` si tu veux garder la main entre-temps.")
 
-    # LE PETIT QUI MANQUE, ON LE FORGE. Refuser pour un `burner-inserter` — une plaque et
-    # un engrenage, quelques secondes — c'était renvoyer vers l'outil de dix minutes pour
-    # en économiser dix. Mesuré parties 24 à 27 : le kit de départ ne contient JAMAIS de
-    # bras, donc la condition n'était jamais remplie et l'outil restait lettre morte au
-    # moment précis où il servait. L'agent, lui, avait raison de passer son chemin.
-    petit = {"burner-inserter": 1, "stone-furnace": 1}
+    # PLUS DE BRAS DU TOUT — le four posé SUR la tuile de drop reçoit directement.
+    #
+    # Le MicroPlanner affirmait « drop-direct drill→furnace IMPOSSIBLE en Factorio 2.0 » ;
+    # sa propre note disait pourtant « four 1 TUILE TROP LOIN + drop hors axe ». Une
+    # impossibilité conclue d'un mauvais placement, que personne n'avait remesurée. Le
+    # joueur l'a corrigée en regardant l'écran : « tu n'as pas besoin du bras, pose une
+    # foreuse et un four devant ». La géométrie lui donne raison sur les quatre
+    # orientations (cf. test_micro_planner).
+    #
+    # Il ne reste donc que le four à forger au besoin — et le kit de départ en contient un.
+    petit = {"stone-furnace": 1}
     forge = []
     for nom, combien in petit.items():
         if inv.get(nom, 0) >= combien:
@@ -713,9 +719,9 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
 
     plan = plan_micro(MicroRequest(
         patch=ResourcePatch(resource=ressource, tiles=[], bbox=(0, 0, 0, 0)),
-        facing=4, anchor=ancre,
-        drill_tier="burner-mining-drill", inserter_tier="burner-inserter",
-        furnace_tier="stone-furnace", drill_size=2, furnace_size=2))
+        facing=4, anchor=ancre, drill_tier="burner-mining-drill",
+        furnace_tier="stone-furnace", drill_size=2, furnace_size=2,
+        sans_bras=True))
     rap = execute_micro(api, plan, fuel="coal", fuel_count=10, generate=False,
                         approach=True, timeout=30.0)
     poses = ", ".join(sorted({p.name for p in (rap.placed or [])}))

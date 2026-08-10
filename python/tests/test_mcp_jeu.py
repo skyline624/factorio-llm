@@ -31,6 +31,23 @@ def rec(name: str, ok: bool, detail: str) -> None:
     print(f"[{'OK  ' if ok else 'FAIL'}] {name:56s} {detail[:100]}")
 
 
+def _table_rase(mcp_jeu, delai: float = 6.0) -> None:
+    """Attend qu'aucun chantier ne tourne, et neutralise le contrôle d'avatar.
+
+    LES BANCS PARTAGENT `_CHANTIER` ET `_AVATAR_VU`. Un chantier laissé par le test
+    précédent fait REFUSER celui qu'on lance (un seul à la fois), et l'on mesure alors ce
+    refus au lieu de ce qu'on croyait tester ; un cache d'avatar périmé produit le même
+    genre de faux verdict. Trois bancs s'étaient déjà fait prendre.
+    """
+    import time as _t
+    mcp_jeu._demander_l_arret()
+    fin = _t.time() + delai
+    while mcp_jeu._chantier_tourne() and _t.time() < fin:
+        _t.sleep(0.1)
+    mcp_jeu._CHANTIER["arret"] = False
+    mcp_jeu._AVATAR_VU[:] = [_t.time(), None]
+
+
 class _ApiCarte:
     """Le jeu répond ce qu'il y a réellement à une position."""
 
@@ -383,9 +400,19 @@ def test_le_chantier_dit_ou_il_en_est_puis_son_resultat() -> None:
     """
     import mcp_jeu, time
 
-    # On mesure la latence du CHANTIER, pas celle du RCON : sans jeu lancé, la
-    # lecture d'état met quatre secondes à échouer et masquerait la mesure.
-    mcp_jeu._AVATAR_VU[:] = [time.time(), None]
+    _table_rase(mcp_jeu)
+
+    # SANS JEU LANCÉ, `_api()` MET QUATRE SECONDES À ÉCHOUER. `ou_en_est` interroge la file
+    # de messages pendant son attente : le chantier de 0,3 s se terminait donc AVANT le
+    # premier relevé, et l'on mesurait « terminé » là où l'on voulait voir « en cours ».
+    class _ApiMuette:
+        def peek_messages(self):
+            return {"messages": []}
+        def read_messages(self):
+            return {"messages": []}
+
+    vrai_api = mcp_jeu._api
+    mcp_jeu._api = lambda: _ApiMuette()
 
     # `ou_en_est` patiente ATTENTE_SUIVI_S quand rien ne bouge : sans l'abaisser ici, le
     # chantier finirait PENDANT l'attente et l'on ne mesurerait jamais son « en cours ».
@@ -397,6 +424,7 @@ def test_le_chantier_dit_ou_il_en_est_puis_son_resultat() -> None:
     time.sleep(0.6)
     apres = mcp_jeu._etat_chantier()
     mcp_jeu.ATTENTE_SUIVI_S = vraie_attente
+    mcp_jeu._api = vrai_api
 
     en_cours = "en cours" in pendant.lower()
     rendu = "29 entités" in apres
@@ -978,9 +1006,14 @@ def test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros() -> None:
     engrenage : quelques secondes. Refuser pour cela, c'est renvoyer vers l'outil de dix
     minutes pour économiser dix secondes.
 
-    La limite reste, mais au bon endroit : on forge le PETIT qui manque — bras, four — et
+    La limite reste, mais au bon endroit : on forge le PETIT qui manque — le four — et
     jamais la foreuse, qui suppose de miner et de fondre. Sans foreuse en poche, il n'y a
     pas de geste minimal, et le dire honnêtement vaut mieux que le simuler longuement.
+
+    MISE À JOUR : le « petit » était `burner-inserter` et `stone-furnace` quand ce banc a
+    été écrit. Le joueur a ensuite établi que le bras est inutile — un four posé sur la
+    tuile de drop reçoit directement — donc il ne reste que le four. La RÈGLE testée n'a
+    pas changé ; sa matière, si.
     """
     import mcp_jeu, asyncio, time
 
@@ -988,7 +1021,7 @@ def test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros() -> None:
 
     class _ApiPresque:
         def __init__(self):
-            self.inv = {"burner-mining-drill": 1, "stone-furnace": 1, "coal": 20}
+            self.inv = {"burner-mining-drill": 1, "coal": 20}   # four absent : à forger
         def get_state(self):
             return {"tick": 1, "character": {"x": 0.0, "y": 0.0},
                     "inventory": dict(self.inv)}
@@ -1029,7 +1062,7 @@ def test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros() -> None:
     finally:
         mcp_jeu._api, mcp_jeu._ETAT["coord"] = vrai_api, vrai_coord
 
-    forge_bras = any(n == "burner-inserter" for n, _ in forges_premier)
+    forge_bras = any(n == "stone-furnace" for n, _ in forges_premier)
     # On mesure l'ACTE, pas le vocabulaire : un premier jet exigeait que le mot « forg »
     # soit absent du refus, alors que celui-ci dit très justement « le forger suppose de
     # miner puis fondre ». Ce qui compte est qu'aucune fabrication n'ait été lancée.
@@ -1038,6 +1071,91 @@ def test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros() -> None:
     ok = forge_bras and renonce_sans_foreuse
     rec("test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros", ok,
         f"forgé={forges_premier} — sans foreuse : {str(r2)[:70]!r}")
+    assert ok
+
+
+def test_extraire_pose_deux_entites_et_ne_forge_plus_de_bras() -> None:
+    """« TU N'AS PAS BESOIN DU BRAS » — le joueur avait raison contre nos notes.
+
+    Le MicroPlanner affirmait depuis des mois : « drop-direct drill→furnace IMPOSSIBLE en
+    Factorio 2.0. L'inserter au milieu est la solution ». La note du même épisode disait
+    pourtant autre chose : « four posé à vue de nez derrière un drill = drop au sol —
+    cause réelle : four 1 TUILE TROP LOIN + drop hors axe ». Une conclusion d'impossibilité
+    tirée d'un mauvais placement, jamais remesurée.
+
+    La géométrie tranche : foreuse en (0,0) vers le sud, drop en (0.5, 1.25) ; le plan
+    mettait le four en (0,4), soit deux tuiles au-delà. Posé en (0,2), son emprise 2×2
+    couvre le drop sans chevaucher la foreuse.
+
+    Conséquence directe sur l'outil : deux entités au lieu de trois, et plus rien à forger
+    au démarrage — le kit contient déjà foreuse et four. H51 forgeait un `burner-inserter`
+    dont on vient d'établir qu'il ne sert à rien ici.
+    """
+    import mcp_jeu, asyncio, time
+
+    forges = []
+
+    class _ApiDeux:
+        def __init__(self):
+            self.poses, self.terrain = [], []
+            self.inv = {"burner-mining-drill": 1, "stone-furnace": 1, "coal": 40}
+        def get_state(self):
+            return {"tick": 1, "character": {"x": 0.0, "y": 0.0},
+                    "position": {"x": 0.0, "y": 0.0}, "inventory": dict(self.inv)}
+        def find_nearest(self, nom):
+            return {"found": True, "x": 6.0, "y": 0.0, "name": nom}
+        def generate_terrain(self, *a, **kw):
+            return {"ok": True}
+        def can_place_check(self, *a, **kw):
+            return {"can_place": True}
+        def place_entity_at(self, nom, x, y, *a, **kw):
+            if self.inv.get(nom, 0) <= 0:
+                return {"ok": False, "detail": "plus en poche"}
+            self.inv[nom] -= 1
+            self.poses.append(nom)
+            self.terrain.append({"name": nom, "type": nom, "x": x, "y": y})
+            return {"ok": True}
+        def move_items_at(self, *a, **kw):
+            return {"ok": True}
+        def walk_to(self, x, y, **kw):
+            return {"ok": True}
+        def inspect_at(self, x=0.0, y=0.0, radius=0.5, *a, **kw):
+            return {"entities": [e for e in self.terrain
+                                 if abs(e["x"] - x) <= max(radius, 2.0)
+                                 and abs(e["y"] - y) <= max(radius, 2.0)]}
+        def run_action(self, fn, *a, **kw):
+            return fn(*a, **kw)
+
+    api = _ApiDeux()
+
+    class _CoordFactice:
+        def fabriquer(self, item, combien=1):
+            forges.append(item)
+            return True, ""
+
+    vrai_api, vrai_coord = mcp_jeu._api, mcp_jeu._ETAT.get("coord")
+    mcp_jeu._api = lambda: api
+    mcp_jeu._ETAT["coord"] = _CoordFactice()
+    mcp_jeu._AVATAR_VU[:] = [time.time(), None]
+    try:
+        for _ in range(60):
+            if not mcp_jeu._chantier_tourne():
+                break
+            time.sleep(0.1)
+        brut = getattr(mcp_jeu.extraire_ici, "fn", mcp_jeu.extraire_ici)
+        r = brut("iron-ore")
+        if asyncio.iscoroutine(r):
+            r = asyncio.run(r)
+    finally:
+        mcp_jeu._api, mcp_jeu._ETAT["coord"] = vrai_api, vrai_coord
+
+    foreuse = "burner-mining-drill" in api.poses
+    four = "stone-furnace" in api.poses
+    pas_de_bras = "burner-inserter" not in api.poses and "burner-inserter" not in forges
+
+    ok = foreuse and four and pas_de_bras
+    rec("test_extraire_pose_deux_entites_et_ne_forge_plus_de_bras", ok,
+        f"posé={api.poses} forgé={forges}")
     assert ok
 
 
@@ -1062,7 +1180,8 @@ def main() -> int:
               test_extraire_pose_avec_ce_qu_on_a_sans_rien_fabriquer,
               test_la_fin_d_un_chantier_se_dit_sans_qu_on_la_demande,
               test_aucune_action_ne_se_glisse_pendant_un_chantier,
-              test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros):
+              test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros,
+              test_extraire_pose_deux_entites_et_ne_forge_plus_de_bras):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

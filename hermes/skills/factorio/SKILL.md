@@ -21,9 +21,10 @@ ordre, on mine à la main pendant vingt minutes et on ne pose jamais rien.
 2. `ou_sont_les_ressources("iron-ore")` — savoir où est le fer.
 3. **Poser de quoi produire.** Deux outils, et le choix te revient :
 
-   - `extraire_ici("iron-ore")` — foreuse, bras, four sur la sortie. Trois entités,
-     quelques secondes. Il te faut une foreuse en poche (tu en as une au départ) ; le
-     bras et le four, il les forge, ils coûtent une plaque et un engrenage.
+   - `extraire_ici("iron-ore")` — une foreuse, un four posé sur sa sortie. DEUX entités,
+     quelques secondes. Le four reçoit le minerai directement : aucun bras n'est
+     nécessaire. Il te faut une foreuse en poche — tu en as une au départ, et un four
+     aussi.
    - `batir_une_chaine("iron-plate")` — l'usine. Elle choisit son gisement au débit
      visé, marche jusqu'à lui, et forge tout un plan AVANT de poser : mesuré entre 5 et
      14 minutes selon la carte, pendant lesquelles rien ne produit.
@@ -367,10 +368,12 @@ ta réponse : elle est lue.
 
 ## Deux façons de produire, à toi de choisir
 
-`extraire_ici(ressource)` pose TOUT DE SUITE trois entités — foreuse, bras, four sur la
-sortie. Il te faut une FOREUSE ; le bras et le four, il les forge au besoin, ils coûtent
-une plaque et un engrenage. Sans foreuse en revanche il renonce et te le dit : en fabriquer
-une suppose de miner puis de fondre, c'est-à-dire la longue attente qu'il sert à éviter.
+`extraire_ici(ressource)` pose TOUT DE SUITE deux entités : une foreuse, et un four sur sa
+tuile de sortie. Le four y reçoit le minerai directement, sans bras — ce que le mod croyait
+impossible, jusqu'à ce qu'un joueur mesure que l'échec venait d'un four posé une tuile trop
+loin. Il te faut une FOREUSE ; le four, il le forge au besoin. Sans foreuse il renonce et
+te le dit : en fabriquer une suppose de miner puis de fondre, c'est-à-dire la longue
+attente qu'il sert à éviter.
 
 C'est le geste du début de partie. `batir_une_chaine` planifie l'usine entière : elle
 choisit son gisement au débit, marche jusqu'à lui, et fabrique ce qui lui manque AVANT de
