@@ -1838,8 +1838,9 @@ class Coordinator:
         n = len(getattr(rap, "placed", []) or [])
         if not rap.ok:
             return False, (f"chaîne « {item} » incomplète : {n} entité(s) posée(s), "
-                           f"missing={getattr(rap, 'missing', None)} "
-                           f"blocked={(getattr(rap, 'blocked', []) or [])[:1]}{fabriques}")
+                           + self._dire_le_manque(getattr(rap, "missing", None),
+                                                  getattr(rap, "blocked", []) or [])
+                           + fabriques)
         # UNE CHAÎNE POSÉE N'EST PAS UNE CHAÎNE VIVANTE. Le plan sème ses poteaux, mais
         # rien ne les rattache au réseau : mesuré en jeu, trois cent soixante-sept entités
         # debout, recettes réglées — et six assembleuses, sept foreuses et cinq bras en
@@ -2079,6 +2080,41 @@ class Coordinator:
         cause = ("plus de poteaux en poche" if reste <= 0
                  else f"obstacle infranchissable ({reste} poteau(x) restant(s))")
         return ligne, False, cause
+
+    def _dire_le_manque(self, manque, bloque=()) -> str:
+        """Dit en toutes lettres ce qui manque, avec le TOTAL à viser.
+
+        UN MESSAGE D'ÉCHEC EST UNE INSTRUCTION : il doit se lire, pas se décoder. Partie
+        22, l'agent bute sur un charbon et les deux outils se parlent sans s'entendre :
+
+            11:48:54  batir_une_centrale  ÉCHEC — missing={'coal': 1} blocked=[]
+            11:48:56  se_procurer coal 5  ÉCHEC — l'inventaire en contient déjà assez
+            11:48:58  batir_une_centrale  ← il recommence
+
+        Les deux disent vrai. `missing` annonce un MANQUE de 1, `se_procurer` attend un
+        TOTAL de 5 ; il en avait déjà cinq, donc l'outil n'a rien fait pendant que la
+        centrale répétait qu'il en manquait. C'est le piège H36 exactement, mais subi par
+        l'agent au lieu de l'auteur — et la sortie brute le lui tendait.
+
+        Un `repr` de dict oblige à savoir que la clé est un nom d'objet, que la valeur est
+        un delta et non une cible, et que `blocked=[]` veut dire « rien ne gêne ». Rien de
+        cela n'est écrit nulle part. On rend donc le total à viser, qui est justement le
+        nombre à passer à `se_procurer`, plutôt que le delta qu'il faudrait convertir.
+        """
+        try:
+            inv = perception.inventory(self.api)
+        except Exception:
+            inv = {}
+        bouts = []
+        for nom, combien in (manque or {}).items():
+            vise = inv.get(str(nom), 0) + int(combien)
+            bouts.append(f"{nom} (il t'en faut {vise} en tout, tu en as "
+                         f"{inv.get(str(nom), 0)})")
+        phrase = "il te manque " + ", ".join(bouts) if bouts else ""
+        gene = list(bloque or ())[:1]
+        if gene:
+            phrase += (" — et " if phrase else "") + f"la pose est gênée : {gene[0]}"
+        return phrase or "cause inconnue"
 
     def _foreuse_existante(self, ancre: tuple[float, float], foreur: str):
         """La foreuse déjà posée sur cette ancre, s'il y en a une — sinon None.
@@ -4491,8 +4527,8 @@ class Coordinator:
                     return False, (f"centrale non bâtie : « {resistent} » manque et n'a "
                                    f"pas pu être fabriqué")
             if not rap.ok:
-                return False, (f"centrale non bâtie : missing={rap.missing} "
-                               f"blocked={rap.blocked[:1]}")
+                return False, ("centrale non bâtie : "
+                               + self._dire_le_manque(rap.missing, rap.blocked))
             # Relier la centrale à la zone de travail, sans quoi elle n'alimente rien.
             depart = next(((p.x, p.y) for p in rap.placed if p.role == "pole"),
                           site.origine)

@@ -212,6 +212,16 @@ def _bandeau_du_joueur(resultat):
     if not msgs:
         return resultat
     dits = "\n".join(f"  [{m.get('joueur', '?')}] {m.get('texte', '')}" for m in msgs)
+    # ON TRACE CE QU'ON SOUFFLE. Sans cela un message livré et un message perdu se
+    # ressemblent : le 10/08, trois messages envoyés sans réaction visible m'ont fait
+    # chercher dix minutes une panne du canal qui n'existait pas — l'agent était
+    # simplement au milieu d'un `batir_une_chaine` de plusieurs minutes, et aucun outil
+    # n'avait encore rendu. Et surtout, les résultats d'une partie où l'on a soufflé ne
+    # valent pas ceux d'une partie autonome ; on ne peut pas s'en souvenir après coup.
+    try:
+        _fin("MESSAGE DU JOUEUR", dits, 0.0)
+    except Exception:
+        pass
     return ("LE JOUEUR TE PARLE — tiens-en compte avant de poursuivre :\n"
             f"{dits}\n\n{resultat}")
 

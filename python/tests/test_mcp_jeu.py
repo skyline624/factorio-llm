@@ -201,12 +201,52 @@ def test_un_chat_muet_ne_coute_rien_a_l_agent() -> None:
     assert ok
 
 
+def test_ce_qu_on_souffle_a_l_agent_laisse_une_trace() -> None:
+    """UNE PARTIE COACHÉE NE SE COMPARE PAS À UNE PARTIE AUTONOME — encore faut-il savoir.
+
+    Le bandeau se greffe APRÈS que le journal a enregistré le résultat : ce que le joueur
+    a soufflé n'apparaît donc nulle part dans `mcp_appels.log`. Conséquence vécue le
+    10/08 — trois messages envoyés, aucune réaction visible, et faute de trace j'ai
+    cherché pendant dix minutes une panne du canal qui n'existait pas. Le canal marchait ;
+    l'agent était simplement au milieu d'un `batir_une_chaine` de plusieurs minutes, et
+    aucun outil n'avait encore rendu.
+
+    Deux raisons de tracer, donc. La première est le diagnostic : sans trace, un message
+    livré et un message perdu se ressemblent. La seconde pèse plus lourd — les résultats
+    d'une partie où on a soufflé ne valent pas ceux d'une partie autonome, et on ne peut
+    pas s'en souvenir après coup.
+    """
+    import mcp_jeu
+
+    trace = []
+    vrai_fin, vrai_api = mcp_jeu._fin, mcp_jeu._api
+    file = [{"joueur": "pier", "texte": "vide tes fours"}]
+
+    class _ApiChat:
+        def read_messages(self):
+            lu, file[:] = list(file), []
+            return {"messages": lu}
+
+    mcp_jeu._fin = lambda nom, res, duree=0.0: trace.append((nom, str(res)))
+    mcp_jeu._api = lambda: _ApiChat()
+    try:
+        mcp_jeu._bandeau_du_joueur("machines en service : 12")
+    finally:
+        mcp_jeu._fin, mcp_jeu._api = vrai_fin, vrai_api
+
+    ok = any("vide tes fours" in r for _, r in trace)
+    rec("test_ce_qu_on_souffle_a_l_agent_laisse_une_trace", ok,
+        f"{len(trace)} entrée(s) journalisée(s) : {trace}")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
               test_reparer_prefere_une_machine_a_une_belt,
               test_le_joueur_peut_couper_la_parole_a_l_agent,
-              test_un_chat_muet_ne_coute_rien_a_l_agent):
+              test_un_chat_muet_ne_coute_rien_a_l_agent,
+              test_ce_qu_on_souffle_a_l_agent_laisse_une_trace):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

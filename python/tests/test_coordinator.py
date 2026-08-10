@@ -3076,6 +3076,43 @@ def test_la_ligne_forge_ses_poteaux_et_ne_ment_pas_sur_la_cause() -> None:
     assert ok
 
 
+def test_un_manque_se_dit_en_phrase_et_pas_en_dict_python() -> None:
+    """LE MESSAGE D'ÉCHEC EST UNE INSTRUCTION — il doit se lire, pas se décoder.
+
+    Partie 22, l'agent bute sur un charbon et les deux outils se parlent sans s'entendre :
+
+        11:48:54  batir_une_centrale  ÉCHEC — missing={'coal': 1} blocked=[]
+        11:48:56  se_procurer coal 5  ÉCHEC — rien à faire, l'inventaire en contient assez
+        11:48:58  batir_une_centrale  ← il recommence
+
+    Les deux disent vrai. `missing` annonce un MANQUE de 1, `se_procurer` attend un TOTAL
+    de 5 ; il en avait déjà cinq, donc l'outil n'a rien fait et a répondu « tu en as assez »
+    pendant que la centrale répétait qu'il en manquait. C'est le piège H36 exactement, mais
+    subi par l'agent au lieu de l'auteur — et la sortie brute le lui tend.
+
+    Un `repr` de dict oblige à savoir que la clé est un nom d'objet, que la valeur est un
+    delta et non une cible, et que `blocked=[]` signifie « rien ne gêne ». Rien de tout
+    cela n'est écrit. On le dit donc en toutes lettres, avec le TOTAL à viser — le nombre
+    qu'il faut passer à `se_procurer` — plutôt que le delta qu'il faut convertir.
+    """
+    from agents.coordinator import Coordinator
+
+    class _ApiManque:
+        def get_state(self):
+            return {"inventory": {"coal": 5}, "tick": 1, "ready": True}
+
+    c = _coord_mesure(_ApiManque())
+    phrase = Coordinator._dire_le_manque(c, {"coal": 1}, [])
+
+    dit_quoi = "coal" in phrase
+    dit_le_total = "6" in phrase              # 5 en poche + 1 manquant
+    pas_de_jargon = "{" not in phrase and "missing=" not in phrase
+
+    ok = dit_quoi and dit_le_total and pas_de_jargon
+    rec("test_un_manque_se_dit_en_phrase_et_pas_en_dict_python", ok, repr(phrase))
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -3128,6 +3165,7 @@ def main() -> int:
         test_fabriquer_recolte_avant_de_planifier,
         test_on_recolte_a_nouveau_quand_l_usine_a_reproduit,
         test_la_ligne_forge_ses_poteaux_et_ne_ment_pas_sur_la_cause,
+        test_un_manque_se_dit_en_phrase_et_pas_en_dict_python,
         test_le_coffre_d_evacuation_essaie_aussi_les_diagonales,
         test_la_foreuse_a_charbon_recoit_un_bras_de_retour,
         test_l_evacuation_s_approche_avant_de_poser_son_coffre,

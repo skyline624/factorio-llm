@@ -1,0 +1,22 @@
+{
+  "rule_ids": [
+    "plain_http_to_sink"
+  ],
+  "severity": "HIGH",
+  "command_redacted": "curl -sv -m 10 -X POST http://host.docker.internal:8765/mcp -H \"Content-Type: ap...",
+  "findings": [
+    {
+      "rule_id": "plain_http_to_sink",
+      "severity": "HIGH",
+      "title": "Plain HTTP URL in execution context",
+      "description": "URL 'http://host.docker.internal:8765/mcp' uses unencrypted HTTP and is being passed to a command that downloads or executes content. An attacker on the network could modify the content.",
+      "evidence": [
+        {
+          "type": "url",
+          "raw": "http://host.docker.internal:8765/mcp"
+        }
+      ]
+    }
+  ],
+  "timestamp": "2026-08-10T12:53:51.086416320+00:00"
+}
