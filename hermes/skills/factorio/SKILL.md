@@ -19,20 +19,25 @@ ordre, on mine à la main pendant vingt minutes et on ne pose jamais rien.
 
 1. `etat_du_jeu` — voir où l'on est.
 2. `ou_sont_les_ressources("iron-ore")` — savoir où est le fer.
-3. **`batir_une_chaine("iron-plate")`** — la poser. C'est l'étape qui compte, et elle
-   vient TÔT. Elle fabrique elle-même ce qui lui manque : n'attends pas d'avoir « assez
-   de matériel » pour l'appeler, c'est son travail.
-4. `etat_du_jeu` — vérifier ce qui est en terre.
-5. `diagnostiquer` puis `reparer` — mettre en marche ce qui ne tourne pas.
+3. **`extraire_ici("iron-ore")`** — SI tu as déjà une foreuse, un bras et un four en
+   poche. Trois entités, quelques secondes, et le fer se met à couler pendant que tu
+   prépares la suite. Regarde ton inventaire avant : l'outil ne fabrique rien et te dira
+   ce qui manque.
+4. **`batir_une_chaine("iron-plate")`** — l'usine, pour le volume. Elle fabrique
+   elle-même ce qui lui manque : n'attends pas d'avoir « assez de matériel » pour
+   l'appeler, c'est son travail. Mais elle forge AVANT de poser, donc elle prend des
+   minutes — d'où l'étape 3, qui produit en attendant.
+5. `etat_du_jeu` — vérifier ce qui est en terre.
+6. `diagnostiquer` puis `reparer` — mettre en marche ce qui ne tourne pas.
 
 Puis — et c'est là que la partie se gagne ou stagne :
 
-6. **`chercher_une_technologie("electronics")`** — dix plaques de cuivre, rien de plus.
+7. **`chercher_une_technologie("electronics")`** — dix plaques de cuivre, rien de plus.
    Elle ouvre `small-electric-pole`, `inserter`, `electronic-circuit` et `lab`.
-7. **`batir_une_centrale`** — `steam-power` s'acquiert toute seule dès que tu as fabriqué
+8. **`batir_une_centrale`** — `steam-power` s'acquiert toute seule dès que tu as fabriqué
    cinquante plaques de fer, donc tu l'as déjà quand ta chaîne tourne. Sans les poteaux
-   de l'étape 6, en revanche, le courant ne va nulle part : fais les deux dans cet ordre.
-8. **Passe tes machines à l'électrique.** C'est l'étape qui change tout, et la raison
+   de l'étape 7, en revanche, le courant ne va nulle part : fais les deux dans cet ordre.
+9. **Passe tes machines à l'électrique.** C'est l'étape qui change tout, et la raison
    d'être des deux précédentes.
 
 **POURQUOI L'ÉLECTRIQUE CHANGE TOUT.** Une machine burner a un réservoir : il faut le
