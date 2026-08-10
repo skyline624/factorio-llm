@@ -112,6 +112,14 @@ class ModApi:
         """Depose un message dans la file, sans passer par le clavier."""
         return self._call("fl_tools", "push_message", auteur, texte)
 
+    def say(self, texte: str) -> dict:
+        """Ecrit dans le chat du jeu, prefixe [Hermes]."""
+        return self._call("fl_tools", "say", texte)
+
+    def peek_messages(self) -> dict:
+        """Les messages en attente, SANS vider la file (cf. read_messages)."""
+        return self._call("fl_tools", "peek_messages")
+
     def read_messages(self) -> dict:
         """Ce que le joueur a tape dans le chat depuis la derniere lecture. VIDE la file."""
         return self._call("fl_tools", "read_messages")

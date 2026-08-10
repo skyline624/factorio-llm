@@ -240,13 +240,226 @@ def test_ce_qu_on_souffle_a_l_agent_laisse_une_trace() -> None:
     assert ok
 
 
+def test_le_serveur_repond_quand_l_agent_ne_peut_pas() -> None:
+    """PENDANT QU'IL ATTEND UN OUTIL, L'AGENT N'EXISTE PAS.
+
+    Aucun tour de modèle ne tourne entre l'appel et son retour : il ne peut ni lire ni
+    écrire. Mesuré ce jour — `batir_une_chaine` lancé à 14:56:05, trois messages envoyés
+    entre 14:54 et 14:58, aucune réaction avant la fin de la construction. Le joueur en
+    conclut que ses messages se perdent, alors qu'ils sont seulement en file.
+
+    On ne peut pas faire parler l'agent pendant ce temps. On peut faire parler le SERVEUR,
+    qui lui sait deux choses que le joueur ignore : que le message est bien arrivé, et ce
+    que l'agent est en train de faire depuis combien de temps. C'est ce qui manque —
+    « occupé » ne s'invente pas depuis l'extérieur, « silencieux » et « perdu » se
+    ressemblent.
+
+    Le veilleur ne consomme PAS la file : il regarde sans vider, sans quoi il détruirait
+    le message avant que l'agent le voie. Deux lecteurs, deux besoins.
+    """
+    import mcp_jeu
+
+    dits, lu_destructif = [], []
+
+    class _ApiVeille:
+        def peek_messages(self):
+            return {"messages": [{"joueur": "pier", "texte": "tu as une foreuse ?"}]}
+        def read_messages(self):
+            lu_destructif.append(1)
+            return {"messages": []}
+        def say(self, texte):
+            dits.append(texte)
+            return {"ok": True}
+
+    vrai = mcp_jeu._api
+    mcp_jeu._api = lambda: _ApiVeille()
+    try:
+        mcp_jeu._accuser_reception("batir_une_chaine", 187.0)
+    finally:
+        mcp_jeu._api = vrai
+
+    a_parle = len(dits) == 1
+    dit_quoi = a_parle and "batir_une_chaine" in dits[0]
+    dit_depuis = a_parle and ("3" in dits[0] or "187" in dits[0])
+    na_pas_vole = not lu_destructif
+
+    ok = a_parle and dit_quoi and dit_depuis and na_pas_vole
+    rec("test_le_serveur_repond_quand_l_agent_ne_peut_pas", ok,
+        f"dit={dits} file_consommee={bool(lu_destructif)}")
+    assert ok
+
+
+def test_le_veilleur_n_accuse_qu_une_fois_le_meme_message() -> None:
+    """UN ACCUSÉ RÉPÉTÉ EST UNE NUISANCE — il s'affiche à l'écran du joueur.
+
+    Le veilleur regarde la file toutes les quelques secondes ; le message y reste jusqu'à
+    ce que l'agent le lise, ce qui peut durer les dix minutes d'un `batir_une_chaine`.
+    Sans garde, le joueur verrait « bien reçu » deux cents fois par-dessus son jeu.
+    """
+    import mcp_jeu
+
+    dits = []
+
+    class _ApiVeille:
+        def peek_messages(self):
+            return {"messages": [{"joueur": "pier", "texte": "meme message"}]}
+        def say(self, texte):
+            dits.append(texte)
+            return {"ok": True}
+
+    vrai = mcp_jeu._api
+    mcp_jeu._api = lambda: _ApiVeille()
+    mcp_jeu._DERNIER_ACCUSE = None
+    try:
+        for _ in range(5):
+            mcp_jeu._accuser_reception("batir_une_chaine", 60.0)
+    finally:
+        mcp_jeu._api = vrai
+
+    ok = len(dits) == 1
+    rec("test_le_veilleur_n_accuse_qu_une_fois_le_meme_message", ok,
+        f"{len(dits)} accusé(s) pour 5 passages")
+    assert ok
+
+
+def test_un_chantier_rend_la_main_tout_de_suite() -> None:
+    """QUATORZE MINUTES SANS LA MAIN, C'EST QUATORZE MINUTES DE SURDITÉ.
+
+    Partie 23 : `batir_une_chaine` part à 14:56:05 et rend à 15:10:09. Le joueur écrit
+    trois fois pendant ce temps et ne voit rien venir. Ce n'est pas qu'un agent occupé
+    ignore les messages — entre l'appel d'un outil et son retour, aucun tour de modèle ne
+    tourne. Il n'est pas sourd, il n'est pas là.
+
+    Le premier réflexe fut de faire parler le serveur à sa place, le second d'interrompre
+    le chantier dès qu'un message arrive. Les deux décident À SA PLACE. Ce que le joueur a
+    demandé est plus juste : que le travail CONTINUE, que l'agent garde la main, et que ce
+    soit LUI qui juge, son message lu, s'il coupe ou s'il laisse finir.
+
+    L'outil rend donc immédiatement un numéro de chantier. L'agent suit par `ou_en_est`
+    quand il veut — et c'est là qu'il reçoit ce qu'on lui dit, quelques secondes après,
+    au lieu de quatorze minutes.
+    """
+    import mcp_jeu, time
+
+    def _long():
+        time.sleep(0.4)
+        return "chaîne bâtie : 29 entités"
+
+    t0 = time.time()
+    reponse = mcp_jeu._lancer_chantier("batir_une_chaine", _long)
+    rendu_en = time.time() - t0
+
+    tout_de_suite = rendu_en < 0.2
+    donne_un_numero = "1" in reponse
+    dit_quoi_faire = "ou_en_est" in reponse
+
+    ok = tout_de_suite and donne_un_numero and dit_quoi_faire
+    rec("test_un_chantier_rend_la_main_tout_de_suite", ok,
+        f"rendu en {rendu_en:.3f}s — {reponse!r}")
+    assert ok
+
+
+def test_le_chantier_dit_ou_il_en_est_puis_son_resultat() -> None:
+    """SUIVRE N'EST PAS ATTENDRE — et le résultat ne doit pas se perdre en route.
+
+    Un chantier qu'on lance sans pouvoir en lire l'issue ne vaut rien : l'agent saurait
+    qu'il a demandé une chaîne, jamais si elle est là. `ou_en_est` répond donc « en cours »
+    tant qu'il tourne, puis rend le résultat COMPLET une fois fini — le même texte que
+    l'outil synchrone rendait avant.
+    """
+    import mcp_jeu, time
+
+    mcp_jeu._lancer_chantier("batir_une_chaine", lambda: (time.sleep(0.3), "29 entités")[1])
+    pendant = mcp_jeu.ou_en_est_le_chantier.fn() if hasattr(
+        mcp_jeu.ou_en_est_le_chantier, "fn") else mcp_jeu._etat_chantier()
+    time.sleep(0.6)
+    apres = mcp_jeu._etat_chantier()
+
+    en_cours = "en cours" in pendant.lower()
+    rendu = "29 entités" in apres
+
+    ok = en_cours and rendu
+    rec("test_le_chantier_dit_ou_il_en_est_puis_son_resultat", ok,
+        f"pendant={pendant!r} apres={apres!r}")
+    assert ok
+
+
+def test_deux_chantiers_ne_pilotent_pas_le_meme_avatar() -> None:
+    """UN SEUL AVATAR, DONC UN SEUL CHANTIER.
+
+    Deux constructions simultanées se disputeraient le personnage : chacune le fait
+    marcher ailleurs, et les poses tombent où il n'est pas. Le cas s'est produit le 09/08
+    par accident — deux conteneurs lancés sur la même partie, cinquante-cinq minutes de
+    jeu illisibles.
+
+    Le second appel n'attend donc pas en silence : il dit ce qui occupe la place et
+    comment reprendre la main. Un refus qui n'explique pas se retente en boucle.
+    """
+    import mcp_jeu, time
+
+    mcp_jeu._lancer_chantier("batir_une_chaine", lambda: (time.sleep(0.5), "fini")[1])
+    refus = mcp_jeu._lancer_chantier("batir_une_centrale", lambda: "jamais")
+
+    refuse = "jamais" not in refus and "en cours" in refus.lower()
+    dit_quoi = "batir_une_chaine" in refus
+    dit_comment = "arreter" in refus.lower() or "arrête" in refus.lower()
+
+    ok = refuse and dit_quoi and dit_comment
+    rec("test_deux_chantiers_ne_pilotent_pas_le_meme_avatar", ok, repr(refus))
+    assert ok
+
+
+def test_arreter_le_chantier_atteint_vraiment_la_pose() -> None:
+    """UN BOUTON D'ARRÊT QUI N'ARRÊTE RIEN EST PIRE QUE PAS DE BOUTON.
+
+    `arreter_le_chantier` lève un drapeau dans le serveur MCP ; la pose, elle, se déroule
+    dans l'`executor`, trois couches plus bas. Entre les deux il faut que quelqu'un porte
+    le message — sinon l'agent lit « arrêt demandé », attend, et la construction va au bout
+    comme si de rien n'était.
+
+    C'est le défaut typique du dépôt : H10 posé sous un drapeau que l'appelant met à False,
+    H23 posé dans une méthode que l'appelant ne traverse pas, H27 posé dans une branche
+    jamais prise. Trois correctifs inertes, chacun cru bon pendant une partie entière. On
+    vérifie donc le CHEMIN, pas l'intention.
+    """
+    import mcp_jeu
+
+    coord = mcp_jeu._coord.__wrapped__ if hasattr(mcp_jeu._coord, "__wrapped__") else None
+    # On ne construit pas de Coordinator ici (il lui faut le jeu) : on vérifie que le
+    # serveur lui attache bien de quoi savoir qu'on veut l'arrêter.
+    class _Faux:
+        pass
+    faux = _Faux()
+    mcp_jeu._ETAT["coord"] = faux
+    mcp_jeu._brancher_l_arret(faux)
+
+    porte = getattr(faux, "interrompu_par", None)
+    mcp_jeu._CHANTIER["arret"] = False
+    avant = porte() if callable(porte) else None
+    mcp_jeu._CHANTIER["arret"] = True
+    apres = porte() if callable(porte) else None
+    mcp_jeu._CHANTIER["arret"] = False
+    mcp_jeu._ETAT["coord"] = None
+
+    ok = callable(porte) and avant is False and apres is True
+    rec("test_arreter_le_chantier_atteint_vraiment_la_pose", ok,
+        f"porté={callable(porte)} avant={avant} après={apres}")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
               test_reparer_prefere_une_machine_a_une_belt,
               test_le_joueur_peut_couper_la_parole_a_l_agent,
               test_un_chat_muet_ne_coute_rien_a_l_agent,
-              test_ce_qu_on_souffle_a_l_agent_laisse_une_trace):
+              test_ce_qu_on_souffle_a_l_agent_laisse_une_trace,
+              test_le_serveur_repond_quand_l_agent_ne_peut_pas,
+              test_le_veilleur_n_accuse_qu_une_fois_le_meme_message,
+              test_un_chantier_rend_la_main_tout_de_suite,
+              test_le_chantier_dit_ou_il_en_est_puis_son_resultat,
+              test_deux_chantiers_ne_pilotent_pas_le_meme_avatar,
+              test_arreter_le_chantier_atteint_vraiment_la_pose):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

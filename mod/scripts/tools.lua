@@ -1265,6 +1265,23 @@ function M.push_message(joueur, texte)
   })
 end
 
+
+function M.say(texte)
+  -- L'agent parle DANS LE JEU. Sans cela il repond dans un log que le joueur n'a pas
+  -- sous les yeux : on lui donne un canal descendant sans canal montant, et l'humain
+  -- croit ses messages perdus alors qu'ils sont seulement en attente.
+  game.print("[Hermes] " .. tostring(texte or ""))
+  return json.encode({ok = true})
+end
+
+function M.peek_messages()
+  -- Lire SANS vider. `read_messages` consomme par conception, ce qui est juste pour
+  -- l'agent -- mais un veilleur qui accuse reception detruirait alors le message avant
+  -- que l'agent le voie. Deux lecteurs, deux besoins.
+  storage.fl = storage.fl or {}
+  return json.encode({messages = storage.fl.messages or {}})
+end
+
 function M.read_messages()
   storage.fl = storage.fl or {}
   local file = storage.fl.messages or {}

@@ -63,6 +63,10 @@ remote.add_interface("fl_tools", {
   production_stats = function() safe(function() return tools.production_stats() end) end,
   -- Ce que le joueur a tape dans le chat depuis la derniere lecture. Vide la file.
   read_messages = function() safe(function() return tools.read_messages() end) end,
+  -- Lire sans vider : pour qui accuse reception sans voler le message a l'agent.
+  peek_messages = function() safe(function() return tools.peek_messages() end) end,
+  -- L'agent (ou le serveur) parle dans le chat du jeu.
+  say = function(texte) safe(function() return tools.say(texte) end) end,
   -- Deposer un message SANS passer par le clavier. Deux usages reels : prouver le
   -- canal de bout en bout sans dependre d'un humain qui tape (`require` depuis la
   -- console RCON rend une COPIE du module, pas celui du mod -- la file deposee n'est

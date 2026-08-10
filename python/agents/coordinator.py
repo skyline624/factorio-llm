@@ -1732,7 +1732,7 @@ class Coordinator:
             # après 646 s d'approvisionnement réussi. `execute_micro` s'approche donc de
             # chaque pose lointaine indépendamment de ce drapeau, en s'arrêtant à
             # `RECUL_POSE` tuiles de la cible pour ne pas occuper l'emplacement.
-            return execute_micro(self.api, lp, fuel=self.combustible,
+            return self._executer(lp, fuel=self.combustible,
                                  fuel_count=self.AMORCE_BRAS, approach=False,
                                  timeout=40.0)
 
@@ -2115,6 +2115,22 @@ class Coordinator:
         if gene:
             phrase += (" — et " if phrase else "") + f"la pose est gênée : {gene[0]}"
         return phrase or "cause inconnue"
+
+    def _executer(self, plan, **kw):
+        """Toute pose passe par ici — c'est ce qui rend l'arrêt possible.
+
+        UN BOUTON D'ARRÊT QUI N'ARRÊTE RIEN EST PIRE QUE PAS DE BOUTON. Le drapeau vit
+        dans le serveur MCP, la pose se déroule dans l'`executor` ; sans un point de
+        passage unique il aurait fallu penser à porter l'interrupteur à chacun des six
+        appels, et en oublier un suffit à rendre l'arrêt muet sur ce chemin-là.
+
+        C'est le défaut typique de ce dépôt : H10 posé sous un drapeau que l'appelant met
+        à False, H23 dans une méthode que l'appelant ne traverse pas, H27 dans une branche
+        jamais prise. Trois correctifs inertes, chacun cru bon pendant une partie entière.
+        """
+        from services.executor import execute_micro
+        kw.setdefault("interrompu_par", getattr(self, "interrompu_par", None))
+        return execute_micro(self.api, plan, **kw)
 
     def _foreuse_existante(self, ancre: tuple[float, float], foreur: str):
         """La foreuse déjà posée sur cette ancre, s'il y en a une — sinon None.
@@ -4302,7 +4318,7 @@ class Coordinator:
             drill = _Pose(deja[0], deja[1], foreur)
             essais.append(f"foreuse déjà en place en ({deja[0]:.0f},{deja[1]:.0f}) : reprise")
         else:
-            rap = execute_micro(self.api, mp, generate=False, approach=True, timeout=90.0)
+            rap = self._executer(mp, generate=False, approach=True, timeout=90.0)
             if not rap.ok or not rap.placed:
                 return False, (f"foreur non posé sur {item} : "
                                f"{rap.missing or rap.blocked[:1]}")
@@ -4512,7 +4528,7 @@ class Coordinator:
             # boiler). En donner 100 vidait l'inventaire dès la première centrale et le
             # tour suivant échouait sur `missing`. Le ravitaillement est justement une
             # réparation que la boucle sait faire — inutile de tout donner d'un coup.
-            rap = execute_micro(self.api, plan, fuel=self.combustible, fuel_count=50,
+            rap = self._executer(plan, fuel=self.combustible, fuel_count=50,
                                 generate=False, approach=False, timeout=40.0)
             # ON FORGE CE QUI MANQUE, PUIS ON REPOSE. Sans cela la centrale renonçait sur
             # quatre pièces que l'agent sait fabriquer — et avec elle tout le palier
@@ -4520,7 +4536,7 @@ class Coordinator:
             if not rap.ok and rap.missing:
                 resistent = self._forger_le_manque(rap.missing)
                 if not resistent:
-                    rap = execute_micro(self.api, plan, fuel=self.combustible,
+                    rap = self._executer(plan, fuel=self.combustible,
                                         fuel_count=50, generate=False, approach=False,
                                         timeout=40.0)
                 elif rap.missing:
@@ -4605,7 +4621,7 @@ class Coordinator:
             # sur le gisement, donc à des dizaines de tuiles de la machine qu'on alimente
             # — il FAUT y aller. En test_mode l'approche est un téléport, elle ne coûte
             # rien.
-            rap = execute_micro(self.api, mp, generate=False, approach=True, timeout=90.0)
+            rap = self._executer(mp, generate=False, approach=True, timeout=90.0)
             if rap.ok:
                 ancrage = self.dernier_poteau or ancre
                 poteaux = site_finder.place_supply_poles(self.api, rap.placed, ancrage)

@@ -123,6 +123,7 @@ def _coord():
     if _ETAT["coord"] is None:
         api = _api()
         _ETAT["coord"] = Coordinator(api, zone=deplacement.position(api), rayon=25.0)
+        _brancher_l_arret(_ETAT["coord"])
     return _ETAT["coord"]
 
 
@@ -152,6 +153,174 @@ def _tracer(ligne: str) -> None:
             f.write(ligne + "\n")
     except OSError:
         pass          # un journal qui échoue ne doit jamais arrêter une partie
+
+
+# Ce que l'agent fait EN CE MOMENT : (nom de l'outil, instant de départ). Le veilleur
+# s'en sert pour dire au joueur pourquoi personne ne lui répond.
+_EN_COURS = {}
+_DERNIER_ACCUSE = None
+
+
+def _accuser_reception(outil_en_cours, depuis_s):
+    """Dit au joueur, DANS LE JEU, que son message est arrivé et pourquoi ça ne répond pas.
+
+    PENDANT QU'IL ATTEND UN OUTIL, L'AGENT N'EXISTE PAS : aucun tour de modèle ne tourne
+    entre l'appel et son retour, il ne peut ni lire ni écrire. Mesuré le 10/08 —
+    `batir_une_chaine` lancé à 14:56:05, trois messages envoyés entre 14:54 et 14:58,
+    aucune réaction avant la fin de la construction. Le joueur en conclut que ses messages
+    se perdent alors qu'ils ne font qu'attendre.
+
+    On ne peut pas faire parler l'agent pendant ce temps. On peut faire parler le SERVEUR,
+    qui sait deux choses que le joueur ignore : que le message est bien arrivé, et ce que
+    l'agent fait depuis combien de temps. « Silencieux » et « perdu » se ressemblent trop.
+
+    IL NE CONSOMME PAS LA FILE. `read_messages` vide par conception — juste pour l'agent,
+    fatal ici : le veilleur détruirait le message avant que l'agent le voie.
+    """
+    global _DERNIER_ACCUSE
+    try:
+        api = _api()
+        msgs = (api.peek_messages() or {}).get("messages") or []
+        if not msgs:
+            _DERNIER_ACCUSE = None
+            return
+        # Un accusé répété s'affiche PAR-DESSUS le jeu du joueur. Le message reste en file
+        # jusqu'à ce que l'agent le lise — plusieurs minutes — donc sans cette garde il
+        # verrait « bien reçu » deux cents fois.
+        cle = tuple((m.get("joueur"), m.get("texte")) for m in msgs)
+        if cle == _DERNIER_ACCUSE:
+            return
+        _DERNIER_ACCUSE = cle
+        if outil_en_cours:
+            api.say(f"bien reçu — occupé par {outil_en_cours} depuis "
+                    f"{int(depuis_s // 60)} min {int(depuis_s % 60)} s, "
+                    f"je le lis dès que j'ai la main")
+        else:
+            api.say("bien reçu — je le lis au prochain geste")
+    except Exception:
+        pass
+
+
+def _veiller():
+    """Boucle du veilleur : regarde la file, accuse réception, ne vole rien."""
+    import time as _t
+    while True:
+        _t.sleep(3.0)
+        try:
+            if _EN_COURS:
+                nom, t0 = next(iter(_EN_COURS.items()))
+                _accuser_reception(nom, _t.time() - t0)
+            else:
+                _accuser_reception(None, 0.0)
+        except Exception:
+            pass
+
+
+# ----------------------------------------------------------------- chantiers de fond
+#
+# QUATORZE MINUTES SANS LA MAIN, C'EST QUATORZE MINUTES DE SURDITÉ. Partie 23 :
+# `batir_une_chaine` part à 14:56:05 et rend à 15:10:09 ; le joueur écrit trois fois et ne
+# voit rien venir. Ce n'est pas qu'un agent occupé ignore les messages — entre l'appel d'un
+# outil et son retour, aucun tour de modèle ne tourne. Il n'est pas sourd, il n'est pas là.
+#
+# Deux remèdes ont été essayés et écartés, pour la même raison : ils décidaient à sa place.
+# Faire parler le serveur pendant qu'il travaille, c'est avouer qu'il ne reprendra pas la
+# main. Couper le chantier dès qu'un message arrive, c'est arrêter un travail que le
+# message ne demandait peut-être pas d'arrêter.
+#
+# Ce que le joueur a demandé est plus juste : que le travail CONTINUE, que l'agent garde la
+# main, et que ce soit LUI qui juge — son message lu — s'il coupe ou s'il laisse finir.
+# C'est la même règle que pour les plafonds de fabrication : le choix lui revient.
+
+_CHANTIER = {"n": 0, "nom": "", "debut": 0.0, "fil": None,
+             "resultat": None, "arret": False}
+_VERROU_CHANTIER = threading.Lock()
+
+
+def _chantier_tourne() -> bool:
+    fil = _CHANTIER.get("fil")
+    return bool(fil is not None and fil.is_alive())
+
+
+def _lancer_chantier(nom: str, travail) -> str:
+    """Démarre `travail` en fond et rend la main TOUT DE SUITE.
+
+    UN SEUL AVATAR, DONC UN SEUL CHANTIER. Deux constructions simultanées se disputeraient
+    le personnage : chacune le fait marcher ailleurs et les poses tombent où il n'est pas.
+    Le cas s'est produit le 09/08 — deux conteneurs sur la même partie, cinquante-cinq
+    minutes de jeu illisibles. Le refus dit donc ce qui occupe la place et comment
+    reprendre la main : un refus qui n'explique pas se retente en boucle.
+    """
+    import time as _t
+    with _VERROU_CHANTIER:
+        if _chantier_tourne():
+            depuis = _t.time() - _CHANTIER["debut"]
+            return (f"refusé : chantier n°{_CHANTIER['n']} « {_CHANTIER['nom']} » en cours "
+                    f"depuis {int(depuis // 60)} min {int(depuis % 60)} s — un seul à la "
+                    f"fois (un seul avatar). Suis-le par `ou_en_est_le_chantier`, ou "
+                    f"`arreter_le_chantier` si tu veux la place.")
+        _CHANTIER.update(n=_CHANTIER["n"] + 1, nom=nom, debut=_t.time(),
+                         resultat=None, arret=False)
+        n = _CHANTIER["n"]
+
+        def _porter():
+            try:
+                r = travail()
+            except Exception as e:
+                r = f"ERREUR {type(e).__name__}: {e}"
+            _CHANTIER["resultat"] = r
+            _tracer(f"{_t.strftime('%H:%M:%S')} == chantier n°{n} « {nom} » fini")
+
+        fil = threading.Thread(target=_porter, daemon=True, name=f"chantier-{n}")
+        _CHANTIER["fil"] = fil
+        fil.start()
+    return (f"chantier n°{n} « {nom} » lancé — tu gardes la main. Appelle "
+            f"`ou_en_est_le_chantier` pour suivre : c'est là que tu liras ce qu'on te dit.")
+
+
+def _brancher_l_arret(coord) -> None:
+    """Donne au Coordinator de quoi savoir qu'on veut l'arrêter.
+
+    UN BOUTON D'ARRÊT QUI N'ARRÊTE RIEN EST PIRE QUE PAS DE BOUTON. Le drapeau vit ici, la
+    pose se déroule trois couches plus bas dans l'`executor` ; sans ce porteur l'agent lit
+    « arrêt demandé », attend, et la construction va au bout comme si de rien n'était.
+
+    C'est le défaut typique de ce dépôt : H10 posé sous un drapeau que l'appelant met à
+    False, H23 posé dans une méthode que l'appelant ne traverse pas, H27 dans une branche
+    jamais prise. Trois correctifs inertes, chacun cru bon pendant une partie entière.
+    """
+    coord.interrompu_par = _doit_s_arreter
+
+
+def _demander_l_arret() -> bool:
+    """Pose le drapeau d'arrêt. La pose en cours se termine, la suivante ne commence pas."""
+    _CHANTIER["arret"] = True
+    return _chantier_tourne()
+
+
+def _doit_s_arreter() -> bool:
+    return bool(_CHANTIER.get("arret"))
+
+
+def _etat_chantier() -> str:
+    """Où en est le chantier, ou son résultat complet s'il est fini.
+
+    SUIVRE N'EST PAS ATTENDRE — mais un chantier dont on ne peut pas lire l'issue ne vaut
+    rien : l'agent saurait qu'il a demandé une chaîne, jamais si elle est là. On rend donc
+    le résultat ENTIER une fois fini, le même texte que l'outil synchrone rendait avant.
+    """
+    import time as _t
+    if not _CHANTIER["n"]:
+        return "aucun chantier lancé"
+    n, nom = _CHANTIER["n"], _CHANTIER["nom"]
+    if _chantier_tourne():
+        depuis = _t.time() - _CHANTIER["debut"]
+        arret = " — arrêt demandé, il finit sa pose en cours" if _CHANTIER["arret"] else ""
+        return (f"chantier n°{n} « {nom} » EN COURS depuis "
+                f"{int(depuis // 60)} min {int(depuis % 60)} s{arret}")
+    r = _CHANTIER["resultat"]
+    return f"chantier n°{n} « {nom} » terminé — {r}" if r is not None else            f"chantier n°{n} « {nom} » terminé sans résultat"
+
 
 
 def _debut(nom: str, args: dict) -> None:
@@ -275,11 +444,14 @@ def outil(fn=None, *, ecrit: bool = True):
         args = kw or dict(enumerate(a))
         _debut(fn.__name__, args)
         t0 = time.time()
+        _EN_COURS[fn.__name__] = t0
         try:
             r = await anyio.to_thread.run_sync(functools.partial(_travail, *a, **kw))
         except Exception as e:
+            _EN_COURS.pop(fn.__name__, None)
             _fin(fn.__name__, f"ERREUR {type(e).__name__}: {e}", time.time() - t0)
             raise
+        _EN_COURS.pop(fn.__name__, None)
         _fin(fn.__name__, r, time.time() - t0)
         return _bandeau_du_joueur(r)
 
@@ -298,6 +470,49 @@ def etat_du_jeu() -> str:
     """
     from services.arbitre import resumer_etat
     return resumer_etat(_coord().observer())
+
+
+@outil(ecrit=False)
+def repondre_au_joueur(texte: str) -> str:
+    """Écrit dans le chat du jeu — c'est ainsi que l'humain qui te regarde te lit.
+
+    Tes réponses habituelles vont dans un journal qu'il n'a pas sous les yeux. Quand il te
+    dit quelque chose, un mot ici lui montre que tu l'as reçu et ce que tu comptes en
+    faire. Utile aussi pour annoncer ce que tu vas entreprendre avant une longue action :
+    pendant qu'un outil travaille, tu ne peux plus rien dire.
+    """
+    _api().say(texte)
+    return f"dit dans le jeu : « {texte} »"
+
+
+@outil(ecrit=False)
+def ou_en_est_le_chantier() -> str:
+    """Où en est le travail lancé en fond — et ce qu'on te dit pendant ce temps.
+
+    Les constructions durent des minutes. Elles tournent désormais en fond : tu gardes la
+    main et tu suis ici. Appelle-le régulièrement pendant qu'un chantier tourne — c'est là
+    que tu recevras ce que le joueur t'écrit, et tu jugeras alors s'il faut arrêter le
+    chantier ou le laisser finir.
+
+    Une fois terminé, il rend le résultat complet de la construction.
+    """
+    return _etat_chantier()
+
+
+@outil(ecrit=False)
+def arreter_le_chantier() -> str:
+    """Arrête proprement le travail en cours — entre deux entités, jamais au milieu d'une.
+
+    Ce qui est posé RESTE posé, et relancer la même construction reprend où elle s'était
+    arrêtée. À utiliser quand ce que tu viens d'apprendre rend le chantier inutile ou
+    nuisible — pas par principe : un chantier qui va au bout coûte moins qu'un chantier
+    relancé trois fois.
+    """
+    tournait = _demander_l_arret()
+    if not tournait:
+        return "aucun chantier en cours — rien à arrêter"
+    return ("arrêt demandé : la pose en cours se termine, la suivante ne commencera pas. "
+            "Suis la fin par `ou_en_est_le_chantier`.")
 
 
 @outil(ecrit=False)
@@ -410,11 +625,19 @@ def batir_une_chaine(item: str, debit: float = 0.5,
 
     LA capacité principale. Le placement, l'orientation et les raccords sont calculés —
     ne demande jamais de position. Rend ce qui a été posé, ou ce qui a manqué.
+
+    ELLE TOURNE EN FOND et te rend la main tout de suite : bâtir prend des minutes, et
+    pendant qu'un outil travaille tu n'existes pas — c'est ainsi qu'on t'a laissé sourd
+    quatorze minutes durant. Suis-la par `ou_en_est_le_chantier`, qui te donnera aussi ce
+    qu'on te dit pendant ce temps, et coupe-la par `arreter_le_chantier` si tu juges que
+    cela n'a plus de sens.
     """
-    ok, detail = _coord().batir_chaine(
-        item, debit,
-        alimentations_max=(int(alimentations_max) if alimentations_max else None))
-    return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
+    def _travail():
+        ok, detail = _coord().batir_chaine(
+            item, debit,
+            alimentations_max=(int(alimentations_max) if alimentations_max else None))
+        return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
+    return _lancer_chantier(f"batir_une_chaine({item})", _travail)
 
 
 @outil
@@ -423,9 +646,14 @@ def se_procurer(item: str, combien: int = 1) -> str:
 
     Fonctionne les mains vides. Une recette verrouillée est signalée comme telle : c'est
     une recherche qui manque, pas une impossibilité.
+
+    Miner et fondre prennent parfois des minutes — elle tourne donc EN FOND comme les
+    autres constructions. Suis-la par `ou_en_est_le_chantier`.
     """
-    ok, detail = _coord().fabriquer(item, combien)
-    return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
+    def _travail():
+        ok, detail = _coord().fabriquer(item, combien)
+        return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
+    return _lancer_chantier(f"se_procurer({item}x{combien})", _travail)
 
 
 @outil
@@ -434,10 +662,14 @@ def batir_une_centrale() -> str:
 
     Nécessaire avant toute machine électrique. Un générateur ne produit que ce qui est
     consommé : ne juge pas son succès sur les kW à vide.
+
+    Elle tourne EN FOND — suis-la par `ou_en_est_le_chantier`.
     """
     from agents.coordinator import Decision
-    ok, detail = _coord().batir(Decision(action="batir_energie", raison="demandé"))
-    return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
+    def _travail():
+        ok, detail = _coord().batir(Decision(action="batir_energie", raison="demandé"))
+        return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
+    return _lancer_chantier("batir_une_centrale", _travail)
 
 
 @outil
@@ -446,9 +678,13 @@ def chercher_une_technologie(nom: str) -> str:
 
     La première recherche ne peut pas s'automatiser (l'assembleuse exige `automation`) :
     dans ce cas les flacons sont fabriqués et portés au laboratoire.
+
+    Elle tourne EN FOND — suis-la par `ou_en_est_le_chantier`.
     """
-    ok, detail = _coord().chercher(nom)
-    return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
+    def _travail():
+        ok, detail = _coord().chercher(nom)
+        return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
+    return _lancer_chantier(f"chercher_une_technologie({nom})", _travail)
 
 
 # Ce qui peut tomber en panne, par opposition aux organes de TRANSIT qui les longent.
@@ -524,6 +760,11 @@ def main() -> None:
     mcp.settings.host, mcp.settings.port = HOTE, PORT
     print(f"[mcp_jeu] les mains du joueur sur http://{HOTE}:{PORT}/mcp", flush=True)
     print(f"[mcp_jeu] RCON {RCON_HOTE}:{RCON_PORT}", flush=True)
+    # LE VEILLEUR TOURNE À CÔTÉ. Il ne sert que si quelqu'un regarde jouer : quand un
+    # message attend et que l'agent est au milieu d'une action longue, il dit dans le jeu
+    # que c'est bien arrivé et ce qui occupe l'agent. Daemon — il ne doit jamais retenir
+    # l'arrêt du serveur.
+    threading.Thread(target=_veiller, daemon=True, name="veilleur-chat").start()
     mcp.run(transport="streamable-http")
 
 

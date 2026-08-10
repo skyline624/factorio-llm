@@ -764,6 +764,67 @@ def test_une_entite_deja_en_terre_compte_comme_posee() -> None:
     assert ok
 
 
+def test_une_pose_longue_rend_la_main_quand_le_joueur_parle() -> None:
+    """QUATORZE MINUTES SANS REPRENDRE LA MAIN — c'est ce qui rend l'agent injoignable.
+
+    Partie 23 : `batir_une_chaine` part à 14:56:05 et rend à 15:10:09, 828 secondes d'un
+    seul tenant, vingt-neuf entités. Pendant ce temps le joueur écrit trois fois et ne
+    voit rien venir. Il n'a pas tort de trouver cela absurde : l'agent est un chatbot, il
+    pourrait répondre — sauf qu'entre l'appel d'un outil et son retour, aucun tour de
+    modèle ne tourne. Il n'est pas occupé, il n'existe pas.
+
+    On ne fait pas parler un agent qui n'a pas la main : ON LUI REND LA MAIN. La boucle
+    de pose regarde, entre deux entités, si quelqu'un a parlé, et s'arrête là — proprement,
+    en disant où elle en est. L'agent lit, répond, et relance : ce qui est posé reste posé.
+
+    Le point de sortie est ENTRE deux entités, jamais au milieu d'une. Une entité posée à
+    moitié n'existe pas dans Factorio, mais une chaîne dont la belt est posée sans son
+    inserteur, si — et c'est une panne à diagnostiquer plus tard.
+    """
+    from services import executor
+
+    parle = {"oui": False}
+    poses = []
+
+    class _ApiLente:
+        def get_state(self):
+            # 45 charbons : le pré-vol réclame le combustible des fours, sans quoi rien
+            # n'est posé et le banc mesurerait un refus au lieu d'une interruption.
+            return {"inventory": {"stone-furnace": 9, "coal": 45},
+                    "tick": 1, "ready": True}
+        def can_place_check(self, *a, **kw):
+            # `can_place`, PAS `ok` : le mod répond sur cette clé et le lecteur défensif
+            # de l'executor traite tout le reste comme un refus. Un double approximatif
+            # aurait mesuré un blocage là où l'on veut mesurer une interruption.
+            return {"can_place": True}
+        def place_entity_at(self, name, x, y, *a, **kw):
+            poses.append((name, x, y))
+            if len(poses) == 3:
+                parle["oui"] = True          # le joueur écrit pendant la 3e pose
+            return {"ok": True}
+        def run_action(self, fn, *a, **kw):
+            return fn(*a, **kw)
+        def inspect_at(self, *a, **kw):
+            return {"entities": []}
+        def move_items_at(self, *a, **kw):
+            return {"ok": True}          # le ravitaillement suit les poses
+
+    plan = MicroPlan()
+    for i in range(9):
+        plan.entities.append(LayoutEntity("stone-furnace", float(i * 3), 0.0, 0, "furnace"))
+    rap = executor.execute_micro(_ApiLente(), plan, generate=False, approach=False,
+                                 verify=False, interrompu_par=lambda: parle["oui"])
+
+    sorti_tot = len(poses) < 9
+    a_pose_avant = len(poses) >= 3
+    le_dit = "interrompu" in " ".join(rap.steps).lower()
+
+    ok = sorti_tot and a_pose_avant and le_dit
+    rec("test_une_pose_longue_rend_la_main_quand_le_joueur_parle", ok,
+        f"{len(poses)}/9 posée(s) avant sortie — dit={le_dit}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_executor_pose_les_3_entites,

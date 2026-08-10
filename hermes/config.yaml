@@ -163,55 +163,9 @@ updates:
 mcp_servers:
   factorio:
     url: http://host.docker.internal:8765/mcp
-    # 180 s NE SUFFISENT PAS. Batir une chaine, en production, c'est marcher jusqu'au
-    # gisement (parfois cent tuiles), poser, amorcer, raccorder, evacuer : plusieurs
-    # minutes de temps reel. Mesure a la premiere partie : l'appel a ete coupe a 180 s,
-    # Hermes a vu « transport is down » et a conclu que le serveur etait tombe -- alors
-    # qu'il tournait toujours et construisait. Un timeout trop court ne se lit pas comme
-    # un timeout : il se lit comme une panne.
-    # 900 s NE SUFFISENT PLUS depuis que la chaine s'alimente elle-meme : le gavage
-    # va MINER son charbon avant de le verser (H19), ce qui ajoute une marche et
-    # plusieurs minutes. Mesure : 695 a 804 s au banc sans gavage ; partie 12, gisement
-    # a 69 tuiles, l'appel depasse 900 s et Hermes recoit un timeout sur un travail
-    # REUSSI -- 11 machines posees, 3 en service, 155 plaques. Il croit avoir echoue.
     timeout: 1800
 plugins:
   enabled: []
-
-# ── Security ──────────────────────────────────────────────────────────
-# Secret redaction is ON by default — strings that look like API keys,
-# tokens, and passwords are masked in tool output, logs, and chat
-# responses before the model or user ever sees them. Set redact_secrets
-# to false to disable (e.g. when developing the redactor itself).
-# tirith pre-exec scanning is enabled by default when the tirith binary
-# is available. Configure via security.tirith_* keys or env vars
-# (TIRITH_ENABLED, TIRITH_BIN, TIRITH_TIMEOUT, TIRITH_FAIL_OPEN).
-#
-# security:
-#   redact_secrets: true
-#   tirith_enabled: true
-#   tirith_path: "tirith"
-#   tirith_timeout: 5
-#   tirith_fail_open: true
-
-# ── Fallback Model ────────────────────────────────────────────────────
-# Automatic provider failover when primary is unavailable.
-# Uncomment and configure to enable. Triggers on rate limits (429),
-# overload (529), service errors (503), or connection failures.
-#
-# Supported providers:
-#   openrouter   (OPENROUTER_API_KEY)  — routes to any model
-#   openai-codex (OAuth — hermes auth) — OpenAI Codex
-#   nous         (OAuth — hermes auth) — Nous Portal
-#   zai          (ZAI_API_KEY)         — Z.AI / GLM
-#   kimi-coding  (KIMI_API_KEY)        — Kimi / Moonshot
-#   kimi-coding-cn (KIMI_CN_API_KEY)   — Kimi / Moonshot (China)
-#   minimax      (MINIMAX_API_KEY)     — MiniMax
-#   minimax-cn   (MINIMAX_CN_API_KEY)  — MiniMax (China)
-#   bedrock      (AWS IAM / boto3)     — AWS Bedrock (Converse API)
-#
-# For custom OpenAI-compatible endpoints, add base_url and key_env.
-#
-# fallback_model:
-#   provider: openrouter
-#   model: anthropic/claude-sonnet-4
+onboarding:
+  seen:
+    tool_progress_prompt: true

@@ -346,7 +346,7 @@ def execute_micro(api, plan, *, fuel: str = "coal", fuel_count: int = 5,
                   retry_offsets: tuple[tuple[float, float], ...] = RETRY_OFFSETS,
                   generate: bool = True, approach: bool = True,
                   dry_run: bool = False, verify: bool = True,
-                  timeout: float = 20.0) -> ExecutionReport:
+                  timeout: float = 20.0, interrompu_par=None) -> ExecutionReport:
     """Pose en jeu les entités d'un `MicroPlan` et les alimente en combustible.
 
     Déroulé : pré-vol inventaire -> approche (génération de terrain + marche) -> choix
@@ -438,6 +438,29 @@ def execute_micro(api, plan, *, fuel: str = "coal", fuel_count: int = 5,
         report.steps.append(f"decalage solidaire du plan : {offset}")
 
     for idx, e in ordered:
+        # RENDRE LA MAIN, PLUTÔT QUE DE FAIRE PARLER QUELQU'UN QUI NE L'A PAS.
+        #
+        # Partie 23 : cette boucle a tenu 828 secondes d'affilée pour vingt-neuf entités.
+        # Pendant ce temps le joueur a écrit trois fois sans rien voir venir. L'agent
+        # n'était pas occupé — il n'existait pas : entre l'appel d'un outil et son retour,
+        # aucun tour de modèle ne tourne. Le premier réflexe avait été de faire parler le
+        # serveur à sa place ; c'était avouer qu'il ne reprendrait pas la main de sitôt.
+        #
+        # On sort donc ENTRE deux entités, jamais au milieu d'une. Ce qui est posé reste
+        # posé et l'appelant relance : une entité posée à moitié n'existe pas dans
+        # Factorio, mais une chaîne dont la belt est là sans son inserteur, si — et c'est
+        # une panne à diagnostiquer plus tard.
+        if interrompu_par is not None and not dry_run:
+            try:
+                doit_rendre = bool(interrompu_par())
+            except Exception:
+                doit_rendre = False           # un interrupteur cassé n'arrête pas une pose
+            if doit_rendre:
+                report.steps.append(
+                    f"interrompu : le joueur a parlé — {len(report.placed)} entité(s) "
+                    f"posée(s) sur {len(ordered)}, relance pour finir")
+                break
+
         d = _dir_str(e.direction)
         px, py = round(e.x + ox, 2), round(e.y + oy, 2)
 
