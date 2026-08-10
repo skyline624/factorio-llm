@@ -825,6 +825,84 @@ def test_une_pose_longue_rend_la_main_quand_le_joueur_parle() -> None:
     assert ok
 
 
+def test_une_pose_refusee_n_apparait_jamais_comme_posee() -> None:
+    """UN RAPPORT QUI MENT EST PIRE QU'UNE PANNE — tout le reste s'y fie.
+
+    Partie 31, `extraire_ici` annonce « posée : burner-mining-drill, stone-furnace ».
+    Vérifié dans le jeu au même instant :
+
+        fours sur toute la carte : AUCUN
+        inventaire : stone-furnace=1        (jamais sorti de la poche)
+        foreuse (-80,-28) status=waiting_for_space_in_destination
+        sur le drop : item-on-ground
+
+    Seule la foreuse était en terre. Le four manquait, donc le minerai tombait par terre
+    et la foreuse saturait — le symptôme même qui avait fait conclure, il y a des mois,
+    que le drop direct était « impossible ». C'était déjà un four manquant.
+
+    L'agent ne pouvait pas le savoir : l'outil lui avait dit l'avoir posé. Il a ravitaillé,
+    puis cherché à évacuer, en raisonnant juste sur des prémisses fausses. C'est ce que
+    coûte un rapport qui ment, et c'est exactement ce que la règle d'E1 — ne jamais croire
+    un `ok=True`, confirmer par l'inventaire — devait empêcher.
+
+    On exige donc l'invariant : ce que `placed` annonce a QUITTÉ l'inventaire. Une pose
+    que le jeu refuse va dans `blocked`, jamais dans `placed`.
+    """
+    from services import executor
+
+    class _ApiRefuseLeFour:
+        """Pose la foreuse, refuse le four — et son inventaire dit la vérité."""
+
+        def __init__(self):
+            self.inv = {"burner-mining-drill": 1, "stone-furnace": 1, "coal": 40}
+            self.terrain = []
+
+        def get_state(self):
+            return {"inventory": dict(self.inv), "tick": 1, "ready": True}
+
+        def can_place_check(self, name, x, y, d=None):
+            return {"can_place": name != "stone-furnace"}
+
+        def place_entity_at(self, name, x, y, *a, **kw):
+            if name == "stone-furnace":
+                return {"ok": False, "detail": "refusé par le jeu"}
+            self.inv[name] -= 1
+            self.terrain.append({"name": name, "type": name, "x": x, "y": y})
+            return {"ok": True}
+
+        def move_items_at(self, *a, **kw):
+            return {"ok": True}
+
+        def walk_to(self, x, y, **kw):
+            return {"ok": True}
+
+        def inspect_at(self, x=0.0, y=0.0, radius=0.5, *a, **kw):
+            return {"entities": [e for e in self.terrain
+                                 if abs(e["x"] - x) <= max(radius, 2.0)
+                                 and abs(e["y"] - y) <= max(radius, 2.0)]}
+
+        def run_action(self, fn, *a, **kw):
+            return fn(*a, **kw)
+
+    api = _ApiRefuseLeFour()
+    plan = MicroPlan()
+    plan.entities.append(LayoutEntity("burner-mining-drill", 0.0, 0.0, 4, "drill"))
+    plan.entities.append(LayoutEntity("stone-furnace", 0.0, 3.0, 0, "machine"))
+
+    rap = executor.execute_micro(api, plan, generate=False, approach=False)
+
+    annonces = {p.name for p in (rap.placed or [])}
+    ment = "stone-furnace" in annonces
+    reste_en_poche = api.inv.get("stone-furnace", 0) == 1
+    le_dit = bool(rap.blocked) or bool(rap.missing)
+
+    ok = (not ment) and reste_en_poche and le_dit
+    rec("test_une_pose_refusee_n_apparait_jamais_comme_posee", ok,
+        f"annoncé={sorted(annonces)} — four encore en poche={reste_en_poche} — "
+        f"signalé={le_dit}")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_executor_pose_les_3_entites,

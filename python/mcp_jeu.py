@@ -749,6 +749,27 @@ def _nom_a(api, x: float, y: float) -> str:
     return ""
 
 
+def _foreuse_posee_pres_de(api, ressource: str):
+    """La foreuse DÉJÀ en terre sur ce gisement, s'il y en a une. Sinon None.
+
+    Une extraction à moitié posée est le cas normal, pas l'exception : une pose peut
+    échouer, un chantier être arrêté, le joueur intervenir. La refuser oblige à tout
+    démonter — ce que le jeu interdit justement quand la foreuse couvre du minerai.
+    """
+    try:
+        trouve = api.find_nearest(ressource) or {}
+        if trouve.get("x") is None:
+            return None
+        vues = (api.inspect_at(float(trouve["x"]), float(trouve["y"]), 6.0)
+                or {}).get("entities") or []
+    except Exception:
+        return None
+    for e in vues:
+        if str(e.get("name", "")).endswith("mining-drill"):
+            return (float(e.get("x", 0.0)), float(e.get("y", 0.0)))
+    return None
+
+
 @outil
 def extraire_ici(ressource: str = "iron-ore") -> str:
     """Pose TOUT DE SUITE une extraction minimale : une foreuse, un four sur sa sortie.
@@ -776,7 +797,17 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
     # SANS FOREUSE, PAS DE GESTE MINIMAL. En forger une suppose de miner et de fondre :
     # on retombe dans la longue attente que cet outil existe justement pour éviter, et le
     # dire honnêtement vaut mieux que la simuler.
-    if inv.get("burner-mining-drill", 0) < 1:
+    # DÉJÀ BÂTI ? ON REPREND. Une foreuse en terre sur le bon gisement est un ACQUIS, pas
+    # un obstacle. Partie 31 : la foreuse est posée, le four est resté en poche, et
+    # relancer l'outil répondait « il te manque burner-mining-drill » — puisqu'elle n'est
+    # plus dans la poche, justement parce qu'elle est en terre. L'agent s'est retrouvé
+    # enfermé : il ne pouvait ni compléter, ni démonter (« minerai sous foreuse »), pendant
+    # que sa foreuse minait dans le vide. Le joueur, lui, voyait le four manquant.
+    #
+    # Le Coordinator connaît ce cas depuis la partie 16 (`_foreuse_existante`) ; l'outil
+    # l'ignorait. On regarde donc le terrain avant de réclamer quoi que ce soit.
+    deja = _foreuse_posee_pres_de(api, ressource)
+    if inv.get("burner-mining-drill", 0) < 1 and deja is None:
         return ("rien posé — il te manque burner-mining-drill, et le forger suppose de "
                 "miner puis fondre. Passe par `batir_une_chaine`, qui fait tout cela, ou "
                 "`se_procurer` si tu veux garder la main entre-temps.")
@@ -812,7 +843,10 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
     # Le banc ne pouvait pas le voir : ses doubles rendaient `{"found": True, ...}`,
     # c'est-à-dire ma fiction. Un double doit refléter la RÉPONSE DU MOD, jamais l'idée
     # qu'on s'en fait — sans quoi il confirme l'erreur au lieu de la révéler.
-    trouve = api.find_nearest(ressource) or {}
+    if deja is not None:
+        trouve = {"name": ressource, "x": deja[0], "y": deja[1], "distance": 0}
+    else:
+        trouve = api.find_nearest(ressource) or {}
     if trouve.get("x") is None or trouve.get("y") is None:
         return f"aucun gisement de {ressource} en vue — essaie `ou_sont_les_ressources`"
     ancre = (float(trouve["x"]), float(trouve["y"]))
@@ -843,6 +877,28 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
                            for n, c in (rap.missing or {}).items())
                  or (str(rap.blocked[0]) if rap.blocked else "cause inconnue"))
         return f"ÉCHEC — rien posé en ({ancre[0]:.0f},{ancre[1]:.0f}) : {souci}"
+    # ON RELIT LE MONDE, ON NE CROIT PAS LE RAPPORT. Partie 31 : l'outil annonce « posée :
+    # burner-mining-drill, stone-furnace » et le jeu ne contient AUCUN four — celui-ci
+    # était resté en poche. La foreuse minait donc dans le vide, saturée, son minerai par
+    # terre ; l'agent a ravitaillé puis tenté d'évacuer, raisonnant juste sur des prémisses
+    # fausses. C'est le joueur qui a vu le manque : « il manque le four a la sorti ».
+    #
+    # C'est la règle d'E1 — ne jamais croire un `ok=True` — appliquée un cran plus haut :
+    # le rapport de l'executor est lui aussi une affirmation, et une extraction sans son
+    # four n'extrait rien. On vérifie donc sur place, quelle que soit la cause du décalage.
+    attendus = {"burner-mining-drill", "stone-furnace"}
+    try:
+        vues = {e.get("name") for e in
+                (api.inspect_at(ancre[0], ancre[1], 4.0) or {}).get("entities") or []}
+    except Exception:
+        vues = set(p.name for p in (rap.placed or []))
+    absents = sorted(attendus - vues)
+    if absents:
+        return (f"INCOMPLET en ({ancre[0]:.0f},{ancre[1]:.0f}) — posé : "
+                f"{', '.join(sorted(vues & attendus)) or 'rien'} ; MANQUE "
+                f"{', '.join(absents)}. Sans le four sur sa sortie, la foreuse crache son "
+                f"minerai par terre et se bloque. Relance `extraire_ici` pour compléter.")
+
     dit_forge = f" (forgé au passage : {', '.join(forge)})" if forge else ""
     manque_feu = (" — ELLES N'ONT PAS DE COMBUSTIBLE : sans charbon dans la foreuse et le "
                   "four, rien ne tourne. `se_procurer('coal')` puis `reparer('ravitailler')`."
