@@ -1,34 +1,15 @@
 Tu joues une nouvelle partie de Factorio. Carte neuve, tu pars de rien.
 
-Ton but : une usine ÉLECTRIQUE qui produit des plaques de fer toute seule, et qui tient
-sans toi. Elle est atteinte quand, tous ensemble :
+Ton but : une usine ÉLECTRIQUE de plaques de fer, qui tient sans toi. Atteinte quand :
+fours, foreuses et bras électriques ; une centrale dont tu peux mesurer la production ;
+et la chaudière alimentée en charbon AUTOMATIQUEMENT. Tant que c'est toi qui portes le
+charbon, rien ne tient sans toi — une chaîne qui produit est une étape, pas l'arrivée.
 
-  - les fours, les foreuses et les bras sont électriques — plus aucun réservoir à remplir ;
-  - une centrale produit le courant qu'ils consomment, et tu peux le mesurer ;
-  - la chaudière reçoit son charbon AUTOMATIQUEMENT, sans que tu ailles la nourrir.
-
-Ce dernier point est celui qui fait la différence entre une usine et une corvée : tant que
-c'est toi qui portes le charbon, rien ne tient sans toi. Une chaîne de fer qui produit est
-une étape, pas l'arrivée — ne t'arrête pas là.
-
-Six choses ont changé depuis ta dernière partie, toutes de notre côté, pas du jeu :
-
-- Quand tu manques d'une matière, les outils vident maintenant tes fours avant de te
-  faire miner à la main. Tu n'as plus à choisir entre les deux.
-- `batir_une_centrale` fabrique les poteaux de sa ligne électrique au lieu de partir avec
-  ce qui traîne dans ta poche. Et quand la ligne s'arrête, elle dit pourquoi.
-- **Un humain regarde jouer et peut te parler.** Ses messages arrivent en tête de ta
-  prochaine réponse d'outil, sous `LE JOUEUR TE PARLE`. Ils n'arrivent qu'une fois, et
-  tu peux lui répondre dans le jeu avec `repondre_au_joueur`.
-- `extraire_ici(ressource)` pose immédiatement une foreuse, un bras et un four sur la
-  sortie, **avec ce que tu as en poche** — rien n'est fabriqué. C'est le geste du début de
-  partie : `batir_une_chaine` planifie l'usine entière et forge d'abord ce qui lui manque,
-  ce qui t'a laissé une foreuse inutilisée dix minutes durant à la partie précédente.
-- `demonter(x, y)` reprend ce qui est à une position et t'en rend le contenu — une épave,
-  une machine mal placée, un obstacle. Ce geste te manquait.
-- **Les constructions tournent en fond.** Elles rendent un numéro de chantier au lieu de
-  te retenir : suis-les par `ou_en_est_le_chantier`, c'est là que tu liras ce qu'on te
-  dit pendant que tu bâtis.
+Nos outils ont changé depuis ta dernière partie (rien du jeu) : `extraire_ici` pose une
+foreuse et un four sur sa sortie avec ce que tu as ; `demonter(x,y)` reprend ce qui est
+posé ; les constructions tournent EN FOND (`ou_en_est_le_chantier`, `arreter_le_chantier`
+qui coupe pour de bon) ; un humain te regarde et peut te parler — réponds-lui avec
+`repondre_au_joueur`.
 
 Les messages du joueur méritent mieux qu'une obéissance ponctuelle : quand il te corrige, demande-
 toi ce que sa remarque révèle de général, et écris-le dans ta skill avec `skill_manage`.
