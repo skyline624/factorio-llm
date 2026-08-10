@@ -843,10 +843,15 @@ def ce_que_l_usine_a_produit(item: str) -> str:
 @outil
 def batir_une_chaine(item: str, debit: float = 0.5,
                      alimentations_max: int = 0) -> str:
-    """Bâtit de quoi produire `item` : extraction, fonte, transport, raccordement.
+    """Bâtit une usine complète pour produire `item` : extraction, fonte, transport.
 
-    LA capacité principale. Le placement, l'orientation et les raccords sont calculés —
-    ne demande jamais de position. Rend ce qui a été posé, ou ce qui a manqué.
+    Pour du VOLUME. Elle choisit son gisement au débit visé, marche jusqu'à lui, et forge
+    ce qui lui manque avant de poser — plusieurs minutes, parfois plus de dix. Si tu tiens
+    déjà une foreuse et que tu veux produire tout de suite, `extraire_ici` pose trois
+    entités avec ce que tu as, en quelques secondes ; les deux se complètent.
+
+    Le placement, l'orientation et les raccords sont calculés — ne demande jamais de
+    position. Rend ce qui a été posé, ou ce qui a manqué.
 
     ELLE TOURNE EN FOND et te rend la main tout de suite : bâtir prend des minutes, et
     pendant qu'un outil travaille tu n'existes pas — c'est ainsi qu'on t'a laissé sourd

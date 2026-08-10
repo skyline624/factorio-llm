@@ -2310,6 +2310,26 @@ class Coordinator:
         rates = []
         inv = perception.inventory(self.api)
         for nom, combien in (manque or {}).items():
+            # UN ARRÊT QUI N'ARRÊTE QUE LA POSE N'ARRÊTE PRESQUE RIEN. Partie 25 : l'arrêt
+            # est demandé à 16:46:45, et une minute dix plus tard le chantier tourne
+            # encore. Le point de sortie de H42 est dans la boucle de POSE de l'executor —
+            # or bâtir passe l'essentiel de son temps à FORGER, en minant et en fondant.
+            # Tant qu'on fabrique, on ne croise aucun point d'arrêt.
+            #
+            # Quatrième fois que ce défaut revient (H10, H23, H27) : un correctif juste
+            # posé sur un seul des chemins qui y mènent. Celui-ci est donc entre deux
+            # PIÈCES — la pièce en cours se termine, ce qui est acquis reste acquis, et la
+            # relance reprend où l'on s'était arrêté.
+            interrupteur = getattr(self, "interrompu_par", None)
+            if interrupteur is not None:
+                try:
+                    doit = bool(interrupteur())
+                except Exception:
+                    doit = False
+                if doit:
+                    return ("interrompu à la demande — "
+                            + (f"{', '.join(rates)} non forgé(s), " if rates else "")
+                            + f"il restait {nom} ; relance pour finir")
             vise = inv.get(str(nom), 0) + int(combien)
             ok, _ = self._assurer_stock(str(nom), vise)
             if not ok:

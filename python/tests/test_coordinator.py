@@ -3113,6 +3113,59 @@ def test_un_manque_se_dit_en_phrase_et_pas_en_dict_python() -> None:
     assert ok
 
 
+def test_l_arret_mord_aussi_pendant_la_fabrication() -> None:
+    """UN ARRÊT QUI N'ARRÊTE QUE LA POSE N'ARRÊTE PRESQUE RIEN.
+
+    Partie 25, mesuré au journal :
+
+        16:46:45  arreter_le_chantier          (le joueur venait de le corriger)
+        16:47:55  chantier n°2 EN COURS depuis 4 min 17 s — arrêt demandé, il finit
+                  sa pose en cours
+
+    Une minute dix après la demande, il tourne toujours. Le point de sortie posé en H42 est
+    dans la boucle de POSE de l'executor — or `batir_chaine` passe l'essentiel de son temps
+    à FORGER ce qui lui manque, en minant et fondant. Tant qu'il fabrique, il ne croise
+    aucun point d'arrêt.
+
+    C'est le défaut de H10, H23 et H27 pour la quatrième fois : un correctif juste posé sur
+    un seul des chemins qui y mènent. On le pose donc là où le temps se passe réellement,
+    entre deux pièces forgées — et l'arrêt reste PROPRE : la pièce en cours se termine,
+    ce qui est acquis reste acquis, la relance reprend où l'on s'était arrêté.
+    """
+    from agents.coordinator import Coordinator
+
+    forges = []
+
+    class _ApiForge:
+        def get_state(self):
+            return {"inventory": {}, "tick": 1, "ready": True}
+
+    c = _coord_mesure(_ApiForge())
+    c.journal = []
+    stop = {"oui": False}
+    c.interrompu_par = lambda: stop["oui"]
+
+    def _forge(nom, combien=1):
+        forges.append(nom)
+        if len(forges) == 2:
+            stop["oui"] = True          # le joueur demande l'arrêt à la 2e pièce
+        return True, ""
+    c._assurer_stock = _forge
+
+    manque = {"burner-mining-drill": 2, "transport-belt": 4,
+              "burner-inserter": 1, "stone-furnace": 1, "iron-chest": 1}
+    reste = Coordinator._forger_le_manque(c, manque)
+
+    sorti_tot = len(forges) < len(manque)
+    a_forge_avant = len(forges) >= 2
+    le_dit = "interrompu" in str(reste).lower() or "arrêt" in str(reste).lower()
+
+    ok = sorti_tot and a_forge_avant and le_dit
+    rec("test_l_arret_mord_aussi_pendant_la_fabrication", ok,
+        f"{len(forges)}/{len(manque)} forgée(s) avant sortie — dit={le_dit} ({reste!r})")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -3166,6 +3219,7 @@ def main() -> int:
         test_on_recolte_a_nouveau_quand_l_usine_a_reproduit,
         test_la_ligne_forge_ses_poteaux_et_ne_ment_pas_sur_la_cause,
         test_un_manque_se_dit_en_phrase_et_pas_en_dict_python,
+        test_l_arret_mord_aussi_pendant_la_fabrication,
         test_le_coffre_d_evacuation_essaie_aussi_les_diagonales,
         test_la_foreuse_a_charbon_recoit_un_bras_de_retour,
         test_l_evacuation_s_approche_avant_de_poser_son_coffre,
