@@ -965,10 +965,8 @@ class Coordinator:
         # qu'il faut industrialiser. Compter les fabrications REUSSIES le dit sans qu'on
         # ait a nommer un seul produit.
         self._fabrications: dict = {}
-        # Une seule récolte par partie : vider les fours à chaque craft coûterait plus
-        # que cela ne rapporte. La première suffit à débloquer le cercle vicieux, et
-        # l'évacuation permanente prend le relais ensuite.
-        self._recolte_faite = False
+        # Quand on a récolté les fours pour la dernière fois (cf. `fabriquer`).
+        self._derniere_recolte = 0.0
         self.journal: list[str] = []
         # Les actions menées à leur terme sans produire leur effet. C'est le signal sur
         # lequel une enquête pourra être déclenchée ; sans lui, l'agent est aveugle à
@@ -1545,6 +1543,16 @@ class Coordinator:
     # seulement : ce sont eux qui coûtent du temps de four, et eux qui s'entassent quand
     # l'évacuation manque. Le minerai brut se remine en quelques secondes.
     MATIERES_RECOLTABLES = ("iron-plate", "copper-plate", "stone-brick")
+
+    # Entre deux récoltes des fours. Assez court pour suivre une usine qui produit, assez
+    # long pour qu'une rafale de crafts ne les vide pas dix fois de suite.
+    RECOLTE_INTERVALLE_S = 60.0
+
+    @staticmethod
+    def _horloge() -> float:
+        """L'heure, isolée pour que les bancs puissent la piloter."""
+        import time as _t
+        return _t.monotonic()
 
     # Combien de brûleurs on relie au charbon après une pose. Chaque alimentation est
     # une chaîne complète — marche jusqu'au gisement, foreuse, belt, bras — donc une
@@ -2640,8 +2648,19 @@ class Coordinator:
         # en appelant `fabriquer` directement, si bien que la récolte n'était jamais
         # atteinte sur le seul chemin qui en avait besoin. Même erreur que H10 — un
         # correctif juste, posé sur une branche que le cas réel n'emprunte pas.
-        if inv.get(item, 0) < combien and not getattr(self, "_recolte_faite", False):
-            self._recolte_faite = True
+        # UNE SEULE RÉCOLTE PAR PARTIE NE SUFFIT PAS — l'usine, elle, continue de
+        # produire. Le drapeau `_recolte_faite` bridait la récolte à une fois, au motif
+        # que vider les fours à chaque craft coûterait plus que cela ne rapporte :
+        # arbitrage non mesuré, et faux. Partie 22, constaté en regardant jouer —
+        # l'agent minait du fer à la main avec 381 plaques produites et 10 en poche.
+        #
+        # Le coût réel d'une récolte est un `inspect_at` et quelques `empty_output_at`.
+        # L'intervalle ne sert qu'à ne pas vider les fours à chaque craft d'une rafale ;
+        # il se compte en secondes, pas en parties.
+        if (inv.get(item, 0) < combien
+                and self._horloge() - getattr(self, "_derniere_recolte", 0.0)
+                >= self.RECOLTE_INTERVALLE_S):
+            self._derniere_recolte = self._horloge()
             for matiere in self.MATIERES_RECOLTABLES:
                 self._recolter_la_production(matiere)
             inv = perception.inventory(self.api)

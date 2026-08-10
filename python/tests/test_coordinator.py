@@ -2962,6 +2962,62 @@ def test_la_centrale_forge_ce_qui_lui_manque() -> None:
     assert ok
 
 
+def test_on_recolte_a_nouveau_quand_l_usine_a_reproduit() -> None:
+    """UNE SEULE RÉCOLTE PAR PARTIE NE SUFFIT PAS — l'usine, elle, continue.
+
+    Partie 22, constat de l'utilisateur en regardant jouer : l'agent mine du fer à la
+    main alors que son usine en a produit 381. Mesuré au même instant :
+
+        produit par l'usine : 381 plaques
+        en poche du joueur  :  10 plaques
+
+    H23/H24 récolte bien les fours avant de miner, mais je l'avais bridé d'un drapeau
+    `_recolte_faite` — une seule fois par partie — au motif que « vider les fours à
+    chaque craft coûterait plus que cela ne rapporte ». Arbitrage non mesuré, et faux :
+    la première récolte vide ce qui existait alors, l'usine produit encore pendant une
+    heure, et l'agent repart à la pioche devant ses propres réserves.
+
+    Le coût réel d'une récolte est un `inspect_at` et quelques `empty_output_at` : des
+    secondes. Le coût de ne pas récolter est mesuré ici — une expédition minière alors
+    que trois cent soixante-et-onze plaques dorment à trente tuiles.
+
+    On garde un intervalle pour ne pas vider les fours à chaque craft d'une rafale, mais
+    il se compte en secondes, pas en parties.
+    """
+    from agents.coordinator import Coordinator
+
+    recoltes = []
+
+    class _ApiUsine:
+        def get_state(self):
+            return {"inventory": {}, "tick": 1, "ready": True}
+
+    c = _coord_mesure(_ApiUsine())
+    c.journal = []
+    c.builder = None
+    c._fabrications = {}
+    c._recolter_la_production = lambda item: (recoltes.append(item), 0)[1]
+    c.fabriquer = Coordinator.fabriquer.__get__(c)
+
+    faux_temps = [1000.0]
+    import agents.coordinator as mod
+    vrai = mod.time.monotonic if hasattr(mod, "time") else None
+
+    for instant in (1000.0, 1005.0, 1200.0):      # tout de suite, 5 s après, 200 s après
+        faux_temps[0] = instant
+        c._horloge = lambda: faux_temps[0]
+        try:
+            c.fabriquer("burner-mining-drill", 2)
+        except Exception:
+            pass
+
+    # Première récolte : oui. Cinq secondes après : non (rafale). Deux cents plus tard : OUI.
+    ok = len(recoltes) >= 2 * len(Coordinator.MATIERES_RECOLTABLES)
+    rec("test_on_recolte_a_nouveau_quand_l_usine_a_reproduit", ok,
+        f"{len(recoltes)} récolte(s) sur trois tentatives espacées de 0 s, 5 s et 200 s")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -3012,6 +3068,7 @@ def main() -> int:
         test_l_evacuation_fabrique_le_coffre_qui_lui_manque,
         test_on_recolte_l_usine_avant_de_miner_a_la_main,
         test_fabriquer_recolte_avant_de_planifier,
+        test_on_recolte_a_nouveau_quand_l_usine_a_reproduit,
         test_le_coffre_d_evacuation_essaie_aussi_les_diagonales,
         test_la_foreuse_a_charbon_recoit_un_bras_de_retour,
         test_l_evacuation_s_approche_avant_de_poser_son_coffre,
