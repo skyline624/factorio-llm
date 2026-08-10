@@ -2,7 +2,7 @@ _config_version: 33
 database:
   journal_mode: wal
 model:
-  default: glm-5.2:cloud
+  default: deepseek-v4-flash:cloud
   provider: ollama
   base_url: http://host.docker.internal:11434/v1
 terminal:
