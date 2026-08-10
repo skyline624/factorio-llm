@@ -88,3 +88,4 @@ hermes/*.bak-*
 hermes/.local/
 hermes/.cache/
 hermes/.config/
+python/tests/mcp_appels_tests.log

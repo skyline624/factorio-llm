@@ -11,7 +11,17 @@ Lancement :
 
 from __future__ import annotations
 
+import os
 import sys
+
+# LES TESTS N'ÉCRIVENT PAS DANS LE JOURNAL D'UNE PARTIE. `mcp_jeu` trace chaque appel dans
+# `mcp_appels.log` ; lancer pytest pendant qu'Hermes joue y mêlait donc des appels qui ne
+# sont pas les siens. Le 10/08, sept lignes d'outils apparues à 16:20:00 dans la partie 24
+# venaient d'une suite de tests — aucune action n'avait touché le jeu (autre processus,
+# doubles d'API), mais le journal disait le contraire, et c'est sur ce journal qu'on juge
+# une partie. Il faut le poser AVANT d'importer `mcp_jeu`, qui lit la variable au chargement.
+os.environ.setdefault("FL_MCP_JOURNAL", os.path.join(
+    os.path.dirname(__file__), "mcp_appels_tests.log"))
 
 RESULTS: list[tuple[str, bool, str]] = []
 
@@ -377,11 +387,16 @@ def test_le_chantier_dit_ou_il_en_est_puis_son_resultat() -> None:
     # lecture d'état met quatre secondes à échouer et masquerait la mesure.
     mcp_jeu._AVATAR_VU[:] = [time.time(), None]
 
+    # `ou_en_est` patiente ATTENTE_SUIVI_S quand rien ne bouge : sans l'abaisser ici, le
+    # chantier finirait PENDANT l'attente et l'on ne mesurerait jamais son « en cours ».
+    vraie_attente = mcp_jeu.ATTENTE_SUIVI_S
+    mcp_jeu.ATTENTE_SUIVI_S = 0.1
     mcp_jeu._lancer_chantier("batir_une_chaine", lambda: (time.sleep(0.3), "29 entités")[1])
     pendant = mcp_jeu.ou_en_est_le_chantier.fn() if hasattr(
         mcp_jeu.ou_en_est_le_chantier, "fn") else mcp_jeu._etat_chantier()
     time.sleep(0.6)
     apres = mcp_jeu._etat_chantier()
+    mcp_jeu.ATTENTE_SUIVI_S = vraie_attente
 
     en_cours = "en cours" in pendant.lower()
     rendu = "29 entités" in apres
@@ -661,6 +676,68 @@ def test_demonter_existe_et_rend_ce_qu_il_recupere() -> None:
     assert ok
 
 
+def test_suivre_un_chantier_ne_brule_pas_les_tours_de_l_agent() -> None:
+    """RENDRE LA MAIN NE SUFFIT PAS : ENCORE FAUT-IL QU'IL AIT QUELQUE CHOSE À EN FAIRE.
+
+    Partie 24, dix secondes après avoir lancé son premier chantier :
+
+        16:18:35  ou_en_est_le_chantier -> EN COURS depuis 0 min 3 s
+        16:18:37  ou_en_est_le_chantier -> EN COURS depuis 0 min 5 s
+        16:18:38  ou_en_est_le_chantier -> EN COURS depuis 0 min 6 s
+
+    Il attend ACTIVEMENT, une interrogation par seconde. Son budget est de cinq cents
+    tours : à ce rythme il les épuise en un quart d'heure sans avoir rien fait d'autre.
+    Le défaut est le mien — « appelle régulièrement » ne dit pas à quel rythme, et un
+    agent qui n'a rien d'autre à faire appelle aussi vite qu'il peut.
+
+    On ne le corrige pas par une consigne, qui dépend du modèle, mais par l'outil : quand
+    rien n'a changé, il ATTEND avant de répondre. L'agent redemande autant qu'il veut, cela
+    lui coûte un tour au lieu de dix. Et l'attente se coupe dès qu'il se passe quelque
+    chose — chantier fini, ou joueur qui parle — donc elle ne retarde jamais rien.
+    """
+    import mcp_jeu, time
+
+    class _ApiMuette:
+        def peek_messages(self):
+            return {"messages": []}
+
+    vrai = mcp_jeu._api
+    mcp_jeu._api = lambda: _ApiMuette()
+    mcp_jeu._AVATAR_VU[:] = [time.time(), None]
+    try:
+        # Les tests partagent `_CHANTIER` : sans attendre la fin de celui qu'un test
+        # précédent a laissé tourner, le nôtre est REFUSÉ (un seul chantier à la fois) et
+        # l'on mesurerait une attente qui n'a jamais eu lieu de commencer.
+        for _ in range(60):
+            if not mcp_jeu._chantier_tourne():
+                break
+            time.sleep(0.1)
+        mcp_jeu._lancer_chantier("long", lambda: (time.sleep(3.0), "fini")[1])
+        t0 = time.time()
+        mcp_jeu._etat_chantier()
+        attendu = time.time() - t0
+
+        # Et il se réveille dès que le joueur parle, sans attendre la fin du délai.
+        class _ApiParle:
+            def peek_messages(self):
+                return {"messages": [{"joueur": "pier", "texte": "arrête"}]}
+        mcp_jeu._api = lambda: _ApiParle()
+        t1 = time.time()
+        mcp_jeu._etat_chantier()
+        reveille = time.time() - t1
+    finally:
+        mcp_jeu._api = vrai
+        mcp_jeu._demander_l_arret()
+
+    temporise = attendu >= 0.8
+    reactif = reveille < 0.5
+
+    ok = temporise and reactif
+    rec("test_suivre_un_chantier_ne_brule_pas_les_tours_de_l_agent", ok,
+        f"attente à vide {attendu:.2f}s — réveil sur message {reveille:.2f}s")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
@@ -677,7 +754,8 @@ def main() -> int:
               test_sans_avatar_les_outils_le_disent_au_lieu_de_mentir,
               test_avec_avatar_le_controle_ne_gene_personne,
               test_chaque_outil_qui_agit_passe_par_le_controle_d_avatar,
-              test_demonter_existe_et_rend_ce_qu_il_recupere):
+              test_demonter_existe_et_rend_ce_qu_il_recupere,
+              test_suivre_un_chantier_ne_brule_pas_les_tours_de_l_agent):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

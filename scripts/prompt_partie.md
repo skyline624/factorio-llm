@@ -14,7 +14,7 @@ Tu joues une nouvelle partie de Factorio. Carte neuve, tu pars de rien.
 
 Ton but : une usine qui produit des plaques de fer toute seule, et qui tient sans toi.
 
-Quatre choses ont changé depuis ta dernière partie, toutes de notre côté, pas du jeu :
+Cinq choses ont changé depuis ta dernière partie, toutes de notre côté, pas du jeu :
 
 - Quand tu manques d'une matière, les outils vident maintenant tes fours avant de te
   faire miner à la main. Tu n'as plus à choisir entre les deux.
@@ -23,6 +23,8 @@ Quatre choses ont changé depuis ta dernière partie, toutes de notre côté, pa
 - **Un humain regarde jouer et peut te parler.** Ses messages arrivent en tête de ta
   prochaine réponse d'outil, sous `LE JOUEUR TE PARLE`. Ils n'arrivent qu'une fois, et
   tu peux lui répondre dans le jeu avec `repondre_au_joueur`.
+- `demonter(x, y)` reprend ce qui est à une position et t'en rend le contenu — une épave,
+  une machine mal placée, un obstacle. Ce geste te manquait.
 - **Les constructions tournent en fond.** Elles rendent un numéro de chantier au lieu de
   te retenir : suis-les par `ou_en_est_le_chantier`, c'est là que tu liras ce qu'on te
   dit pendant que tu bâtis.

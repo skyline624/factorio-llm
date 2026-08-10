@@ -232,6 +232,11 @@ def _veiller():
 # main, et que ce soit LUI qui juge — son message lu — s'il coupe ou s'il laisse finir.
 # C'est la même règle que pour les plafonds de fabrication : le choix lui revient.
 
+# Combien de temps `ou_en_est_le_chantier` patiente quand rien ne bouge. Assez long pour
+# qu'attendre coûte un tour au lieu de dix, assez court pour ne pas donner l'impression
+# d'un outil bloqué. L'attente se coupe de toute façon dès qu'il se passe quelque chose.
+ATTENTE_SUIVI_S = 8.0
+
 _CHANTIER = {"n": 0, "nom": "", "debut": 0.0, "fil": None,
              "resultat": None, "arret": False}
 _VERROU_CHANTIER = threading.Lock()
@@ -370,6 +375,27 @@ def _etat_chantier() -> str:
     if not _CHANTIER["n"]:
         return "aucun chantier lancé"
     n, nom = _CHANTIER["n"], _CHANTIER["nom"]
+
+    # RENDRE LA MAIN NE SUFFIT PAS : ENCORE FAUT-IL AVOIR QUELQUE CHOSE À EN FAIRE.
+    # Partie 24, dix secondes après le premier chantier — 16:18:35, 16:18:37, 16:18:38 :
+    # une interrogation par seconde. L'agent attend ACTIVEMENT, et son budget de cinq cents
+    # tours s'épuise en un quart d'heure sans qu'il ait rien fait d'autre. Le défaut est le
+    # nôtre : « appelle régulièrement » ne dit pas à quel rythme, et un agent qui n'a rien
+    # d'autre à faire appelle aussi vite qu'il peut.
+    #
+    # On ne corrige pas cela par une consigne, qui dépend du modèle, mais par l'outil :
+    # quand rien n'a changé, il ATTEND avant de répondre. Redemander coûte alors un tour au
+    # lieu de dix. L'attente se coupe dès qu'il se passe quelque chose — chantier fini, ou
+    # joueur qui parle — donc elle ne retarde jamais rien.
+    fin = _t.time() + ATTENTE_SUIVI_S
+    while _chantier_tourne() and _t.time() < fin:
+        try:
+            if (_api().peek_messages() or {}).get("messages"):
+                break                      # le joueur parle : on rend la main aussitôt
+        except Exception:
+            pass
+        _t.sleep(0.2)
+
     if _chantier_tourne():
         depuis = _t.time() - _CHANTIER["debut"]
         arret = " — arrêt demandé, il finit sa pose en cours" if _CHANTIER["arret"] else ""
