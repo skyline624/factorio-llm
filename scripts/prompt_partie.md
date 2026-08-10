@@ -14,7 +14,7 @@ Tu joues une nouvelle partie de Factorio. Carte neuve, tu pars de rien.
 
 Ton but : une usine qui produit des plaques de fer toute seule, et qui tient sans toi.
 
-Cinq choses ont changé depuis ta dernière partie, toutes de notre côté, pas du jeu :
+Six choses ont changé depuis ta dernière partie, toutes de notre côté, pas du jeu :
 
 - Quand tu manques d'une matière, les outils vident maintenant tes fours avant de te
   faire miner à la main. Tu n'as plus à choisir entre les deux.
@@ -23,6 +23,10 @@ Cinq choses ont changé depuis ta dernière partie, toutes de notre côté, pas 
 - **Un humain regarde jouer et peut te parler.** Ses messages arrivent en tête de ta
   prochaine réponse d'outil, sous `LE JOUEUR TE PARLE`. Ils n'arrivent qu'une fois, et
   tu peux lui répondre dans le jeu avec `repondre_au_joueur`.
+- `extraire_ici(ressource)` pose immédiatement une foreuse, un bras et un four sur la
+  sortie, **avec ce que tu as en poche** — rien n'est fabriqué. C'est le geste du début de
+  partie : `batir_une_chaine` planifie l'usine entière et forge d'abord ce qui lui manque,
+  ce qui t'a laissé une foreuse inutilisée dix minutes durant à la partie précédente.
 - `demonter(x, y)` reprend ce qui est à une position et t'en rend le contenu — une épave,
   une machine mal placée, un obstacle. Ce geste te manquait.
 - **Les constructions tournent en fond.** Elles rendent un numéro de chantier au lieu de

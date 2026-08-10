@@ -547,6 +547,25 @@ def outil(fn=None, *, ecrit: bool = True):
         souci = _avatar_absent()
         if souci:
             return f"refusé : {souci}"
+        # UN SEUL AVATAR — ET LE GARDE-FOU NE COUVRAIT QUE LA MOITIÉ DU DANGER.
+        # `_lancer_chantier` refuse bien un second CHANTIER, mais `extraire_ici`,
+        # `demonter`, `reparer` et `se_deplacer` sont des actions directes : elles ne
+        # passent pas par lui. Or le chantier travaille dans un thread qui ne tient aucun
+        # verrou — il l'a relâché en rendant la main, c'est tout l'intérêt du modèle. Rien
+        # n'empêchait donc de poser une extraction pendant qu'une chaîne se bâtissait,
+        # avec deux constructions faisant marcher le même personnage en sens contraire.
+        #
+        # Le 09/08, deux conteneurs sur la même partie ont donné cinquante-cinq minutes de
+        # jeu illisibles. Le code se protégeait de ce cas-là et laissait l'autre porte
+        # ouverte. Les LECTURES restent libres : c'est ce qui permet de regarder son usine
+        # pendant qu'on la bâtit.
+        if _chantier_tourne() and fn.__name__ != _CHANTIER["nom"].split("(")[0]:
+            import time as _t
+            depuis = _t.time() - _CHANTIER["debut"]
+            return (f"refusé : chantier n°{_CHANTIER['n']} « {_CHANTIER['nom']} » en cours "
+                    f"depuis {int(depuis // 60)} min {int(depuis % 60)} s, et il n'y a "
+                    f"qu'un avatar. Attends-le (`ou_en_est_le_chantier`) ou libère la "
+                    f"place (`arreter_le_chantier`).")
         with _VERROU_JEU:
             return fn(*a, **kw)
 

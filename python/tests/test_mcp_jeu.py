@@ -658,6 +658,14 @@ def test_demonter_existe_et_rend_ce_qu_il_recupere() -> None:
     vrai = mcp_jeu._api
     mcp_jeu._api = lambda: api
     mcp_jeu._AVATAR_VU[:] = [0.0, None]
+    # Une action est refusée tant qu'un chantier pilote l'avatar : sans attendre celui
+    # qu'un test précédent a laissé courir, on mesurerait ce refus et non le démontage.
+    import time as _t
+    mcp_jeu._demander_l_arret()
+    for _ in range(60):
+        if not mcp_jeu._chantier_tourne():
+            break
+        _t.sleep(0.1)
     try:
         brut = getattr(mcp_jeu.demonter, "fn", mcp_jeu.demonter)
         import asyncio
@@ -886,6 +894,71 @@ def test_la_fin_d_un_chantier_se_dit_sans_qu_on_la_demande() -> None:
     assert ok
 
 
+def test_aucune_action_ne_se_glisse_pendant_un_chantier() -> None:
+    """UN SEUL AVATAR — ET LE GARDE-FOU NE COUVRAIT QUE LA MOITIÉ DU DANGER.
+
+    `_lancer_chantier` refuse bien un SECOND chantier. Mais `extraire_ici`, `demonter`,
+    `reparer` et `se_deplacer` sont des actions directes : elles ne passent pas par lui.
+    Or le chantier travaille dans un thread qui ne tient aucun verrou — il l'a relâché en
+    rendant la main, c'est tout l'intérêt du modèle. Rien n'empêchait donc l'agent de
+    lancer `extraire_ici` pendant qu'une chaîne se bâtissait, avec deux constructions qui
+    font marcher le même personnage en sens contraire et posent où il n'est pas.
+
+    C'est arrivé le 09/08 par accident — deux conteneurs sur la même partie, cinquante-cinq
+    minutes de jeu illisibles. Le code se protégeait de ce cas-là et ouvrait l'autre porte.
+
+    Le refus doit nommer ce qui occupe la place et comment la reprendre : un refus qui
+    n'explique pas se retente en boucle. Et les LECTURES restent libres — c'est
+    précisément ce qui permet à l'agent de regarder son usine pendant qu'il la bâtit.
+    """
+    import mcp_jeu, asyncio, time
+
+    class _ApiOk:
+        def get_state(self):
+            return {"tick": 1, "character": {"x": 0.0, "y": 0.0}, "inventory": {}}
+        def peek_messages(self):
+            return {"messages": []}
+        def read_messages(self):
+            return {"messages": []}
+
+    vrai = mcp_jeu._api
+    mcp_jeu._api = lambda: _ApiOk()
+    mcp_jeu._AVATAR_VU[:] = [time.time(), None]
+    try:
+        for _ in range(60):
+            if not mcp_jeu._chantier_tourne():
+                break
+            time.sleep(0.1)
+        mcp_jeu._lancer_chantier("batir_une_chaine(fer)",
+                                 lambda: (time.sleep(2.0), "fini")[1])
+
+        def _appeler(nom, *a):
+            objet = getattr(mcp_jeu, nom)
+            r = getattr(objet, "fn", objet)(*a)
+            return asyncio.run(r) if asyncio.iscoroutine(r) else r
+
+        pendant = {
+            "extraire_ici": _appeler("extraire_ici", "iron-ore"),
+            "demonter": _appeler("demonter", 0.0, 0.0),
+            "se_deplacer": _appeler("se_deplacer", 5.0, 5.0),
+        }
+        lecture = _appeler("ou_en_est_le_chantier")
+    finally:
+        mcp_jeu._demander_l_arret()
+        mcp_jeu._api = vrai
+
+    refusees = [n for n, r in pendant.items()
+                if "chantier" in str(r).lower() and "en cours" in str(r).lower()]
+    lecture_libre = "chantier" in str(lecture).lower()
+
+    ok = len(refusees) == len(pendant) and lecture_libre
+    rec("test_aucune_action_ne_se_glisse_pendant_un_chantier", ok,
+        f"{len(refusees)}/{len(pendant)} refusées — lecture libre={lecture_libre}"
+        + ("" if len(refusees) == len(pendant)
+           else f" — passées : {[n for n in pendant if n not in refusees]}"))
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
@@ -905,7 +978,8 @@ def main() -> int:
               test_demonter_existe_et_rend_ce_qu_il_recupere,
               test_suivre_un_chantier_ne_brule_pas_les_tours_de_l_agent,
               test_extraire_pose_avec_ce_qu_on_a_sans_rien_fabriquer,
-              test_la_fin_d_un_chantier_se_dit_sans_qu_on_la_demande):
+              test_la_fin_d_un_chantier_se_dit_sans_qu_on_la_demande,
+              test_aucune_action_ne_se_glisse_pendant_un_chantier):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)
