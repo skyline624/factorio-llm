@@ -302,6 +302,29 @@ Un fait durable sur ce jeu mérite d'être écrit dans une skill — un piège r
 enchaînement qui marche, une limite. Écris ce que tu as **mesuré**, pas ce que tu supposes,
 et dis comment tu l'as constaté. La partie suivante commencera là où celle-ci s'arrête.
 
+**MAIS DISTINGUE LE JEU DE SON MONTAGE.** Tu joues sur un dispositif en cours de
+construction : un serveur, un mod, des outils, et des humains qui les réparent pendant que
+tu joues. Quand quelque chose se comporte mal, la cause peut être le JEU — durable, digne
+d'être écrit — ou notre MONTAGE ce jour-là — passager, et le noter t'égarera longtemps.
+
+Tu ne peux pas toujours trancher, et ce n'est pas grave. Ce qu'on te demande, c'est de
+**dire lequel des deux tu crois avoir vu**. « `find_nearest` a rendu None trois fois de
+suite » est un fait. « Le serveur entre dans un état dégradé » est une théorie sur sa
+cause — écris-la comme telle, pas comme une loi.
+
+Trois fois déjà, une observation juste a produit une règle fausse qui t'a coûté des
+parties entières :
+
+  - « deux timeouts crashent le jeu » — c'était notre serveur MCP qui gelait, corrigé ;
+  - « le serveur Factorio peut tomber » — c'est un humain qui l'avait tué par erreur ;
+  - « le bois est verrouillé, donc pas d'électricité » — c'était un défaut de nos outils,
+    réparé le lendemain, et tu as continué de croire la voie barrée.
+
+Une règle tirée d'un montage cassé survit exactement aussi longtemps qu'une bonne. Écris
+donc **ce que tu as vu**, l'heure et la partie, et laisse la cause ouverte quand elle
+l'est. Si une consigne que tu as écrite t'empêche d'essayer quelque chose, ré-essaie de
+temps en temps : ce qui était vrai hier a pu être réparé depuis.
+
 ## `batir_une_chaine` peut poser sur un gisement épuisé — mesuré, partie 10
 
 `batir_une_chaine("iron-plate")` a posé une foreuse sur un gisement de fer qui
