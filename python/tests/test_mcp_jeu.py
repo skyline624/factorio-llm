@@ -828,6 +828,64 @@ def test_extraire_pose_avec_ce_qu_on_a_sans_rien_fabriquer() -> None:
     assert ok
 
 
+def test_la_fin_d_un_chantier_se_dit_sans_qu_on_la_demande() -> None:
+    """UN CHANTIER QUI FINIT SANS PRÉVENIR LAISSE L'AGENT EN ATTENTE D'UN SIGNAL.
+
+    Partie 24, mesuré :
+
+        16:29:17  arreter_le_chantier      (le joueur venait de le corriger)
+        16:29:18  ou_en_est -> EN COURS, arrêt demandé, il finit sa pose
+        16:30:41  == chantier n°1 fini
+                     (rien pendant 2 min 23)
+        16:33:04  arreter_le_chantier -> « aucun chantier en cours »
+
+    Il attend un signal qui ne vient jamais, puis redemande l'arrêt de ce qui est déjà
+    terminé. Le résultat de sa construction — ce qu'il a posé, ce qui a manqué — dort dans
+    le serveur sans que rien ne l'en informe.
+
+    Le bandeau existe déjà pour livrer ce qui compte sans qu'on le demande : c'est ainsi
+    que les messages du joueur lui parviennent. La fin d'un chantier relève exactement du
+    même besoin. Elle part donc en tête de la prochaine réponse, une seule fois, comme le
+    reste — et sans se confondre avec la parole du joueur, qui n'a pas dit cela.
+    """
+    import mcp_jeu, time
+
+    class _ApiMuette:
+        def read_messages(self):
+            return {"messages": []}
+        def peek_messages(self):
+            return {"messages": []}
+
+    vrai = mcp_jeu._api
+    mcp_jeu._api = lambda: _ApiMuette()
+    mcp_jeu._AVATAR_VU[:] = [time.time(), None]
+    try:
+        for _ in range(60):
+            if not mcp_jeu._chantier_tourne():
+                break
+            time.sleep(0.1)
+        mcp_jeu._lancer_chantier("batir_une_chaine(fer)", lambda: "OK — 29 entités posées")
+        for _ in range(60):
+            if not mcp_jeu._chantier_tourne():
+                break
+            time.sleep(0.1)
+        premier = mcp_jeu._bandeau_du_joueur("inventaire : coal=44")
+        second = mcp_jeu._bandeau_du_joueur("inventaire : coal=44")
+    finally:
+        mcp_jeu._api = vrai
+
+    annonce = "29 entités posées" in premier
+    garde = "coal=44" in premier
+    pas_le_joueur = "LE JOUEUR TE PARLE" not in premier
+    une_fois = "29 entités posées" not in second
+
+    ok = annonce and garde and pas_le_joueur and une_fois
+    rec("test_la_fin_d_un_chantier_se_dit_sans_qu_on_la_demande", ok,
+        f"annoncé={annonce} résultat_gardé={garde} distinct_du_joueur={pas_le_joueur} "
+        f"une_seule_fois={une_fois}")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
@@ -846,7 +904,8 @@ def main() -> int:
               test_chaque_outil_qui_agit_passe_par_le_controle_d_avatar,
               test_demonter_existe_et_rend_ce_qu_il_recupere,
               test_suivre_un_chantier_ne_brule_pas_les_tours_de_l_agent,
-              test_extraire_pose_avec_ce_qu_on_a_sans_rien_fabriquer):
+              test_extraire_pose_avec_ce_qu_on_a_sans_rien_fabriquer,
+              test_la_fin_d_un_chantier_se_dit_sans_qu_on_la_demande):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

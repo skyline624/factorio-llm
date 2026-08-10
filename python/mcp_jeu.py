@@ -159,6 +159,8 @@ def _tracer(ligne: str) -> None:
 # s'en sert pour dire au joueur pourquoi personne ne lui répond.
 _EN_COURS = {}
 _DERNIER_ACCUSE = None
+# Numéro du dernier chantier dont la fin a déjà été annoncée (cf. _bandeau_du_joueur).
+_FIN_ANNONCEE = None
 
 
 def _accuser_reception(outil_en_cours, depuis_s):
@@ -457,6 +459,25 @@ def _bandeau_du_joueur(resultat):
     """
     if not isinstance(resultat, str):
         return resultat
+
+    # LA FIN D'UN CHANTIER SE DIT AUSSI SANS QU'ON LA DEMANDE. Partie 24 : le chantier
+    # finit à 16:30:41, plus rien pendant 2 min 23, puis l'agent redemande l'arrêt de ce
+    # qui est déjà terminé. Il attendait un signal qui ne vient jamais, pendant que le
+    # résultat de sa construction dormait dans le serveur.
+    #
+    # Le bandeau sert déjà à livrer ce qui compte sans qu'on le demande — c'est ainsi que
+    # les messages du joueur parviennent. Une fin de chantier relève du même besoin, et
+    # se dit une seule fois. Elle reste SÉPARÉE de la parole du joueur : lui n'a pas dit
+    # cela, et confondre les deux ferait attribuer à un humain ce que la machine annonce.
+    global _FIN_ANNONCEE
+    fini = (not _chantier_tourne() and _CHANTIER["n"]
+            and _CHANTIER["resultat"] is not None
+            and _CHANTIER["n"] != _FIN_ANNONCEE)
+    if fini:
+        _FIN_ANNONCEE = _CHANTIER["n"]
+        resultat = (f"CHANTIER TERMINÉ — n°{_CHANTIER['n']} « {_CHANTIER['nom']} » : "
+                    f"{_CHANTIER['resultat']}\n\n{resultat}")
+
     try:
         msgs = (_api().read_messages() or {}).get("messages") or []
     except Exception:
