@@ -19,25 +19,31 @@ ordre, on mine à la main pendant vingt minutes et on ne pose jamais rien.
 
 1. `etat_du_jeu` — voir où l'on est.
 2. `ou_sont_les_ressources("iron-ore")` — savoir où est le fer.
-3. **`extraire_ici("iron-ore")`** — dès que tu as une FOREUSE en poche, ce qui est le cas
-   au départ. Trois entités, quelques secondes, et le fer se met à couler pendant que tu
-   prépares la suite. Le bras et le four manquants, il les forge lui-même : ils coûtent
-   une plaque et un engrenage. Seule la foreuse lui est indispensable.
-4. **`batir_une_chaine("iron-plate")`** — l'usine, pour le volume. Elle fabrique
-   elle-même ce qui lui manque : n'attends pas d'avoir « assez de matériel » pour
-   l'appeler, c'est son travail. Mais elle forge AVANT de poser, donc elle prend des
-   minutes — d'où l'étape 3, qui produit en attendant.
-5. `etat_du_jeu` — vérifier ce qui est en terre.
-6. `diagnostiquer` puis `reparer` — mettre en marche ce qui ne tourne pas.
+3. **Poser de quoi produire.** Deux outils, et le choix te revient :
+
+   - `extraire_ici("iron-ore")` — foreuse, bras, four sur la sortie. Trois entités,
+     quelques secondes. Il te faut une foreuse en poche (tu en as une au départ) ; le
+     bras et le four, il les forge, ils coûtent une plaque et un engrenage.
+   - `batir_une_chaine("iron-plate")` — l'usine. Elle choisit son gisement au débit
+     visé, marche jusqu'à lui, et forge tout un plan AVANT de poser : mesuré entre 5 et
+     14 minutes selon la carte, pendant lesquelles rien ne produit.
+
+   Ce que les parties ont montré : une foreuse laissée en poche pendant qu'une usine se
+   prépare, c'est du fer qu'on ne produit pas. Mais une extraction minimale ne montera
+   jamais en volume. À toi de juger ce dont tu as besoin maintenant — et rien ne
+   t'interdit de faire les deux, l'une pendant que l'autre se bâtit.
+
+4. `etat_du_jeu` — vérifier ce qui est en terre.
+5. `diagnostiquer` puis `reparer` — mettre en marche ce qui ne tourne pas.
 
 Puis — et c'est là que la partie se gagne ou stagne :
 
-7. **`chercher_une_technologie("electronics")`** — dix plaques de cuivre, rien de plus.
+6. **`chercher_une_technologie("electronics")`** — dix plaques de cuivre, rien de plus.
    Elle ouvre `small-electric-pole`, `inserter`, `electronic-circuit` et `lab`.
-8. **`batir_une_centrale`** — `steam-power` s'acquiert toute seule dès que tu as fabriqué
+7. **`batir_une_centrale`** — `steam-power` s'acquiert toute seule dès que tu as fabriqué
    cinquante plaques de fer, donc tu l'as déjà quand ta chaîne tourne. Sans les poteaux
-   de l'étape 7, en revanche, le courant ne va nulle part : fais les deux dans cet ordre.
-9. **Passe tes machines à l'électrique.** C'est l'étape qui change tout, et la raison
+   de l'étape 6, en revanche, le courant ne va nulle part : fais les deux dans cet ordre.
+8. **Passe tes machines à l'électrique.** C'est l'étape qui change tout, et la raison
    d'être des deux précédentes.
 
 **POURQUOI L'ÉLECTRIQUE CHANGE TOUT.** Une machine burner a un réservoir : il faut le
@@ -359,7 +365,7 @@ Deux réserves, du même ordre que celles ci-dessus :
 Tu ne peux pas répondre dans le chat. Si tu veux faire savoir quelque chose, dis-le dans
 ta réponse : elle est lue.
 
-## Commence petit : `extraire_ici` avant `batir_une_chaine`
+## Deux façons de produire, à toi de choisir
 
 `extraire_ici(ressource)` pose TOUT DE SUITE trois entités — foreuse, bras, four sur la
 sortie. Il te faut une FOREUSE ; le bras et le four, il les forge au besoin, ils coûtent
@@ -375,8 +381,9 @@ Mesuré partie 24 : tu tenais une foreuse en poche, tu as lancé une chaîne, et
 plus tard la foreuse y était toujours. Une seule machine était posée. Le joueur l'a vu
 avant toi.
 
-**Pose d'abord, agrandis ensuite.** Une extraction qui tourne pendant que tu bâtis vaut
-mieux qu'une usine parfaite qui n'a rien produit.
+Aucune des deux n'est « la bonne » : elles ne répondent pas à la même question. Ce qui est
+mesuré, c'est le coût — quelques secondes contre plusieurs minutes — et ce qu'on perd à
+attendre. La décision est la tienne, comme celle du débit ou du nombre d'alimentations.
 
 ## Démonter, c'est miner — même geste pour tout
 
