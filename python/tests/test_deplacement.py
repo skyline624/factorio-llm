@@ -83,8 +83,60 @@ def test_la_marche_s_arrete_quand_on_le_demande() -> None:
     assert ok
 
 
+def test_l_arret_mord_aussi_entre_deux_etapes_de_fabrication() -> None:
+    """SEPTIÈME ENDROIT — cette fois c'est le MINAGE qui ne s'arrête pas.
+
+    Partie 29, mesuré pendant que le joueur regardait :
+
+        arrêt demandé   17:45:27
+        2 min 19 plus tard, le chantier tourne toujours
+        position t0 (66,42) — t+6 s (66,42)        immobile
+        iron-ore   t0 8     — t+6 s 11             +3 en six secondes
+        machines posées : 0
+
+    Il ne posait pas (H42), ne forgeait pas entre deux pièces (H50), ne marchait pas
+    (H52) : il MINAIT. `batir_une_chaine` se fournit en exécutant un plan d'étapes —
+    `find_nearest`, `walk_to_entity`, `mine_entity`, `place_furnace`… — et cette boucle-là
+    ne croisait aucun point de sortie.
+
+    Le joueur l'a vu avant nous : « pourtant il continue de miner a la main ».
+
+    On sort donc ENTRE deux étapes. Une étape déjà commencée va au bout — un `mine_entity`
+    interrompu au milieu laisserait un compte partiel qu'aucun état ne décrit — mais la
+    suivante ne démarre pas, et l'appelant sait où l'on s'est arrêté.
+    """
+    from agents.base import BaseAgent
+    from services.knowledge import Step
+
+    faits = []
+    stop = {"oui": False}
+
+    class _Agent(BaseAgent):
+        def __init__(self):
+            self.interrompu_par = lambda: stop["oui"]
+        def _execute(self, step):
+            faits.append(step.kind)
+            if len(faits) == 2:
+                stop["oui"] = True          # le joueur demande l'arrêt à la 2e étape
+            return {"ok": True}
+
+    steps = [Step("find_nearest", {}), Step("walk_to_entity", {}),
+             Step("mine_entity", {}), Step("place_furnace", {}), Step("craft_item", {})]
+    res = _Agent().act(steps)
+
+    sorti_tot = len(faits) < len(steps)
+    a_fait_avant = len(faits) >= 2
+    le_dit = any(isinstance(r, dict) and "interrompu" in str(r).lower() for r in res)
+
+    ok = sorti_tot and a_fait_avant and le_dit
+    rec("test_l_arret_mord_aussi_entre_deux_etapes_de_fabrication", ok,
+        f"{len(faits)}/{len(steps)} étape(s) faites — dit={le_dit}")
+    assert ok
+
+
 def main() -> int:
-    for t in (test_la_marche_s_arrete_quand_on_le_demande,):
+    for t in (test_la_marche_s_arrete_quand_on_le_demande,
+              test_l_arret_mord_aussi_entre_deux_etapes_de_fabrication):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

@@ -330,6 +330,9 @@ def _lancer_chantier(nom: str, travail) -> str:
         def _porter():
             try:
                 r = travail()
+            except ChantierTue:
+                r = ("ARRÊTÉ à la demande — ce qui était posé reste posé, relance pour "
+                     "reprendre là où tu t'es arrêté")
             except Exception as e:
                 r = f"ERREUR {type(e).__name__}: {e}"
             _CHANTIER["resultat"] = r
@@ -354,12 +357,102 @@ def _brancher_l_arret(coord) -> None:
     jamais prise. Trois correctifs inertes, chacun cru bon pendant une partie entière.
     """
     coord.interrompu_par = _doit_s_arreter
+    # ET SUR LE BUILDER, QUI EXÉCUTE LES ÉTAPES. `batir_chaine` se fournit par
+    # `builder.act(steps)` : miner, marcher, fondre. Poser le drapeau sur le seul
+    # Coordinator laissait donc l'arrêt muet pendant tout l'approvisionnement — sept
+    # minutes de minage après un arrêt demandé, partie 29, sous les yeux du joueur.
+    # C'est la septième fois qu'un correctif juste ne rencontre pas l'exécution.
+    builder = getattr(coord, "builder", None)
+    if builder is not None:
+        builder.interrompu_par = _doit_s_arreter
+
+
+class ChantierTue(BaseException):
+    """Levée DANS le thread d'un chantier pour le tuer.
+
+    `BaseException` et non `Exception` : les services attrapent volontiers `Exception`
+    pour survivre à un aléa du jeu, et avaleraient l'ordre d'arrêt sans le savoir.
+    """
+
+
+def _tuer_le_fil(fil) -> bool:
+    """Lève `ChantierTue` dans le thread visé, où qu'il en soit de son travail.
+
+    UN ARRÊT COOPÉRATIF N'EST PAS UN ARRÊT. Sept points de sortie ont été ajoutés
+    aujourd'hui — pose, forge, marche, étapes d'approvisionnement — et sept fois le
+    chantier a continué, parce que le temps se passait ailleurs. Partie 29 : arrêt demandé
+    à 17:45:27, chantier fini à 17:52:47, sept minutes vingt plus tard, pour zéro entité
+    posée. On ne cherche donc plus à couvrir tous les chemins : on tue.
+
+    `PyThreadState_SetAsyncExc` est l'outil prévu par CPython pour cela. Il agit à la
+    prochaine instruction de bytecode du thread — donc immédiatement dans une boucle
+    Python, mais PAS pendant un appel bloquant en C (un `socket.recv` sur le lien RCON).
+    D'où le second étage dans `_demander_l_arret`.
+    """
+    import ctypes
+    ident = getattr(fil, "ident", None)
+    if ident is None:
+        return False
+    n = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        ctypes.c_ulong(ident), ctypes.py_object(ChantierTue))
+    if n > 1:                      # visé plus d'un thread : on annule, c'est anormal
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(ident), None)
+        return False
+    return n == 1
+
+
+def _debloquer_le_lien() -> None:
+    """Ferme le lien RCON pour sortir un chantier bloqué dans un appel réseau.
+
+    SECOND ÉTAGE, et il est indispensable : un chantier passe l'essentiel de son temps à
+    attendre le jeu — miner cinquante minerais, marcher cent tuiles. Il est alors dans un
+    `recv` bloquant, où aucune exception asynchrone ne l'atteint. Fermer la socket fait
+    lever l'appel, et `ChantierTue`, déjà armée, prend le relais à l'instruction suivante.
+
+    Le lien se rouvre tout seul à la demande d'après (`_api` sonde et reconstruit), donc
+    l'agent ne perd que l'appel en cours — celui qu'on voulait précisément interrompre.
+    """
+    try:
+        api = _ETAT.get("api")
+        if api is not None and getattr(api, "rcon", None) is not None:
+            api.rcon.close()
+    except Exception:
+        pass
+    _ETAT["api"], _ETAT["coord"] = None, None
 
 
 def _demander_l_arret() -> bool:
-    """Pose le drapeau d'arrêt. La pose en cours se termine, la suivante ne commence pas."""
+    """Arrête le chantier POUR DE BON, où qu'il en soit.
+
+    Trois étages, du plus doux au plus ferme. Le drapeau d'abord : si le chantier passe
+    par un point de sortie dans la seconde, il s'arrête proprement et l'on n'a rien cassé.
+    L'exception ensuite, pour les boucles Python qui ne consultent rien. La fermeture du
+    lien enfin, seule capable de sortir d'un appel réseau bloquant.
+
+    Ce qui est posé RESTE posé : on interrompt un travail, on ne défait rien.
+    """
+    import threading
+    import time as _t
+
     _CHANTIER["arret"] = True
-    return _chantier_tourne()
+    fil = _CHANTIER.get("fil")
+    if fil is None or not fil.is_alive():
+        return False
+
+    def _insister():
+        # Une seconde de grâce : le chantier a peut-être un point de sortie tout proche,
+        # et s'arrêter proprement vaut mieux que d'être tué.
+        _t.sleep(1.0)
+        if not (fil.is_alive()):
+            return
+        _tuer_le_fil(fil)
+        _t.sleep(2.0)
+        if fil.is_alive():
+            _debloquer_le_lien()      # il attend le jeu : on lui coupe l'attente
+            _tuer_le_fil(fil)
+
+    threading.Thread(target=_insister, daemon=True, name="tueur-chantier").start()
+    return True
 
 
 def _doit_s_arreter() -> bool:
@@ -710,8 +803,17 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
     if forge:
         inv = perception.inventory(api)
 
+    # LE CONTRAT EST CELUI DU MOD, PAS CELUI QU'ON IMAGINE. `find_nearest` rend
+    # {"name","x","y","distance"} — ou {} s'il n'a rien vu. J'avais inventé une clé
+    # `found` : elle valait toujours None, l'outil refusait donc TOUJOURS, et l'agent se
+    # rabattait sur `batir_une_chaine` en croyant qu'il n'y avait pas de gisement.
+    # Mesuré partie 29, sur un charbon qui était à douze tuiles.
+    #
+    # Le banc ne pouvait pas le voir : ses doubles rendaient `{"found": True, ...}`,
+    # c'est-à-dire ma fiction. Un double doit refléter la RÉPONSE DU MOD, jamais l'idée
+    # qu'on s'en fait — sans quoi il confirme l'erreur au lieu de la révéler.
     trouve = api.find_nearest(ressource) or {}
-    if not trouve.get("found"):
+    if trouve.get("x") is None or trouve.get("y") is None:
         return f"aucun gisement de {ressource} en vue — essaie `ou_sont_les_ressources`"
     ancre = (float(trouve["x"]), float(trouve["y"]))
     api.generate_terrain(ancre[0], ancre[1], 25.0)
@@ -748,18 +850,22 @@ def ou_en_est_le_chantier() -> str:
 
 @outil(ecrit=False)
 def arreter_le_chantier() -> str:
-    """Arrête proprement le travail en cours — entre deux entités, jamais au milieu d'une.
+    """Arrête le travail en cours, à n'importe quel moment — il est TUÉ s'il résiste.
 
-    Ce qui est posé RESTE posé, et relancer la même construction reprend où elle s'était
-    arrêtée. À utiliser quand ce que tu viens d'apprendre rend le chantier inutile ou
-    nuisible — pas par principe : un chantier qui va au bout coûte moins qu'un chantier
-    relancé trois fois.
+    Le chantier s'arrête d'abord proprement s'il passe par un point de sortie ; sinon il
+    est interrompu de force, en trois secondes au plus. Ce qui est posé RESTE posé, et
+    relancer la même construction reprend où elle s'était arrêtée.
+
+    À utiliser quand ce que tu viens d'apprendre rend le chantier inutile ou nuisible —
+    pas par principe : un chantier qui va au bout coûte moins que trois relances.
     """
     tournait = _demander_l_arret()
     if not tournait:
         return "aucun chantier en cours — rien à arrêter"
-    return ("arrêt demandé : la pose en cours se termine, la suivante ne commencera pas. "
-            "Suis la fin par `ou_en_est_le_chantier`.")
+    return ("arrêt en cours — le chantier s'arrête proprement s'il le peut, et il est TUÉ "
+            "sinon, en trois secondes au plus. Ce qui est posé reste posé, et relancer la "
+            "même construction reprend où elle s'était arrêtée. Vérifie par "
+            "`ou_en_est_le_chantier`.")
 
 
 @outil(ecrit=False)

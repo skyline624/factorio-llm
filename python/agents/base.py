@@ -72,6 +72,30 @@ class BaseAgent:
         """Exécute les étapes dans l'ordre. Fail-fast à la 1re étape échouée."""
         results: list[dict] = []
         for i, step in enumerate(steps):
+            # SEPTIÈME ENDROIT OÙ L'ARRÊT NE MORDAIT PAS. Partie 29, mesuré pendant que le
+            # joueur regardait : arrêt demandé, et 2 min 19 plus tard le chantier tournait
+            # toujours — immobile en (66,42), +3 minerais en six secondes, zéro machine
+            # posée. Il ne posait pas (H42), ne forgeait pas entre deux pièces (H50), ne
+            # marchait pas (H52) : il MINAIT. Se fournir exécute un plan d'étapes, et
+            # cette boucle-ci ne croisait aucun point de sortie.
+            #
+            # Le joueur l'a vu avant nous : « pourtant il continue de miner a la main ».
+            #
+            # On sort ENTRE deux étapes. Celle qui a commencé va au bout — un `mine_entity`
+            # coupé au milieu laisserait un compte partiel qu'aucun état ne décrit — mais
+            # la suivante ne démarre pas, et l'appelant sait où l'on s'est arrêté.
+            interrupteur = getattr(self, "interrompu_par", None)
+            if interrupteur is not None:
+                try:
+                    doit = bool(interrupteur())
+                except Exception:
+                    doit = False
+                if doit:
+                    results.append({"ok": False, "detail": (
+                        f"interrompu à la demande après {i} étape(s) sur {len(steps)} ; "
+                        f"relance pour finir")})
+                    print(f"[agent]   INTERROMPU avant {step.kind}")
+                    break
             print(f"[agent]   {i + 1}/{len(steps)} {step.kind} {step.args}")
             res = self._execute(step)
             results.append(res)

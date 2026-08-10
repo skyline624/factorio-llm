@@ -482,11 +482,20 @@ def test_arreter_le_chantier_atteint_vraiment_la_pose() -> None:
     coord = mcp_jeu._coord.__wrapped__ if hasattr(mcp_jeu._coord, "__wrapped__") else None
     # On ne construit pas de Coordinator ici (il lui faut le jeu) : on vérifie que le
     # serveur lui attache bien de quoi savoir qu'on veut l'arrêter.
-    class _Faux:
+    class _FauxBuilder:
         pass
+
+    class _Faux:
+        def __init__(self):
+            self.builder = _FauxBuilder()
     faux = _Faux()
     mcp_jeu._ETAT["coord"] = faux
     mcp_jeu._brancher_l_arret(faux)
+
+    # LE BUILDER AUSSI. C'est lui qui exécute les étapes d'approvisionnement — miner,
+    # marcher, fondre — et l'arrêt y est resté muet sept minutes durant, partie 29.
+    porte_builder = getattr(faux.builder, "interrompu_par", None)
+    assert callable(porte_builder), "l'arrêt n'atteint pas le builder"
 
     porte = getattr(faux, "interrompu_par", None)
     mcp_jeu._CHANTIER["arret"] = False
@@ -814,7 +823,8 @@ def test_extraire_pose_avec_ce_qu_on_a_sans_rien_fabriquer() -> None:
             return {"tick": 1, "character": {"x": 0.0, "y": 0.0},
                     "inventory": dict(self.inv)}
         def find_nearest(self, nom):
-            return {"found": True, "x": 6.0, "y": 0.0, "name": nom}
+            # Le format RÉEL du mod : ni `found`, ni booléen — un nom, x, y, distance.
+            return {"name": nom, "x": 6.0, "y": 0.0, "distance": 6}
         def generate_terrain(self, *a, **kw):
             return {"ok": True}
         def can_place_check(self, *a, **kw):
@@ -1028,7 +1038,7 @@ def test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros() -> None:
         def find_nearest(self, nom):
             # Aucun gisement : l'outil s'arrête juste APRÈS la forge, qui est ce qu'on
             # mesure ici. La pose elle-même a son propre banc.
-            return {"found": False}
+            return {}          # le mod rend une table VIDE quand il n'a rien vu
 
     api = _ApiPresque()
     vrai_api, vrai_coord = mcp_jeu._api, mcp_jeu._ETAT.get("coord")
@@ -1103,7 +1113,8 @@ def test_extraire_pose_deux_entites_et_ne_forge_plus_de_bras() -> None:
             return {"tick": 1, "character": {"x": 0.0, "y": 0.0},
                     "position": {"x": 0.0, "y": 0.0}, "inventory": dict(self.inv)}
         def find_nearest(self, nom):
-            return {"found": True, "x": 6.0, "y": 0.0, "name": nom}
+            # Le format RÉEL du mod : ni `found`, ni booléen — un nom, x, y, distance.
+            return {"name": nom, "x": 6.0, "y": 0.0, "distance": 6}
         def generate_terrain(self, *a, **kw):
             return {"ok": True}
         def can_place_check(self, *a, **kw):
@@ -1159,6 +1170,55 @@ def test_extraire_pose_deux_entites_et_ne_forge_plus_de_bras() -> None:
     assert ok
 
 
+def test_arreter_un_chantier_le_TUE_meme_s_il_ne_cooopere_pas() -> None:
+    """UN ARRÊT COOPÉRATIF N'EST PAS UN ARRÊT — il suppose que le code repasse par nous.
+
+    Sept fois aujourd'hui j'ai ajouté un point de sortie, et sept fois le chantier a
+    continué : la pose (H42), la forge entre deux pièces (H50), la marche (H52), puis les
+    étapes d'approvisionnement. Chaque correctif était juste, et chaque fois le temps se
+    passait ailleurs. Partie 29, mesuré sous les yeux du joueur : arrêt demandé à 17:45:27,
+    chantier réellement fini à 17:52:47 — SEPT MINUTES VINGT plus tard, pour finir en
+    échec avec zéro entité posée.
+
+    La demande est claire : « comme peut-être un signal kill sur une application, le modèle
+    doit pouvoir arrêter un chantier à n'importe quel moment ». Pas à un moment prévu — à
+    N'IMPORTE QUEL moment. On ne cherche donc plus à couvrir tous les chemins : on tue.
+
+    Ce banc lance délibérément un travail qui n'offre AUCUNE coopération — une boucle qui
+    ne consulte rien et ne rend jamais la main. C'est le seul test qui distingue un kill
+    d'un drapeau poli. Si le chantier survit, le mécanisme ne vaut rien, quel que soit le
+    nombre de points de sortie qu'on aura semés ailleurs.
+    """
+    import mcp_jeu, time
+
+    tours = {"n": 0}
+
+    def _travail_sourd():
+        # Ni interrupteur, ni retour : exactement ce que fait un `mine_entity` de cinquante
+        # unités côté mod, ou n'importe quelle boucle qu'on n'a pas pensé à instrumenter.
+        while True:
+            tours["n"] += 1
+            time.sleep(0.05)
+
+    _table_rase(mcp_jeu)
+    mcp_jeu._lancer_chantier("travail_sourd", _travail_sourd)
+    time.sleep(0.3)
+    vivant_avant = mcp_jeu._chantier_tourne()
+
+    mcp_jeu._demander_l_arret()
+    fin = time.time() + 5.0
+    while mcp_jeu._chantier_tourne() and time.time() < fin:
+        time.sleep(0.1)
+    delai = time.time() - (fin - 5.0)
+    vivant_apres = mcp_jeu._chantier_tourne()
+
+    ok = vivant_avant and not vivant_apres and delai < 4.0
+    rec("test_arreter_un_chantier_le_TUE_meme_s_il_ne_cooopere_pas", ok,
+        f"tué en {delai:.1f}s après {tours['n']} tours (vivant avant={vivant_avant}, "
+        f"après={vivant_apres})")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
@@ -1181,7 +1241,8 @@ def main() -> int:
               test_la_fin_d_un_chantier_se_dit_sans_qu_on_la_demande,
               test_aucune_action_ne_se_glisse_pendant_un_chantier,
               test_extraire_forge_le_petit_qui_manque_mais_pas_le_gros,
-              test_extraire_pose_deux_entites_et_ne_forge_plus_de_bras):
+              test_extraire_pose_deux_entites_et_ne_forge_plus_de_bras,
+              test_arreter_un_chantier_le_TUE_meme_s_il_ne_cooopere_pas):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)
