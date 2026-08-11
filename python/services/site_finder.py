@@ -95,7 +95,8 @@ def find_power_site(api, vers: tuple[float, float] = (0.0, 0.0),
 def place_pole_line(api, depart: tuple[float, float], arrivee: tuple[float, float],
                     pole: str = "small-electric-pole", pas: float = POLE_PAS,
                     portee: float = POLE_PORTEE, timeout: float = 20.0,
-                    garde: int = 80) -> tuple[list[tuple[float, float]], bool]:
+                    garde: int = 80, avancer=None
+                    ) -> tuple[list[tuple[float, float]], bool]:
     """Pose une ligne de poteaux CONNEXE entre deux points. Retourne (positions, complète).
 
     Chaque poteau est visé à `pas` de la position réellement posée précédente, et tout
@@ -104,6 +105,25 @@ def place_pole_line(api, depart: tuple[float, float], arrivee: tuple[float, floa
 
     `complète=False` signale un obstacle infranchissable — la ligne s'arrête là, et
     l'appelant sait que le courant n'ira pas plus loin.
+
+    `avancer(x, y)` — À FOURNIR DÈS QUE LA LIGNE EST PLUS LONGUE QUE LE BRAS. Une ligne
+    de soixante tuiles sort de la portée de construction au troisième poteau ; sans
+    déplacement, le jeu refuse tout le reste. Mesuré en jeu partie 39, Hermes mis en
+    pause pour tenir sa place :
+
+        perso            (12.5, -56.3)   il ne bouge jamais
+        poteau 1 posé    (9.5, -53.5)    à  4.1 tuiles   OK
+        poteau 2 posé    (8.5, -47.5)    à  9.7 tuiles   OK
+        poteau 3         ~15 tuiles      REFUSÉ, et trois poteaux restaient en poche
+
+    L'appelant concluait alors « obstacle infranchissable » — par élimination, puisqu'il
+    restait des poteaux. Fausse cause, et coûteuse : elle envoie chercher un contournement
+    de terrain qui n'existe pas. Dix des onze candidats du premier pas répondaient
+    `can_place=True`.
+
+    La marche reste HORS de ce module, qui est déterministe et ignore tout du Coordinator.
+    Il l'appelle seulement : c'est l'appelant qui sait comment on marche — et c'est ainsi
+    que le point d'arrêt d'un chantier continue de mordre en chemin.
     """
     cur = (math.floor(depart[0]) + 0.5, math.floor(depart[1]) + 0.5)
     poses: list[tuple[float, float]] = []
@@ -114,6 +134,9 @@ def place_pole_line(api, depart: tuple[float, float], arrivee: tuple[float, floa
         t = pas / reste
         vx = cur[0] + (arrivee[0] - cur[0]) * t
         vy = cur[1] + (arrivee[1] - cur[1]) * t
+        # ON VA OÙ L'ON POSE — avant d'essayer, pas après avoir échoué.
+        if avancer is not None:
+            avancer(vx, vy)
         pose = None
         for dx, dy in ((0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
                        (1.0, 1.0), (-1.0, -1.0), (2.0, 0.0), (0.0, 2.0),

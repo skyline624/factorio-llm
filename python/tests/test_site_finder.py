@@ -352,6 +352,72 @@ def test_un_souterrain_a_moitie_pose_est_retire() -> None:
     assert ok
 
 
+def test_la_ligne_MARCHE_le_long_de_son_trace() -> None:
+    """LA LIGNE MEURT AU BOUT DU BRAS, ET LE RAPPORT ACCUSE LE TERRAIN.
+
+    Partie 39, reproduit dans le jeu, Hermes mis en pause pour tenir sa place :
+
+        perso            (12.5, -56.3)   il ne bouge JAMAIS
+        poteau 1 posé    (9.5, -53.5)    à  4.1 tuiles   OK
+        poteau 2 posé    (8.5, -47.5)    à  9.7 tuiles   OK
+        poteau 3         ~15 tuiles      REFUSÉ
+        poteaux restants : 3
+
+    Trois poteaux en poche, aucun obstacle — dix des onze candidats du premier pas
+    répondaient `can_place=True`. La ligne s'arrête simplement à la portée de
+    construction du personnage, qui reste planté au départ pendant qu'elle s'éloigne
+    de soixante-trois tuiles.
+
+    L'appelant en déduit alors « obstacle infranchissable (3 poteau(x) restant(s)) »,
+    par élimination : il reste des poteaux, donc c'est le terrain. C'est la fausse cause
+    que H35 avait corrigée dans l'autre sens — et elle envoie chercher un contournement
+    qui n'existe pas. Hermes a passé vingt minutes à démonter sa propre centrale pour
+    « libérer la rive ».
+
+    SEPTIÈME FOIS QUE LE MOTIF REVIENT : on pose là où l'on n'est pas allé. La marche
+    reste hors de ce module — il est déterministe et ne connaît pas le Coordinator — mais
+    il l'APPELLE, et c'est l'appelant qui décide comment on marche.
+    """
+    import math
+
+    import services.site_finder as sf
+
+    class _ApiPortee:
+        """Le jeu refuse toute pose au-delà de la portée de construction."""
+        PORTEE = 10.0
+        def __init__(self) -> None:
+            self.perso = (0.0, 0.0)
+        place_entity_at = "place_entity_at"
+        def run_action(self, fn, nom, x, y, *a, **kw):
+            if math.dist(self.perso, (x, y)) > self.PORTEE:
+                return {"ok": False, "detail": "cible hors portee"}
+            return {"ok": True}
+
+    vrai = sf.can_place
+    sf.can_place = lambda api, nom, x, y: True          # le terrain n'est jamais en cause
+    try:
+        sans = _ApiPortee()
+        ligne_sans, fini_sans = sf.place_pole_line(sans, (0.0, 0.0), (60.0, 0.0))
+
+        avec = _ApiPortee()
+        pas: list[tuple[float, float]] = []
+        def _avancer(x, y):
+            pas.append((x, y))
+            avec.perso = (x, y)
+        ligne_avec, fini_avec = sf.place_pole_line(avec, (0.0, 0.0), (60.0, 0.0),
+                                                   avancer=_avancer)
+    finally:
+        sf.can_place = vrai
+
+    ok = (not fini_sans and len(ligne_sans) <= 2          # le défaut, tel qu'il est mesuré
+          and fini_avec and len(ligne_avec) >= 9          # la ligne va au bout
+          and len(pas) >= 5)                              # et l'on a bien MARCHÉ
+    rec("test_la_ligne_MARCHE_le_long_de_son_trace", ok,
+        f"sans marche : {len(ligne_sans)} poteau(x), complete={fini_sans} — "
+        f"avec : {len(ligne_avec)}, complete={fini_avec}, {len(pas)} pas")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_ligne_droite_connexe,
@@ -364,6 +430,7 @@ def main() -> int:
         test_emplacement_sans_issue_est_libere,
         test_poteau_alimente_lu_correctement,
         test_aucun_poteau_alimente_rend_none,
+        test_la_ligne_MARCHE_le_long_de_son_trace,
     ]
     for t in tests:
         t()

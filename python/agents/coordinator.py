@@ -2155,7 +2155,21 @@ class Coordinator:
         besoin = int(math.ceil(distance / site_finder.POLE_PAS)) + 2
         self._assurer_stock("small-electric-pole", besoin)
 
-        ligne, complete = site_finder.place_pole_line(self.api, depart, self.zone)
+        # ON MARCHE LE LONG DU TRACÉ. Troisième cause possible d'arrêt, et la seule que le
+        # code ne savait pas nommer : la portée de construction. Mesuré partie 39, Hermes
+        # mis en pause pour tenir sa place — deux poteaux posés à 4.1 et 9.7 tuiles, le
+        # troisième refusé à quinze, et TROIS poteaux encore en poche. Aucun obstacle : dix
+        # des onze candidats du premier pas répondaient `can_place=True`.
+        #
+        # Le rapport concluait donc « obstacle infranchissable » par élimination, et
+        # l'agent est parti démonter sa propre centrale pour « libérer la rive ». Vingt
+        # minutes sur une fausse cause — exactement ce que le second défaut ci-dessus
+        # devait empêcher, à une cause près qu'on n'avait pas prévue.
+        #
+        # `_marcher` plutôt que `marcher_vers` : c'est le point de passage unique, celui
+        # qui laisse l'arrêt d'un chantier mordre EN CHEMIN.
+        ligne, complete = site_finder.place_pole_line(
+            self.api, depart, self.zone, avancer=self._marcher)
         if complete:
             return ligne, True, ""
 
