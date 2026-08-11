@@ -844,21 +844,41 @@ def _foreuse_posee_pres_de(api, ressource: str):
     # On regarde donc ce qu'il y a SOUS la foreuse, et l'on ne conclut rien de ce qu'on ne
     # voit pas : sans ressource lisible, on rend None et le chemin normal (`find_nearest`)
     # reprend la main. Le raccourci, lui, ancrerait sur une tuile non vérifiée.
+    # `inspect_at` NE REND JAMAIS DE RESSOURCE — et c'est voulu. Le mod l'exclut
+    # explicitement (`tools.lua:837`, `e.type ~= "resource"`), sans quoi une seule
+    # inspection rendrait des milliers de tuiles de minerai. J'avais écrit ce filtre
+    # dessus : il ne trouvait donc RIEN, rendait toujours None, et supprimait la reprise
+    # d'une foreuse existante que H63 venait justement d'obtenir.
+    #
+    # Le test passait au vert parce que mon double retournait des ressources — la fiction
+    # que je m'étais faite du mod, pas sa réponse. C'est le piège de la clé `found`
+    # inventée pour `extraire_ici`, refait à l'identique et le même jour. Un double doit
+    # refléter le CONTRAT MESURÉ : ici `inspect_at` -> {entities: [...]} sans ressources,
+    # et `scan_patches` -> {patches: [{x1,y1,x2,y2,...}]}.
+    #
+    # Limite assumée : `scan_patches` part du PERSONNAGE et la boîte englobante d'un
+    # gisement peut couvrir des trous. On répond donc « cette foreuse est sur ce
+    # gisement-là » avec la précision d'un rectangle, ce qui suffit à distinguer le fer du
+    # charbon — la question posée.
     from services import perception
     try:
         tout = perception.parc(api) or []
     except Exception:
         tout = []
-    for e in tout:
-        if not str(e.get("name", "")).endswith("mining-drill"):
-            continue
-        x, y = float(e.get("x", 0.0)), float(e.get("y", 0.0))
-        try:
-            dessous = ((api.inspect_at(x, y, 1.5) or {}).get("entities") or [])
-        except Exception:
-            continue
-        if any(f.get("type") == "resource" and f.get("name") == ressource
-               for f in dessous):
+    foreuses = [(float(e.get("x", 0.0)), float(e.get("y", 0.0))) for e in tout
+                if str(e.get("name", "")).endswith("mining-drill")]
+    if not foreuses:
+        return None
+    try:
+        boites = [(float(p["x1"]), float(p["y1"]), float(p["x2"]), float(p["y2"]))
+                  for p in ((api.scan_patches(ressource, 500.0, 20) or {}).get("patches")
+                            or []) if p.get("x1") is not None]
+    except Exception:
+        return None
+    for x, y in foreuses:
+        # Une foreuse fait 2×2 : sa position est un coin de son emprise, d'où la marge.
+        if any(x1 - 1.5 <= x <= x2 + 1.5 and y1 - 1.5 <= y <= y2 + 1.5
+               for x1, y1, x2, y2 in boites):
             return (x, y)
     return None
 

@@ -1589,11 +1589,12 @@ def test_extraire_reprend_la_foreuse_ou_qu_elle_soit() -> None:
             # Le joueur s'est deplace : le point rendu est ailleurs sur le gisement.
             return {"name": nom, "x": -20.0, "y": 40.0, "distance": 3}
         def inspect_at(self, x, y, radius=0.5):
-            # La foreuse de (-65,9) couvre bien du charbon : c'est CELLE-LA qu'on reprend.
-            if abs(x + 65.0) < 2 and abs(y - 9.0) < 2:
-                return {"entities": [{"name": "coal", "type": "resource",
-                                      "x": -65.0, "y": 9.0, "amount": 1200}]}
-            return {"entities": []}
+            return {"x": x, "y": y, "radius": radius, "entities": []}
+        def scan_patches(self, resource, radius=300.0, max_patches=8):
+            # La foreuse de (-65,9) est bien sur le charbon : c'est CELLE-LA qu'on reprend.
+            return {"resource": resource, "count": 1, "patches": [
+                {"x": -65.0, "y": 9.0, "count": 400, "amount": 120000,
+                 "x1": -74, "y1": 2, "x2": -56, "y2": 17, "dist": 5.0}]}
 
     try:
         trouve = mcp_jeu._foreuse_posee_pres_de(_ApiLoin(), "coal")
@@ -1674,12 +1675,20 @@ def test_la_foreuse_de_fer_ne_vaut_pas_foreuse_de_charbon() -> None:
     ]
 
     class _ApiFer:
+        """Double FIDÈLE au mod : `inspect_at` EXCLUT les ressources (tools.lua:837),
+        c'est `scan_patches` qui les donne, en boîtes englobantes."""
         def find_nearest(self, nom):
             return {"name": nom, "x": 12.0, "y": 80.0, "distance": 40}
         def inspect_at(self, x, y, radius=0.5):
-            # Sous la foreuse de (38,46) il y a du FER, pas du charbon.
-            return {"entities": [{"name": "iron-ore", "type": "resource",
-                                  "x": 38.0, "y": 46.0, "amount": 900}]}
+            return {"x": x, "y": y, "radius": radius, "entities": []}
+        def scan_patches(self, resource, radius=300.0, max_patches=8):
+            if resource == "iron-ore":     # le gisement qui porte la foreuse (38,46)
+                return {"resource": resource, "count": 1, "patches": [
+                    {"x": 38.0, "y": 46.0, "count": 300, "amount": 90000,
+                     "x1": 30, "y1": 40, "x2": 46, "y2": 52, "dist": 3.0}]}
+            return {"resource": resource, "count": 1, "patches": [
+                {"x": 12.0, "y": 80.0, "count": 200, "amount": 60000,
+                 "x1": 5, "y1": 74, "x2": 19, "y2": 86, "dist": 40.0}]}
 
     try:
         pour_charbon = mcp_jeu._foreuse_posee_pres_de(_ApiFer(), "coal")
