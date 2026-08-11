@@ -619,6 +619,22 @@ def _bandeau_du_joueur(resultat):
     # On lui donne les deux faits qui manquent, les mêmes que le pont met dans le tour
     # `user` : l'humain REGARDE L'ÉCRAN, et arrêter NE DÉTRUIT RIEN. Le second change son
     # calcul — il refusait d'interrompre comme si couper faisait tout perdre.
+    # C'EST CELUI QUI LIT QUI DOIT LIBÉRER L'AVATAR. Deux lecteurs se disputaient la file :
+    # le bandeau avec `read_messages`, qui la VIDE par conception, et le veilleur avec
+    # `peek_messages`, qui regardait ensuite et ne trouvait plus rien. Le veilleur
+    # n'arrêtait donc jamais rien — mesuré partie 38 : l'agent répond en quatre secondes,
+    # et le chantier continue comme si de rien n'était.
+    #
+    # Le veilleur garde son rôle — accuser réception DANS LE JEU quand personne ne répond —
+    # mais couper appartient à celui qui a le message en main.
+    if _chantier_tourne():
+        _demander_l_arret()
+        try:
+            _api().say("j'arrête le chantier pour t'écouter — il reprendra où il en "
+                       "était si besoin")
+        except Exception:
+            pass
+
     return ("LE JOUEUR TE PARLE — il regarde l'écran, toi tu lis des compteurs :\n"
             f"{dits}\n"
             "Ce qu'il décrit, il le voit — un four vide, une machine épuisée, du minerai "

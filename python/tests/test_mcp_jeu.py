@@ -1602,6 +1602,63 @@ def test_extraire_reprend_la_foreuse_ou_qu_elle_soit() -> None:
     assert ok
 
 
+def test_c_est_le_bandeau_qui_libere_l_avatar_pas_le_veilleur() -> None:
+    """DEUX LECTEURS, UN SEUL MESSAGE : le bandeau gagne toujours la course.
+
+    Partie 38, mesuré. Le joueur écrit pendant un `se_procurer` ; l'agent répond en quatre
+    secondes, et le chantier continue. H68 devait pourtant libérer l'avatar.
+
+    La cause est une course entre deux lecteurs. Le BANDEAU lit avec `read_messages`, qui
+    VIDE la file par conception — c'est voulu, un conseil relivré à chaque appel
+    deviendrait un bruit de fond. Le VEILLEUR, lui, regarde ensuite avec `peek_messages`
+    et ne trouve plus rien : il n'arrête donc jamais rien.
+
+    L'arrêt doit être déclenché par celui qui LIT vraiment. Le veilleur garde son rôle —
+    accuser réception dans le jeu quand personne ne répond — mais il n'est plus le seul à
+    pouvoir couper.
+    """
+    import mcp_jeu, time
+
+    class _ApiChat:
+        def read_messages(self):
+            return {"messages": [{"joueur": "pier", "texte": "arrête, la foreuse est vide"}]}
+        def peek_messages(self):
+            return {"messages": []}
+        def say(self, texte):
+            return {"ok": True}
+
+    vrai = mcp_jeu._api
+    mcp_jeu._api = lambda: _ApiChat()
+    mcp_jeu._AVATAR_VU[:] = [time.time(), None]
+    try:
+        _table_rase(mcp_jeu)
+
+        def _long():
+            fin_ = time.time() + 20.0
+            while time.time() < fin_:
+                time.sleep(0.05)
+            return "fini"
+        mcp_jeu._lancer_chantier("batir_une_chaine(fer)", _long)
+        time.sleep(0.3)
+        tournait = mcp_jeu._chantier_tourne()
+
+        texte = mcp_jeu._bandeau_du_joueur("machines en service : 3")
+
+        fin = time.time() + 6.0
+        while mcp_jeu._chantier_tourne() and time.time() < fin:
+            time.sleep(0.1)
+        libere = not mcp_jeu._chantier_tourne()
+    finally:
+        mcp_jeu._demander_l_arret()
+        mcp_jeu._api = vrai
+
+    porte_le_message = "la foreuse est vide" in texte
+    ok = tournait and libere and porte_le_message
+    rec("test_c_est_le_bandeau_qui_libere_l_avatar_pas_le_veilleur", ok,
+        f"chantier lancé={tournait} — libéré={libere} — message livré={porte_le_message}")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
@@ -1631,7 +1688,8 @@ def main() -> int:
               test_machine_a_rend_la_PLUS_PROCHE_et_non_la_premiere,
               test_le_bandeau_dit_d_ou_vient_le_message_et_ce_qu_il_vaut,
               test_un_message_du_joueur_libere_l_avatar,
-              test_extraire_reprend_la_foreuse_ou_qu_elle_soit):
+              test_extraire_reprend_la_foreuse_ou_qu_elle_soit,
+              test_c_est_le_bandeau_qui_libere_l_avatar_pas_le_veilleur):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)
