@@ -429,6 +429,32 @@ class Arbitre(Protocol):
     def __call__(self, etat: "EtatUsine", options: list["Decision"]) -> int: ...
 
 
+def motif_d_echec(rate) -> str:
+    """Ce qui INSTRUIT dans une étape ratée — pas le `repr` du dict qui la porte.
+
+    SOIXANTE CARACTÈRES, ET LA CAUSE TOMBE JUSTE APRÈS. Partie 39, soixante-six étapes de
+    minage pour un laboratoire, et voici tout ce que l'agent en apprend :
+
+        bloqué sur {'action': 'mining', 'ok': False, 'detail': 'cible hors port
+
+    La phrase s'arrête au milieu du mot qui explique tout. Le `repr` dépense le budget en
+    `action`, en `ok` — qui vaut False, on le savait — et jusqu'au NOM de la clé `detail`,
+    si bien qu'il ne reste rien pour ce que `detail` contient. Or c'est la seule chose qui
+    apprenne quoi que ce soit : hors de portée, une cible sous l'eau, un stock vide.
+
+    Le même piège est déjà nommé dans `mcp_jeu._fin` — « la raison d'un échec est toujours
+    en fin de rapport » — où tronquer à 400 laissait « 0 sortie évacuée » sans motif trois
+    heures durant. Il se déplace de fichier en fichier ; il ne disparaît pas.
+    """
+    if not isinstance(rate, dict):
+        return str(rate)[:200]
+    detail = str(rate.get("detail") or rate.get("error") or "").strip()
+    action = str(rate.get("action") or "").strip()
+    if not detail:
+        return (action or str(rate))[:200]
+    return f"{action} : {detail}"[:200] if action else detail[:200]
+
+
 def _machines_qui_produisent(etat: EtatUsine) -> int:
     """Combien de machines PRODUISENT, à l'exclusion des centrales.
 
@@ -3009,7 +3035,7 @@ class Coordinator:
             self._fabrications[item] = self._fabrications.get(item, 0) + 1
         return gagne > 0, (f"{item} : {avant} -> {apres} ({gagne:+d}) en "
                            f"{len(steps)} étape(s) [{plan_summary(steps)[:70]}]"
-                           + (f" — bloqué sur {str(rates[0])[:60]}" if rates else ""))
+                           + (f" — bloqué sur {motif_d_echec(rates[0])}" if rates else ""))
 
     def ouvrir_la_recette(self, recette: str) -> tuple[bool, str]:
         """Va chercher la technologie qui débloque `recette`, et la déclenche.

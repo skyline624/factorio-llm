@@ -3542,6 +3542,43 @@ def test_repartir_de_zero_recupere_l_existant_avant_de_batir() -> None:
     assert ok
 
 
+def test_la_cause_d_un_echec_survit_a_la_troncature() -> None:
+    """SOIXANTE CARACTÈRES, ET LA CAUSE TOMBE JUSTE APRÈS.
+
+    Partie 39, mesuré. Soixante-six étapes de minage pour un laboratoire, et voici tout ce
+    que l'agent apprend de son échec :
+
+        lab : 0 -> 0 (+0) en 66 étape(s) [1:find_nearest, 2:walk_to_entity, …]
+          — bloqué sur {'action': 'mining', 'ok': False, 'detail': 'cible hors port
+
+    La phrase s'arrête au milieu du mot qui explique tout. `str(rate)[:60]` dépense ses
+    soixante caractères en `action`, `ok` et le nom de la clé `detail` — il n'en reste plus
+    pour ce que `detail` contient, alors que c'est la seule chose qui apprenne quoi que ce
+    soit. Le `repr` du dict passe AVANT sa valeur utile.
+
+    Le même piège est déjà documenté dans `mcp_jeu._fin` — « la raison d'un échec est
+    toujours en fin de rapport » — où tronquer à 400 caractères laissait « 0 sortie
+    évacuée » sans motif trois heures durant. Ici c'est à soixante, dans un autre fichier :
+    le motif se déplace, il ne disparaît pas.
+
+    On garde donc ce qui INSTRUIT, et l'on jette le décor : l'action et son détail en
+    clair, jamais le `repr` d'un dict Python.
+    """
+    from agents.coordinator import motif_d_echec
+
+    dit = motif_d_echec({"action": "mining", "ok": False,
+                         "detail": "cible hors portée : (-48.5,92.5) à 11.3 tuiles "
+                                   "du personnage (max 5)"})
+
+    porte_la_cause = "hors portée" in dit and "11.3" in dit
+    dit_l_action = "mining" in dit
+    pas_de_repr = "'ok':" not in dit and "{" not in dit
+
+    ok = porte_la_cause and dit_l_action and pas_de_repr
+    rec("test_la_cause_d_un_echec_survit_a_la_troncature", ok, f"« {dit} »")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -3622,6 +3659,7 @@ def main() -> int:
         test_le_combustible_offre_un_choix_au_lieu_dun_verdict,
         test_les_ancres_sont_essayees_de_la_plus_proche_a_la_plus_lointaine,
         test_le_coffre_se_choisit_comme_les_autres_paliers,
+        test_la_cause_d_un_echec_survit_a_la_troncature,
     ]
     for t in tests:
         t()
