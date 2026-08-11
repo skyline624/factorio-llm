@@ -3542,6 +3542,50 @@ def test_repartir_de_zero_recupere_l_existant_avant_de_batir() -> None:
     assert ok
 
 
+def test_on_ne_repaie_pas_les_flacons_deja_consommes() -> None:
+    """SEIZE FLACONS EN MAIN, HUIT SUFFISENT, ET L'OUTIL EN RÉCLAME VINGT-CINQ.
+
+    Partie 41, mesuré — et c'est un enfermement, pas un retard :
+
+        recherche  electric-mining-drill  en cours, progres = 0.68  (17 des 25 payés)
+        en poche   16 automation-science-pack
+        20:46:57   ÉCHEC — « electric-mining-drill » non payée —
+                   automation-science-pack (16/25)
+
+    Le laboratoire a déjà mangé dix-sept flacons ; il n'en reste que huit à livrer. Le
+    code, lui, exige les vingt-cinq EN POCHE, comme si la recherche n'avait pas commencé.
+    L'agent avait deux fois ce qu'il fallait et s'est vu refuser — puis est reparti en
+    fabriquer neuf de plus, pour rien.
+
+    C'est le piège de H72 déplacé d'un cran : un TOTAL confondu avec un SOLDE. Il enferme
+    ici, car le seul moyen d'en sortir est de refabriquer vingt-cinq flacons d'un coup —
+    et c'est tout le palier électrique qui reste fermé derrière.
+
+    Le jeu donne la réponse : `get_technologies()` rend `en_cours` et `progres`.
+    """
+    from agents.coordinator import reste_a_payer
+
+    class _ApiEnCours:
+        def get_technologies(self):
+            return {"en_cours": "electric-mining-drill", "progres": 0.68,
+                    "acquises": [], "ouvertes": []}
+
+    class _ApiRien:
+        def get_technologies(self):
+            return {"en_cours": None, "progres": 0.0, "acquises": [], "ouvertes": []}
+
+    entamee = reste_a_payer(_ApiEnCours(), "electric-mining-drill", 25)
+    neuve = reste_a_payer(_ApiRien(), "electric-mining-drill", 25)
+    autre = reste_a_payer(_ApiEnCours(), "logistics", 20)
+
+    ok = (entamee == 8            # 25 - 17 deja consommes
+          and neuve == 25         # rien d'entame : le prix plein
+          and autre == 20)        # une AUTRE techno ne profite pas du progres
+    rec("test_on_ne_repaie_pas_les_flacons_deja_consommes", ok,
+        f"entamee={entamee} (attendu 8), neuve={neuve}, autre={autre}")
+    assert ok
+
+
 def test_la_piece_qui_resiste_dit_POURQUOI_elle_resiste() -> None:
     """« BOILER MANQUE ET N'A PAS PU ÊTRE FABRIQUÉ » — et pas un mot sur la raison.
 
@@ -3769,6 +3813,7 @@ def main() -> int:
         test_le_coffre_se_choisit_comme_les_autres_paliers,
         test_la_cause_d_un_echec_survit_a_la_troncature,
         test_la_piece_qui_resiste_dit_POURQUOI_elle_resiste,
+        test_on_ne_repaie_pas_les_flacons_deja_consommes,
         test_le_laboratoire_se_pose_la_ou_l_on_a_MARCHE,
     ]
     for t in tests:

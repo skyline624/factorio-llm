@@ -429,6 +429,42 @@ class Arbitre(Protocol):
     def __call__(self, etat: "EtatUsine", options: list["Decision"]) -> int: ...
 
 
+def reste_a_payer(api, techno: str, unites: int) -> int:
+    """Combien d'unités de science il RESTE à livrer pour `techno`.
+
+    SEIZE FLACONS EN MAIN, HUIT SUFFISENT, ET L'OUTIL EN RÉCLAMAIT VINGT-CINQ. Partie 41 :
+
+        recherche  electric-mining-drill  en cours, progres = 0.68  (17 des 25 payés)
+        en poche   16 automation-science-pack
+        20:46:57   ÉCHEC — « electric-mining-drill » non payée — (16/25)
+
+    Le laboratoire avait déjà mangé dix-sept flacons ; il n'en restait que huit à livrer.
+    Le code exigeait les vingt-cinq EN POCHE, comme si la recherche n'avait pas commencé.
+    L'agent avait deux fois ce qu'il fallait, s'est vu refuser, et est reparti en fabriquer
+    neuf de plus pour rien.
+
+    C'est le piège de H72 déplacé d'un cran — un TOTAL confondu avec un SOLDE — et celui-ci
+    ENFERME : le seul moyen d'en sortir était de refabriquer vingt-cinq flacons d'un coup,
+    et tout le palier électrique restait fermé derrière.
+
+    Le jeu donne la réponse ; il suffisait de la lui demander. Dans le doute — lecture
+    muette, autre technologie en cours — on rend le prix plein : une garde ne doit pas
+    laisser passer une recherche impayée sur son propre silence.
+    """
+    try:
+        etat = api.get_technologies() or {}
+    except Exception:
+        return int(unites)
+    if str(etat.get("en_cours") or "") != str(techno):
+        return int(unites)
+    try:
+        progres = float(etat.get("progres") or 0.0)
+    except (TypeError, ValueError):
+        return int(unites)
+    progres = min(max(progres, 0.0), 1.0)
+    return max(1, math.ceil(int(unites) * (1.0 - progres)))
+
+
 def motif_d_echec(rate) -> str:
     """Ce qui INSTRUIT dans une étape ratée — pas le `repr` du dict qui la porte.
 
@@ -3209,10 +3245,14 @@ class Coordinator:
         # soit : inutile de bâtir un laboratoire qu'on ne pourra pas alimenter.
         inv = perception.inventory(self.api)
         manques = []
+        # ON NE REPAIE PAS CE QUE LE LABORATOIRE A DÉJÀ MANGÉ. Une recherche entamée a
+        # consommé une partie de son coût ; exiger le total en poche enferme l'agent (cf.
+        # `reste_a_payer`, partie 41 : 16 flacons en main, 8 suffisaient, refus à 16/25).
+        reste = reste_a_payer(self.api, techno, marche.unites)
         for nom, par_unite in marche.cout:
-            besoin = par_unite * marche.unites
+            besoin = par_unite * reste
             if inv.get(nom, 0) < besoin:
-                ok, detail = self.fabriquer(nom, inv.get(nom, 0) + besoin - inv.get(nom, 0))
+                ok, detail = self.fabriquer(nom, besoin)
                 if not ok:
                     manques.append(f"{nom} ({inv.get(nom, 0)}/{besoin}) : {detail[:60]}")
         if manques:
