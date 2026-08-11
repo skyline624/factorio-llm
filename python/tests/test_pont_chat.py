@@ -74,6 +74,59 @@ def test_le_message_dit_d_ou_il_vient() -> None:
     assert ok
 
 
+def test_le_pont_ne_VOLE_pas_le_message_au_bandeau() -> None:
+    """TROIS LECTEURS POUR UNE FILE, ET C'EST LE MAUVAIS QUI GAGNE.
+
+    Partie 41, mesuré. Le joueur dépose un message pendant qu'Hermes travaille :
+
+        file du mod                         vide
+        bandeau « LE JOUEUR TE PARLE »      0 occurrence dans le journal
+        message                             capté par le pont, mis de côté
+
+    Le pont relit la file toutes les quatre secondes avec `read_messages`, qui VIDE par
+    conception. Le bandeau des `tool_result` ne trouve plus rien. Or le pont ne livre son
+    stock qu'au moment où l'agent rend la main — donc jamais tant que la partie tourne.
+    Le message était perdu pour toute la durée du jeu.
+
+    Le commentaire de `jouer.py` affirmait exactement le contraire : « on vide la file MÊME
+    quand l'agent travaille : le bandeau des tool_result la lit de son côté ». Les deux
+    consomment la même file ; un seul peut l'obtenir.
+
+    C'est le motif de H70 — deux lecteurs, un seul message — corrigé alors entre le bandeau
+    et le veilleur, sans voir qu'un TROISIÈME lecteur existait dans un autre fichier.
+
+    Tant que l'agent travaille, le pont REGARDE sans consommer : le bandeau livre, et c'est
+    la voie la plus rapide. Il ne prend la file que lorsqu'il va vraiment relancer.
+    """
+    from services.pont_chat import messages_en_attente
+
+    class _Api:
+        def __init__(self) -> None:
+            self.file = [{"joueur": "skyline624", "texte": "pose une foreuse sur le cuivre"}]
+            self.vide = 0
+        def peek_messages(self):
+            return {"messages": list(self.file)}
+        def read_messages(self):
+            self.vide += 1
+            m, self.file = list(self.file), []
+            return {"messages": m}
+
+    # L'agent TRAVAILLE : on regarde, on ne prend pas — le bandeau doit pouvoir livrer.
+    a = _Api()
+    vus = messages_en_attente(a, consommer=False)
+    reste = len(a.file)
+
+    # On va VRAIMENT relancer : là, on prend.
+    b = _Api()
+    pris = messages_en_attente(b, consommer=True)
+
+    ok = (vus and reste == 1 and a.vide == 0        # rien n'a été volé au bandeau
+          and pris and b.file == [] and b.vide == 1)
+    rec("test_le_pont_ne_VOLE_pas_le_message_au_bandeau", ok,
+        f"regarde={vus} reste={reste} vidages={a.vide} | pris={pris} vidages={b.vide}")
+    assert ok
+
+
 def test_on_ne_lance_pas_un_agent_sans_mains() -> None:
     """DOUZE SECONDES POUR BRÛLER UNE PARTIE — et pas une seule action de jeu.
 
@@ -129,6 +182,7 @@ def test_on_ne_lance_pas_un_agent_sans_mains() -> None:
 def main() -> int:
     for t in (test_le_pont_attend_que_l_agent_ait_rendu_la_main,
               test_le_message_dit_d_ou_il_vient,
+              test_le_pont_ne_VOLE_pas_le_message_au_bandeau,
               test_on_ne_lance_pas_un_agent_sans_mains):
         t()
     print(chr(10) + "=" * 72)

@@ -69,14 +69,27 @@ def composer(messages: Iterable[str]) -> str:
             "posé, et relancer reprend où l'on s'était arrêté.")
 
 
-def messages_en_attente(api) -> list[str]:
-    """Vide la file du mod et rend ce que le joueur a tapé.
+def messages_en_attente(api, consommer: bool = True) -> list[str]:
+    """Ce que le joueur a tapé. `consommer=False` REGARDE sans vider la file.
 
-    La lecture CONSOMME, par conception : un conseil relivré à chaque tour deviendrait un
-    bruit de fond que l'agent apprendrait à sauter.
+    TROIS LECTEURS POUR UNE FILE, ET C'EST LE MAUVAIS QUI GAGNE. Partie 41 : le joueur
+    dépose un message pendant qu'Hermes travaille, et l'agent ne le voit jamais. Le pont
+    relit toutes les quatre secondes avec `read_messages`, qui VIDE par conception ; le
+    bandeau des `tool_result` ne trouve plus rien. Or le pont ne livre son stock qu'au
+    moment de relancer la session — donc jamais tant que la partie tourne.
+
+    Le commentaire de `jouer.py` affirmait le contraire — « on vide la file MÊME quand
+    l'agent travaille : le bandeau la lit de son côté ». Les deux consomment la même file ;
+    un seul peut l'obtenir.
+
+    C'est le motif de H70, corrigé alors entre le bandeau et le veilleur sans voir qu'un
+    TROISIÈME lecteur vivait dans un autre fichier. Tant que l'agent travaille, le pont
+    regarde ; il ne prend que lorsqu'il va vraiment relancer — et là, consommer reste juste,
+    un conseil relivré à chaque tour deviendrait un bruit de fond qu'on apprend à sauter.
     """
     try:
-        lus = (api.read_messages() or {}).get("messages") or []
+        source = api.read_messages if consommer else api.peek_messages
+        lus = (source() or {}).get("messages") or []
     except Exception:
         return []
     return [f"{m.get('joueur', '?')} : {m.get('texte', '')}" for m in lus

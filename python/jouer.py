@@ -105,16 +105,25 @@ def main() -> int:
     while time.time() < fin:
         time.sleep(PAUSE_S)
 
-        # Ce que le joueur a tapé depuis le dernier tour. On vide la file MÊME quand
-        # l'agent travaille : le bandeau des `tool_result` la lit de son côté, et laisser
-        # les messages s'empiler ferait arriver dix conseils périmés d'un coup.
+        # ON NE VOLE PAS LE MESSAGE AU BANDEAU. Ce commentaire disait l'inverse — « on vide
+        # la file MÊME quand l'agent travaille : le bandeau des `tool_result` la lit de son
+        # côté ». Les deux lisent la MÊME file, et `read_messages` la vide : un seul peut
+        # l'obtenir. Partie 41, mesuré — le joueur écrit pendant qu'Hermes travaille, le
+        # pont capte, le bandeau ne trouve rien, et le stock du pont n'est livré qu'à
+        # l'arrêt de l'agent. Le message était perdu pour toute la partie.
+        #
+        # Tant qu'il travaille, on REGARDE : le bandeau livre, c'est la voie la plus rapide
+        # et la seule qui marche en cours de chantier. On ne prend la file qu'au moment de
+        # relancer pour de bon.
+        if proc.poll() is None:
+            if pont_chat.messages_en_attente(api, consommer=False):
+                print("[pont] le joueur parle — le bandeau le livre à l'agent")
+            continue          # il travaille : on ne double jamais l'agent
+
         neufs = pont_chat.messages_en_attente(api)
         if neufs:
             attente.extend(neufs)
             print(f"[pont] {len(neufs)} message(s) du joueur en attente")
-
-        if proc.poll() is None:
-            continue          # il travaille : on ne double jamais l'agent
 
         # Il a rendu la main. Sans message, la partie est finie — c'est son choix, on ne
         # le relance pas pour le plaisir de le faire tourner.
