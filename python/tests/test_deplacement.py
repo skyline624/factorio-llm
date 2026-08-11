@@ -134,9 +134,60 @@ def test_l_arret_mord_aussi_entre_deux_etapes_de_fabrication() -> None:
     assert ok
 
 
+def test_on_peut_marcher_plus_pres_que_la_tolerance_par_defaut() -> None:
+    """HUIT TUILES DE TOLÉRANCE, CINQ TUILES DE PORTÉE : on n'arrive jamais.
+
+    Partie 37, mesuré pendant que le joueur regardait :
+
+        joueur en (-61,12)   foreuse en (-65,9)   distance = 5,5 tuiles
+        demonter -> « cible hors portee / introuvable », cinq fois de suite
+
+    Les deux nombres ne se parlaient pas. `marcher_vers` se déclare arrivée à `TOLERANCE`
+    = 8 tuiles — assez fin pour aller quelque part, trop grossier pour TOUCHER quelque
+    chose. Or le mod ne cherche la cible d'un minage que dans `MINING_REACH` = 5. Entre
+    cinq et huit, la marche réussit et le geste échoue, toujours, sans que le motif le
+    dise : « hors de portée » laisse croire à un problème de distance alors qu'on ne s'est
+    simplement pas assez approché.
+
+    La tolérance devient donc un paramètre : aller VERS un endroit et venir TOUCHER une
+    machine ne demandent pas la même précision, et seul l'appelant sait ce qu'il fera en
+    arrivant.
+    """
+    from services import deplacement
+
+    bonds: list[tuple[float, float]] = []
+
+    class _ApiPrecise:
+        def get_state(self):
+            # On avance d'une tuile par bond : la boucle doit continuer tant que la
+            # tolérance demandée n'est pas atteinte.
+            return {"character": {"position": {"x": float(len(bonds)), "y": 0.0}},
+                    "tick": 1}
+        def generate_terrain(self, *a, **kw):
+            return {"ok": True}
+        def walk_to(self, x, y, **kw):
+            bonds.append((x, y))
+            return {"ok": True}
+        def run_action(self, fn, *a, **kw):
+            return fn(*a, **kw)
+
+    deplacement.marcher_vers(_ApiPrecise(), 10.0, 0.0)
+    large = len(bonds)
+
+    bonds.clear()
+    deplacement.marcher_vers(_ApiPrecise(), 10.0, 0.0, tolerance=3.0)
+    serre = len(bonds)
+
+    ok = serre > large
+    rec("test_on_peut_marcher_plus_pres_que_la_tolerance_par_defaut", ok,
+        f"{large} bond(s) a tolerance 8, {serre} a tolerance 3")
+    assert ok
+
+
 def main() -> int:
     for t in (test_la_marche_s_arrete_quand_on_le_demande,
-              test_l_arret_mord_aussi_entre_deux_etapes_de_fabrication):
+              test_l_arret_mord_aussi_entre_deux_etapes_de_fabrication,
+              test_on_peut_marcher_plus_pres_que_la_tolerance_par_defaut):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

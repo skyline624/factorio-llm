@@ -761,7 +761,11 @@ def demonter(x: float, y: float, combien: int = 1) -> str:
     if not quoi:
         return f"rien à démonter en ({x:.0f},{y:.0f})"
     from services import deplacement
-    deplacement.marcher_vers(api, x, y)
+    # QUATRE TUILES, PAS HUIT. Le mod cherche la cible d'un minage dans un rayon de cinq ;
+    # la tolérance par défaut nous arrêtait à huit, et le geste échouait toujours en
+    # « cible hors portée / introuvable » — un motif qui accuse la distance alors qu'on ne
+    # s'était pas assez approché. Mesuré partie 37 : cinq refus d'affilée à 5,5 tuiles.
+    deplacement.marcher_vers(api, x, y, tolerance=4.0)
     r = api.run_action(api.mine_entity, quoi, int(combien))
     ok = isinstance(r, dict) and r.get("ok") is not False
     return (f"{'OK' if ok else 'ÉCHEC'} — démonté {quoi} en ({x:.0f},{y:.0f}) ; "
@@ -793,15 +797,22 @@ def _foreuse_posee_pres_de(api, ressource: str):
     échouer, un chantier être arrêté, le joueur intervenir. La refuser oblige à tout
     démonter — ce que le jeu interdit justement quand la foreuse couvre du minerai.
     """
+    # ON LIT LE PARC, PAS UN RAYON AUTOUR D'UN POINT INCERTAIN. La recherche partait de
+    # `find_nearest(ressource)` — un point relatif au JOUEUR — puis inspectait six tuiles
+    # autour. Le joueur se déplace ; ce point désigne alors un autre bout du gisement, et
+    # la foreuse posée n'y est pas.
+    #
+    # Partie 37 : l'outil venait de poser une foreuse en (-65,9) et le disait
+    # (« INCOMPLET … MANQUE wooden-chest »). Relancé pour compléter, il réclamait une
+    # foreuse « manquante » — celle qui était en terre, à l'endroit qu'il avait lui-même
+    # nommé. Trois refus de suite. Même défaut que le rayon de vingt-cinq tuiles de la
+    # récolte (H63) : une recherche bornée autour d'un repère mouvant.
+    from services import perception
     try:
-        trouve = api.find_nearest(ressource) or {}
-        if trouve.get("x") is None:
-            return None
-        vues = (api.inspect_at(float(trouve["x"]), float(trouve["y"]), 6.0)
-                or {}).get("entities") or []
+        tout = perception.parc(api) or []
     except Exception:
-        return None
-    for e in vues:
+        tout = []
+    for e in tout:
         if str(e.get("name", "")).endswith("mining-drill"):
             return (float(e.get("x", 0.0)), float(e.get("y", 0.0)))
     return None

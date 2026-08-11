@@ -45,7 +45,7 @@ def position(api) -> tuple[float, float]:
 
 
 def marcher_vers(api, x: float, y: float, bonds: int = 40,
-                 interrompu_par=None) -> tuple[float, float]:
+                 interrompu_par=None, tolerance: float = TOLERANCE) -> tuple[float, float]:
     """Génère puis marche par bonds jusqu'à (x, y). Rend où l'on est VRAIMENT.
 
     `interrompu_par` permet d'ARRÊTER EN CHEMIN. Sans lui, un arrêt demandé restait sans
@@ -56,6 +56,13 @@ def marcher_vers(api, x: float, y: float, bonds: int = 40,
 
     On sort ENTRE deux bonds, jamais au milieu. Le personnage reste où il est arrivé : un
     état parfaitement valide, c'est ce que fait un joueur qui s'arrête en chemin.
+
+    `tolerance` : à quelle distance on se déclare arrivé. HUIT TUILES SUFFISENT POUR ALLER
+    QUELQUE PART, PAS POUR TOUCHER QUELQUE CHOSE. Le mod ne cherche la cible d'un minage
+    que dans un rayon de CINQ tuiles ; entre cinq et huit, la marche réussit et le geste
+    échoue toujours — mesuré partie 37, cinq `demonter` de suite en « cible hors portée »
+    avec le personnage à 5,5 tuiles. Aller vers un endroit et venir toucher une machine ne
+    demandent pas la même précision, et seul l'appelant sait ce qu'il fera en arrivant.
     """
     for _ in range(bonds):
         if interrompu_par is not None:
@@ -66,7 +73,7 @@ def marcher_vers(api, x: float, y: float, bonds: int = 40,
                 pass          # un interrupteur cassé n'immobilise personne
         cx, cy = position(api)
         reste = math.hypot(x - cx, y - cy)
-        if reste <= TOLERANCE:
+        if reste <= tolerance:
             return cx, cy
         t = min(1.0, PAS / reste)
         ex, ey = cx + (x - cx) * t, cy + (y - cy) * t

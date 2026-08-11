@@ -699,7 +699,11 @@ def test_demonter_existe_et_rend_ce_qu_il_recupere() -> None:
             return fn(*a, **kw)
         def get_recipe(self, item):
             return {}      # `fond_en` interroge les recettes du JEU
-        def mine_entity(self, nom, count=1):
+        def generate_terrain(self, *a, **kw):
+            return {"ok": True}    # la marche genere le terrain avant chaque bond
+        def walk_to(self, x, y, **kw):
+            return {"ok": True}
+        def mine_entity(self, nom, count=1, **kw):
             self.mine.append((nom, count))
             return {"ok": True}
 
@@ -1550,6 +1554,54 @@ def test_un_message_du_joueur_libere_l_avatar() -> None:
     assert ok
 
 
+def test_extraire_reprend_la_foreuse_ou_qu_elle_soit() -> None:
+    """« IL T'EN MANQUE 1 » — alors qu'elle est en terre, posée par lui, deux minutes avant.
+
+    Partie 37, mesuré :
+
+        13:50:24  INCOMPLET en (-65,9) — posé : burner-mining-drill ; MANQUE wooden-chest
+        13:50:31  ÉCHEC — rien posé en (-65,9) : burner-mining-drill (il t'en manque 1)
+        13:50:52  idem …  13:51:10  idem
+
+    La foreuse était à (-65,9) — l'outil venait de l'y poser et le disait. Relancé pour
+    compléter, il réclamait une foreuse qui n'est plus en poche PARCE QU'ELLE EST EN TERRE.
+
+    H56 avait prévu le cas, mais cherchait mal : il partait de `find_nearest(ressource)`,
+    un point relatif au JOUEUR, puis inspectait six tuiles autour. Le joueur s'était
+    déplacé entre-temps, ce point désignait un autre bout du gisement, et la foreuse n'y
+    était pas. Même défaut que le rayon de vingt-cinq tuiles de la récolte (H63) : une
+    recherche bornée autour d'un point incertain.
+
+    On lit donc le PARC, qui liste toutes les machines de la surface, et l'on retient une
+    foreuse qui exploite bien la ressource demandée.
+    """
+    import mcp_jeu
+
+    import services.perception as _perc
+    _vrai = _perc.parc
+    _perc.parc = lambda api: [
+        {"name": "stone-furnace", "type": "furnace", "x": 0.0, "y": 0.0},
+        {"name": "burner-mining-drill", "type": "mining-drill", "x": -65.0, "y": 9.0},
+    ]
+
+    class _ApiLoin:
+        def find_nearest(self, nom):
+            # Le joueur s'est deplace : le point rendu est ailleurs sur le gisement.
+            return {"name": nom, "x": -20.0, "y": 40.0, "distance": 3}
+        def inspect_at(self, x, y, radius=0.5):
+            return {"entities": []}
+
+    try:
+        trouve = mcp_jeu._foreuse_posee_pres_de(_ApiLoin(), "coal")
+    finally:
+        _perc.parc = _vrai
+
+    ok = trouve == (-65.0, 9.0)
+    rec("test_extraire_reprend_la_foreuse_ou_qu_elle_soit", ok,
+        f"foreuse trouvee : {trouve} (attendu (-65.0, 9.0))")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
@@ -1578,7 +1630,8 @@ def main() -> int:
               test_extraire_pose_un_coffre_quand_la_ressource_ne_se_fond_pas,
               test_machine_a_rend_la_PLUS_PROCHE_et_non_la_premiere,
               test_le_bandeau_dit_d_ou_vient_le_message_et_ce_qu_il_vaut,
-              test_un_message_du_joueur_libere_l_avatar):
+              test_un_message_du_joueur_libere_l_avatar,
+              test_extraire_reprend_la_foreuse_ou_qu_elle_soit):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)
