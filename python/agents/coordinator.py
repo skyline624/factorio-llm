@@ -2569,9 +2569,17 @@ class Coordinator:
                             + (f"{', '.join(rates)} non forgé(s), " if rates else "")
                             + f"il restait {nom} ; relance pour finir")
             vise = inv.get(str(nom), 0) + int(combien)
-            ok, _ = self._assurer_stock(str(nom), vise)
+            # LA CAUSE PART DANS UN `_`, À LA LIGNE MÊME OÙ ELLE DEVIENT UTILE. Partie 41 :
+            # « ÉCHEC — centrale non bâtie : "boiler" manque et n'a pas pu être fabriqué ».
+            # Manque-t-il du fer, de la pierre ? La recette est-elle verrouillée par une
+            # recherche ? `_assurer_stock` le SAIT et le dit — on jetait sa réponse.
+            #
+            # Même motif que H75 à un autre endroit : l'échec est nommé, sa cause est
+            # perdue. Il ressurgit partout où un appelant résume un appelé, et il coûte
+            # cher ici : la centrale commande tout le palier électrique.
+            ok, pourquoi = self._assurer_stock(str(nom), vise)
             if not ok:
-                rates.append(str(nom))
+                rates.append(f"{nom} ({pourquoi})" if pourquoi else str(nom))
         return ", ".join(rates)
 
     def _mettre_en_service(self, poses,

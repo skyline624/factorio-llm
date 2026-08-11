@@ -3542,6 +3542,45 @@ def test_repartir_de_zero_recupere_l_existant_avant_de_batir() -> None:
     assert ok
 
 
+def test_la_piece_qui_resiste_dit_POURQUOI_elle_resiste() -> None:
+    """« BOILER MANQUE ET N'A PAS PU ÊTRE FABRIQUÉ » — et pas un mot sur la raison.
+
+    Partie 41, mesuré :
+
+        19:01:42  ÉCHEC — centrale non bâtie : « boiler » manque et n'a pas pu être
+                  fabriqué
+
+    Manque-t-il du fer ? de la pierre ? la recette est-elle verrouillée par une recherche ?
+    Rien ne le dit. `_forger_le_manque` appelle pourtant `_assurer_stock`, qui rend
+    `(ok, detail)` — et le detail part dans un `_`, jeté à la ligne même où il devient
+    utile.
+
+    C'est le motif de H75 à un autre endroit : l'échec est nommé, sa cause est perdue. On
+    ne corrige pas ce genre de chose une fois pour toutes, il ressurgit partout où un
+    appelant résume un appelé. Ici il coûte cher, parce que la centrale commande tout le
+    palier électrique.
+    """
+    from agents.coordinator import Coordinator
+
+    import services.perception as _perc
+    _vrai = _perc.inventory
+    _perc.inventory = lambda api: {}
+    try:
+        c = _coord_mesure(object())
+        c._assurer_stock = lambda nom, vise: (
+            False, "recette verrouillée : il te faut la technologie « automation »")
+        dit = Coordinator._forger_le_manque(c, {"boiler": 1})
+    finally:
+        _perc.inventory = _vrai
+
+    nomme_la_piece = "boiler" in dit
+    dit_pourquoi = "verrouill" in dit or "automation" in dit
+
+    ok = nomme_la_piece and dit_pourquoi
+    rec("test_la_piece_qui_resiste_dit_POURQUOI_elle_resiste", ok, f"« {dit} »")
+    assert ok
+
+
 def test_la_cause_d_un_echec_survit_a_la_troncature() -> None:
     """SOIXANTE CARACTÈRES, ET LA CAUSE TOMBE JUSTE APRÈS.
 
@@ -3729,6 +3768,7 @@ def main() -> int:
         test_les_ancres_sont_essayees_de_la_plus_proche_a_la_plus_lointaine,
         test_le_coffre_se_choisit_comme_les_autres_paliers,
         test_la_cause_d_un_echec_survit_a_la_troncature,
+        test_la_piece_qui_resiste_dit_POURQUOI_elle_resiste,
         test_le_laboratoire_se_pose_la_ou_l_on_a_MARCHE,
     ]
     for t in tests:
