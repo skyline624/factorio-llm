@@ -74,9 +74,62 @@ def test_le_message_dit_d_ou_il_vient() -> None:
     assert ok
 
 
+def test_on_ne_lance_pas_un_agent_sans_mains() -> None:
+    """DOUZE SECONDES POUR BRÛLER UNE PARTIE — et pas une seule action de jeu.
+
+    Partie 39, mesuré. La carte est neuve, le serveur MCP redémarré, l'agent part :
+
+        14:46:38  batir_une_chaine -> refusé : aucun avatar connecté au serveur
+        14:46:42  repondre_au_joueur : « je ne peux pas marcher, miner ni poser »
+        14:46:50  batir_une_chaine -> même refus
+        14:46:52  [pont] l'agent s'est arrêté et personne ne lui parle — fin
+
+    Le lanceur a bien fait ce qu'on lui demandait : un agent qui rend la main sans qu'on
+    lui parle a FINI, et on ne le relance pas pour le plaisir. Mais la prémisse était
+    fausse — il n'avait pas fini, il n'avait jamais commencé. Le client de jeu n'était pas
+    connecté, et rien dans le montage ne l'avait vu.
+
+    On ne corrige donc pas la règle de fin, qui est juste : on vérifie le PRÉREQUIS avant
+    de dépenser une session. Attendre coûte quelques secondes ; lancer à vide coûte une
+    partie, et laisse dans le journal la trace d'un agent qui « abandonne » alors qu'on ne
+    lui avait rien donné.
+
+    ET ON N'ATTEND PAS INDÉFINIMENT : passé le délai, on le dit et on s'arrête. Lancer
+    quand même refabriquerait exactement le défaut qu'on corrige.
+    """
+    from services.pont_chat import attendre_l_avatar, avatar_present
+
+    class _Api:
+        def __init__(self, arrive_au: int) -> None:
+            self.vus, self.arrive_au = 0, arrive_au
+        def get_state(self):
+            self.vus += 1
+            return {"character": {"x": 0, "y": 0}} if self.vus >= self.arrive_au else {}
+
+    class _ApiMuet:
+        def get_state(self):
+            raise RuntimeError("rcon coupé")
+
+    sommeils: list[float] = []
+    tardif = _Api(arrive_au=4)
+    venu = attendre_l_avatar(tardif, dort=sommeils.append, essais=10)
+
+    jamais = _Api(arrive_au=999)
+    absent = attendre_l_avatar(jamais, dort=lambda s: None, essais=3)
+
+    ok = (venu is True and len(sommeils) == 3            # trois attentes, puis il est là
+          and absent is False                            # on abandonne, on ne lance pas
+          and avatar_present(_Api(arrive_au=1)) is True
+          and avatar_present(_ApiMuet()) is False)       # rien vu = pas d'avatar
+    rec("test_on_ne_lance_pas_un_agent_sans_mains", ok,
+        f"arrive apres {len(sommeils)} attentes={venu} ; jamais la={absent}")
+    assert ok
+
+
 def main() -> int:
     for t in (test_le_pont_attend_que_l_agent_ait_rendu_la_main,
-              test_le_message_dit_d_ou_il_vient):
+              test_le_message_dit_d_ou_il_vient,
+              test_on_ne_lance_pas_un_agent_sans_mains):
         t()
     print(chr(10) + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

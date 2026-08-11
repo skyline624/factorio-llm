@@ -82,6 +82,17 @@ def main() -> int:
     api = ModApi(get_rcon())
     open(opt.journal, "w", encoding="utf-8").close()
 
+    # PAS DE MAINS, PAS DE PARTIE. Partie 39 : l'agent part sur une carte neuve, se heurte
+    # trois fois à « aucun avatar connecté », le dit au joueur, et rend la main au bout de
+    # douze secondes. Le pont applique alors sa règle de fin — qui est juste — sur une
+    # prémisse qui ne l'était pas : il n'avait pas fini, il n'avait jamais commencé.
+    if not pont_chat.avatar_present(api):
+        print("[pont] aucun avatar connecté — j'attends que tu rejoignes la partie...")
+        if not pont_chat.attendre_l_avatar(api, dort=time.sleep):
+            print("[pont] toujours personne — connecte un client de jeu, puis relance.")
+            return 1
+    print("[pont] avatar connecté")
+
     print("[pont] lancement de la partie")
     proc = _lancer(["docker", "compose", "-f", COMPOSE, "run", "--rm",
                     "--entrypoint", "hermes", "hermes", "chat",

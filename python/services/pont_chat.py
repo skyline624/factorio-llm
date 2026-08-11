@@ -83,6 +83,38 @@ def messages_en_attente(api) -> list[str]:
             if str(m.get("texte", "")).strip()]
 
 
+def avatar_present(api) -> bool:
+    """Un personnage est-il connecté au serveur ? On le LIT, on ne le suppose pas.
+
+    Le mod rend `character` dans `get_state` dès qu'un client est là. Une lecture qui
+    échoue ne prouve rien — mais elle ne prouve pas non plus qu'il y a quelqu'un, et c'est
+    l'absence de preuve qui compte au moment de dépenser une session.
+    """
+    try:
+        return bool((api.get_state() or {}).get("character"))
+    except Exception:
+        return False
+
+
+def attendre_l_avatar(api, dort, essais: int = 60, pause_s: float = 5.0) -> bool:
+    """Attend qu'un joueur soit là. Rend False si personne ne vient — sans rien lancer.
+
+    DOUZE SECONDES POUR BRÛLER UNE PARTIE. Partie 39 : carte neuve, serveur MCP relancé,
+    l'agent part et se heurte trois fois à « aucun avatar connecté », répond au joueur
+    qu'il n'a pas de mains, puis rend la main. Le pont lit alors sa règle de fin — un agent
+    qui s'arrête sans qu'on lui parle a FINI — et clôt la partie. La règle est juste ; la
+    prémisse ne l'était pas. Il n'avait pas fini, il n'avait jamais commencé.
+
+    Le prérequis se vérifie donc AVANT de dépenser la session. Et l'attente est bornée :
+    lancer quand même passé le délai refabriquerait le défaut qu'on corrige.
+    """
+    for _ in range(max(1, int(essais))):
+        if avatar_present(api):
+            return True
+        dort(pause_s)
+    return avatar_present(api)
+
+
 def commande_relance(session: str, message: str, compose_file: str,
                      skill: str = "factorio") -> list[str]:
     """La commande docker qui ajoute ce tour à la session existante.
