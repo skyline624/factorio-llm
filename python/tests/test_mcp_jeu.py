@@ -1443,6 +1443,113 @@ def test_machine_a_rend_la_PLUS_PROCHE_et_non_la_premiere() -> None:
     assert ok
 
 
+def test_le_bandeau_dit_d_ou_vient_le_message_et_ce_qu_il_vaut() -> None:
+    """« LE JOUEUR TE PARLE » NE DIT NI QUI IL EST, NI CE QU'IL VOIT.
+
+    Le bandeau annonçait le message et rien d'autre. L'agent recevait donc une phrase sans
+    provenance ni portée, au milieu d'un `tool_result` — au même rang que « 12 machines ».
+    Mesuré sur six parties : il répond dans 19 cas sur 22, et n'agit que dans 29 % quand un
+    chantier tourne.
+
+    On lui donne les deux faits qui manquent, ceux-là mêmes que le pont met dans le tour
+    `user` : l'humain REGARDE L'ÉCRAN — il voit ce que les compteurs ne montrent pas — et
+    `arreter_le_chantier` NE DÉTRUIT RIEN, ce qui rend le coût d'une interruption presque
+    nul dans son calcul.
+
+    Toujours pas d'ordre : il a refusé trois fois cette semaine en argumentant, et deux
+    fois il avait raison. Ce qu'il fait du message reste son arbitrage.
+    """
+    import mcp_jeu, time
+
+    class _ApiChat:
+        def read_messages(self):
+            return {"messages": [{"joueur": "pier", "texte": "ta foreuse est vide"}]}
+        def peek_messages(self):
+            return {"messages": []}
+
+    vrai = mcp_jeu._api
+    mcp_jeu._api = lambda: _ApiChat()
+    mcp_jeu._AVATAR_VU[:] = [time.time(), None]
+    try:
+        texte = mcp_jeu._bandeau_du_joueur("machines en service : 3")
+    finally:
+        mcp_jeu._api = vrai
+
+    porte_le_message = "ta foreuse est vide" in texte
+    dit_qu_il_voit = "écran" in texte.lower()
+    dit_le_cout_nul = "détruit rien" in texte.lower() or "reste posé" in texte.lower()
+    garde_le_resultat = "machines en service : 3" in texte
+
+    ok = porte_le_message and dit_qu_il_voit and dit_le_cout_nul and garde_le_resultat
+    rec("test_le_bandeau_dit_d_ou_vient_le_message_et_ce_qu_il_vaut", ok,
+        f"message={porte_le_message} écran={dit_qu_il_voit} coût={dit_le_cout_nul}")
+    assert ok
+
+
+def test_un_message_du_joueur_libere_l_avatar() -> None:
+    """PENDANT UN CHANTIER, LE JOUEUR PARLE DANS LE VIDE.
+
+    Partie 37, mesuré : « Arrête de miner à la main, ta foreuse n'a plus rien » à 13:44:41.
+    Ensuite, ONZE `ou_en_est_le_chantier` d'affilée sur deux minutes. Pas une réponse, pas
+    une action. Sa foreuse était bien épuisée — `no_minable_resources`, zéro minerai
+    dessous — et il ne pouvait rien y faire : l'avatar était pris.
+
+    Le pont ne peut pas aider là : il ne relance la session que lorsque l'agent a rendu la
+    main. Tant qu'un chantier tourne, le message repasse par le canal faible.
+
+    On libère donc l'avatar. C'est un RETOURNEMENT assumé : en montant les chantiers
+    (H42), j'avais écarté l'arrêt automatique au motif qu'il déciderait à la place de
+    l'agent. Deux faits l'ont renversé — le message n'a aucun poids autrement (29 %
+    d'action mesurés), et arrêter ne détruit rien : « ce qui est posé reste posé, relance
+    pour reprendre là où tu t'es arrêté ».
+
+    L'agent garde donc son arbitrage entier : il relance s'il juge que le joueur se
+    trompait. Ce qu'il perd, c'est seulement l'impossibilité de répondre.
+    """
+    import mcp_jeu, time
+
+    class _ApiParle:
+        def peek_messages(self):
+            return {"messages": [{"joueur": "pier", "texte": "arrête, la foreuse est vide"}]}
+        def say(self, texte):
+            return {"ok": True}
+
+    vrai = mcp_jeu._api
+    mcp_jeu._api = lambda: _ApiParle()
+    mcp_jeu._AVATAR_VU[:] = [time.time(), None]
+    # Un accusé déjà émis pour le MÊME message court-circuite la suite : sans cette remise
+    # à zéro, on mesure la garde anti-répétition au lieu de l'arrêt.
+    mcp_jeu._DERNIER_ACCUSE = None
+    try:
+        _table_rase(mcp_jeu)
+        # UNE BOUCLE, PAS UN `sleep(20)` : l'exception asynchrone qui tue le fil n'
+        # interrompt pas un sommeil en cours — elle attend la prochaine instruction. Un
+        # vrai chantier enchaîne des appels au jeu, il ne dort pas ; un banc qui dort
+        # mesurerait une résistance que le code réel n'oppose jamais. Et il doit durer
+        # plus longtemps que l'attente, sinon on mesure sa fin naturelle.
+        def _long():
+            fin_ = time.time() + 20.0
+            while time.time() < fin_:
+                time.sleep(0.05)
+            return "fini"
+        mcp_jeu._lancer_chantier("batir_une_chaine(fer)", _long)
+        time.sleep(0.3)
+        tournait = mcp_jeu._chantier_tourne()
+        mcp_jeu._accuser_reception("batir_une_chaine(fer)", 12.0)
+        fin = time.time() + 6.0
+        while mcp_jeu._chantier_tourne() and time.time() < fin:
+            time.sleep(0.1)
+        libere = not mcp_jeu._chantier_tourne()
+    finally:
+        mcp_jeu._demander_l_arret()
+        mcp_jeu._api = vrai
+
+    ok = tournait and libere
+    rec("test_un_message_du_joueur_libere_l_avatar", ok,
+        f"chantier lancé={tournait} — libéré après le message={libere}")
+    assert ok
+
+
 def main() -> int:
     for t in (test_une_lecture_ne_patiente_pas_derriere_une_construction,
               test_reparer_lit_le_nom_reel_de_la_machine,
@@ -1469,7 +1576,9 @@ def main() -> int:
               test_arreter_un_chantier_le_TUE_meme_s_il_ne_cooopere_pas,
               test_extraire_pose_meme_sans_combustible_et_le_dit,
               test_extraire_pose_un_coffre_quand_la_ressource_ne_se_fond_pas,
-              test_machine_a_rend_la_PLUS_PROCHE_et_non_la_premiere):
+              test_machine_a_rend_la_PLUS_PROCHE_et_non_la_premiere,
+              test_le_bandeau_dit_d_ou_vient_le_message_et_ce_qu_il_vaut,
+              test_un_message_du_joueur_libere_l_avatar):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)

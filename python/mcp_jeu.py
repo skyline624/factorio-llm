@@ -193,6 +193,29 @@ def _accuser_reception(outil_en_cours, depuis_s):
         if cle == _DERNIER_ACCUSE:
             return
         _DERNIER_ACCUSE = cle
+
+        # PENDANT UN CHANTIER, LE JOUEUR PARLE DANS LE VIDE. Partie 37, mesuré : « arrête
+        # de miner, ta foreuse n'a plus rien » à 13:44:41, puis ONZE
+        # `ou_en_est_le_chantier` d'affilée sur deux minutes — pas une réponse, pas une
+        # action. Sa foreuse était bien épuisée (`no_minable_resources`, zéro minerai
+        # dessous) et il ne pouvait rien y faire : l'avatar était pris.
+        #
+        # RETOURNEMENT ASSUMÉ. En montant les chantiers (H42) j'avais écarté l'arrêt
+        # automatique, au motif qu'il déciderait à la place de l'agent. Deux faits l'ont
+        # renversé, et aucun n'était connu alors : le message n'a AUCUN poids autrement
+        # (29 % d'action mesurés contre 80 % quand l'avatar est libre), et arrêter ne
+        # détruit rien — « ce qui est posé reste posé, relance pour reprendre ».
+        #
+        # L'arbitrage de l'agent reste entier : il relance s'il juge que le joueur se
+        # trompait. Ce qu'il perd, c'est seulement l'impossibilité de répondre.
+        if _chantier_tourne():
+            _demander_l_arret()
+            try:
+                api.say("j'arrête le chantier pour t'écouter — il reprendra où il en "
+                        "était si besoin")
+            except Exception:
+                pass
+
         if outil_en_cours:
             api.say(f"bien reçu — occupé par {outil_en_cours} depuis "
                     f"{int(depuis_s // 60)} min {int(depuis_s % 60)} s, "
@@ -588,8 +611,22 @@ def _bandeau_du_joueur(resultat):
         _fin("MESSAGE DU JOUEUR", dits, 0.0)
     except Exception:
         pass
-    return ("LE JOUEUR TE PARLE — tiens-en compte avant de poursuivre :\n"
-            f"{dits}\n\n{resultat}")
+    # « LE JOUEUR TE PARLE » NE DISAIT NI QUI IL EST, NI CE QU'IL VOIT. L'agent recevait
+    # une phrase sans provenance ni portée, au milieu d'un `tool_result` — au même rang
+    # que « 12 machines ». Mesuré sur six parties : 19 réponses sur 22, mais l'action ne
+    # suit que dans 29 % des cas quand un chantier tourne.
+    #
+    # On lui donne les deux faits qui manquent, les mêmes que le pont met dans le tour
+    # `user` : l'humain REGARDE L'ÉCRAN, et arrêter NE DÉTRUIT RIEN. Le second change son
+    # calcul — il refusait d'interrompre comme si couper faisait tout perdre.
+    return ("LE JOUEUR TE PARLE — il regarde l'écran, toi tu lis des compteurs :\n"
+            f"{dits}\n"
+            "Ce qu'il décrit, il le voit — un four vide, une machine épuisée, du minerai "
+            "par terre — et cela se vérifie en secondes avec `regarder`. Il peut se "
+            "tromper ou parler d'un état déjà changé : dis-le et mesure. "
+            "`arreter_le_chantier` NE DÉTRUIT RIEN : ce qui est posé reste posé, et "
+            "relancer reprend où l'on s'était arrêté.\n\n"
+            f"{resultat}")
 
 
 def outil(fn=None, *, ecrit: bool = True):

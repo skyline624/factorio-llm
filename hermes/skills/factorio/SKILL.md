@@ -427,6 +427,18 @@ Autre fait mesuré partie 25 : `extraire_ici` forge lui-même le four quand il m
 a posé foreuse + four d'un coup. Ne te bloque pas sur l'absence de four en poche :
 `extraire_ici` s'en charge.
 
+## Ne mine pas à la main une fois que quelque chose produit — le joueur, partie 28
+
+Le joueur a corrigé : alors que l'extraction de fer tournait, j'allais miner à la main
+pour fabriquer des machines. « Ne mine pas à la main, crée d'autres foreuses et fours
+grâce à ce que tu as déjà mis en place. »
+
+La leçon générale : dès qu'une extraction produit, c'est ELLE qui doit fournir la
+matière des machines suivantes. Miner à la main en parallèle d'une usine qui tourne,
+c'est se rendre inutile — l'usine existe pour ça. Quand une foreuse/four tourne, la
+réponse à « il me faut une autre machine » est `batir_une_chaine` (qui forge ce qui
+lui manque), pas `se_procurer`.
+
 ## Démonter, c'est miner — même geste pour tout
 
 `demonter(x, y)` reprend ce qui se trouve à une position et t'en rend le contenu. Dans
