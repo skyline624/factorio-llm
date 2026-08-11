@@ -276,8 +276,32 @@ class BaseAgent:
             return self._place_furnace_near()
 
         if k == "move_items":
-            return api.run_action(api.move_items, a["item"], "stone-furnace",
-                                  a["count"], a["to_entity"], timeout=20.0)
+            # C'EST L'INVENTAIRE QUI TRANCHE, PAS `ok`. Partie 40, mesuré :
+            #
+            #   essai 1   9 étapes toutes vertes   copper-plate : 10 -> 10 (+0)
+            #   essai 2   6 étapes                 copper-plate : 10 -> 15 (+5)
+            #
+            # Seule différence : vingt charbons en poche. Le four du premier essai n'avait
+            # pas de combustible. Le plan PRÉVOIT pourtant le charbon — mais sur un stock
+            # SIMULÉ, et les cinq unités qu'il croyait disponibles venaient d'être versées
+            # dans une foreuse. `move_items` a répondu `ok=True` en ne déplaçant rien, et
+            # le rapport a rendu le pire des messages : tout vert, rien produit, aucune
+            # cause. L'agent a mis deux minutes et deux chantiers à le deviner.
+            #
+            # Même leçon que les vingt-six poses fantômes de l'executor E1, à l'endroit
+            # qu'elle n'avait pas couvert : elle valait pour ce qu'on pose, elle vaut
+            # identiquement pour ce qu'on transfère.
+            avant = perception.inventory(api).get(a["item"], 0)
+            r = api.run_action(api.move_items, a["item"], "stone-furnace",
+                               a["count"], a["to_entity"], timeout=20.0)
+            if not a["to_entity"]:
+                return r
+            apres = perception.inventory(api).get(a["item"], 0)
+            if apres >= avant:
+                return {"ok": False,
+                        "detail": (f"{a['item']} non versé dans le four : tu en avais "
+                                   f"{avant} en poche, il en fallait {a['count']}")}
+            return r
 
         if k == "wait":
             ticks = a["ticks"]
