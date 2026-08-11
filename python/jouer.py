@@ -19,10 +19,14 @@ deux agents sur un seul avatar — le 09/08, cinquante-cinq minutes de jeu illis
 qu'il tourne, les messages attendent et le bandeau des `tool_result` continue de les
 livrer ; c'est moins fort, mais ce n'est jamais dangereux.
 
+C'est LE lanceur d'une partie : avant lui, la commande docker se tapait à la main à
+chaque manche — trente-six fois, sans trace de ce qui avait été lancé. 
+ne fait pas la même chose : il pilote le Coordinator déterministe, pas l'agent.
+
 Usage :
     cd python
-    python jouer_avec_pont.py                 # part du prompt de scripts/.prompt_courant.txt
-    python jouer_avec_pont.py --minutes 90
+    python jouer.py                 # part du prompt de scripts/.prompt_courant.txt
+    python jouer.py --minutes 90
 """
 
 from __future__ import annotations
@@ -40,7 +44,7 @@ from services import pont_chat
 RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COMPOSE = os.path.join(RACINE, "docker-compose.hermes.yml")
 PROMPT = os.path.join(RACINE, "scripts", ".prompt_courant.txt")
-JOURNAL = os.path.join("hermes_partie_pont.log")
+JOURNAL = "hermes_partie.log"
 
 # Entre deux coups d'œil à la file de messages. Assez court pour que le joueur ne se sente
 # pas ignoré, assez long pour ne pas marteler le RCON pendant que l'agent joue.
