@@ -1626,7 +1626,8 @@ class Coordinator:
                          "inserter", "electric-pole")
 
     def batir_chaine(self, item: str, debit: float = 0.5,
-                     alimentations_max: Optional[int] = None) -> tuple[bool, str]:
+                     alimentations_max: Optional[int] = None,
+                     repartir_de_zero: bool = False) -> tuple[bool, str]:
         """Bâtit de quoi produire `item` en continu — quel que soit `item`.
 
         Le nom dit BÂTIR et non produire : `produire(cible, item)` existe déjà et règle la
@@ -1673,6 +1674,10 @@ class Coordinator:
         # d'une autre emprise, dont la collecte ne tombait plus en face : onze
         # `waiting_for_space_in_destination` et une chaîne qui ne produisait plus rien là
         # où elle débitait. Ce qui compte est ce qu'il peut POSER.
+        # LE CHOIX EST À L'AGENT, ET IL SE FAIT AVANT DE PLANIFIER : les pièces récupérées
+        # entrent dans l'inventaire, donc dans ce que le plan pourra poser.
+        rase = self._raser_la_production() if repartir_de_zero else ""
+
         inv0 = perception.inventory(self.api)
         machines = [m for m in knowledge.entites_par_type(self.api)
                     if inv0.get(m, 0) > 0 or perception.recipe_of(self.api, m) is not None]
@@ -1895,7 +1900,9 @@ class Coordinator:
                       # Le plan ignore l'existant : sans ce rappel, l'agent croit que tout
                       # ce qui tourne appartient à sa chaîne, et une extraction posée dix
                       # minutes plus tôt sature en silence à six tuiles de là.
-                      + self._dire_les_orphelines(getattr(rap, "placed", []) or []))
+                      + rase
+                      + ("" if repartir_de_zero
+                         else self._dire_les_orphelines(getattr(rap, "placed", []) or [])))
 
     def _a_deja_une_sortie(self, x: float, y: float) -> bool:
         """Un bras PUISE-t-il déjà dans la machine en (x, y) ?
@@ -2242,6 +2249,53 @@ class Coordinator:
                 + ". Ces machines ne font pas partie du plan qu'on vient de poser ; "
                   "à toi de voir si tu les ravitailles, les démontes pour récupérer les "
                   "pièces, ou les laisses.")
+
+    def _raser_la_production(self) -> str:
+        """Démonte les machines de production en place et RÉCUPÈRE leurs pièces.
+
+        DEUX SITUATIONS OPPOSÉES, UN SEUL OUTIL — donc un choix, et il revient à l'agent.
+        Le joueur l'a formulé : « certaines fois il vaut mieux tout supprimer et repartir
+        de zéro, notamment avec l'avancée technologique, mais d'autres fois c'est juste
+        une extension ».
+
+        Les deux cas sont réels. Passer du burner à l'électrique rend les anciennes
+        machines non seulement inutiles mais nuisibles : elles occupent le gisement,
+        réclament du charbon, et leurs pièces valent mieux en poche que dans le sol. À
+        l'inverse, agrandir une usine qui tourne ne doit rien casser.
+
+        Jusqu'ici le chantier ne faisait ni l'un ni l'autre : il bâtissait À CÔTÉ, laissant
+        derrière lui une extraction orpheline dont la foreuse saturait (partie 36).
+
+        On ne touche qu'aux MACHINES — foreuses, fours, assembleuses. Les belts, bras et
+        coffres restent : ils ne bloquent pas un gisement et se réutilisent tels quels.
+        Et l'on marche jusqu'à chacune, sans quoi le mod refuse (même leçon que H62).
+        """
+        from services import deplacement
+
+        try:
+            tout = perception.parc(self.api) or []
+        except Exception:
+            return ""
+        cibles = [e for e in tout
+                  if str(e.get("type", "")) in ("mining-drill", "furnace",
+                                                "assembling-machine")]
+        if not cibles:
+            return ""
+        repris = 0
+        for e in cibles:
+            x, y = float(e.get("x", 0.0)), float(e.get("y", 0.0))
+            try:
+                cx, cy = deplacement.position(self.api)
+                if math.hypot(x - cx, y - cy) > self.PORTEE_BRAS:
+                    self._marcher(x, y)
+            except Exception:
+                pass
+            r = self.api.run_action(self.api.mine_entity, str(e.get("name", "")), 1,
+                                    timeout=20.0)
+            if not (isinstance(r, dict) and r.get("ok") is False):
+                repris += 1
+        return (f" — table rase : {repris} machine(s) démontée(s) et récupérée(s) avant "
+                f"de bâtir")
 
     def _foreuse_existante(self, ancre: tuple[float, float], foreur: str):
         """La foreuse déjà posée sur cette ancre, s'il y en a une — sinon None.

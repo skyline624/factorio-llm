@@ -3485,6 +3485,63 @@ def test_batir_une_chaine_signale_ce_qu_elle_laisse_orphelin() -> None:
     assert ok
 
 
+def test_repartir_de_zero_recupere_l_existant_avant_de_batir() -> None:
+    """DEUX SITUATIONS OPPOSÉES, UN SEUL OUTIL — donc un CHOIX, et il revient à l'agent.
+
+    Le joueur : « certaines fois il vaut mieux tout supprimer et repartir de zéro,
+    notamment avec l'avancée technologique, mais d'autres fois c'est juste une extension ».
+
+    Les deux cas sont réels. Passer du burner à l'électrique rend les anciennes machines
+    non seulement inutiles mais nuisibles : elles occupent le gisement, réclament du
+    charbon, et leurs pièces valent mieux dans la poche que dans le sol. À l'inverse,
+    agrandir une usine qui tourne ne doit rien casser.
+
+    Jusqu'ici le chantier faisait ni l'un ni l'autre : il bâtissait À CÔTÉ. Partie 36,
+    mesuré — une extraction laissée orpheline, sa foreuse saturée, et un four neuf à six
+    tuiles de là (cf. `_dire_les_orphelines`).
+
+    `repartir_de_zero` tranche, et c'est l'agent qui tranche : on DÉMONTE les machines de
+    production existantes — ce qui rend leurs pièces — puis on bâtit. Le défaut reste
+    l'extension, parce que détruire ce qui produit est irréversible et ne doit jamais
+    arriver par surprise.
+    """
+    from agents.coordinator import Coordinator
+
+    demontees = []
+
+    class _ApiRase:
+        def get_state(self):
+            return {"inventory": {}, "tick": 1,
+                    "character": {"position": {"x": 0.0, "y": 0.0}}}
+        def mine_entity(self, nom, count=1, **kw):
+            demontees.append(nom)
+            return {"ok": True}
+        def run_action(self, fn, *a, **kw):
+            return fn(*a, **kw)
+
+    import services.perception as _perc
+    _vrai = _perc.parc
+    _perc.parc = lambda api: [
+        {"name": "burner-mining-drill", "type": "mining-drill", "x": 4.0, "y": 0.0},
+        {"name": "stone-furnace", "type": "furnace", "x": 4.0, "y": 2.0},
+        {"name": "transport-belt", "type": "transport-belt", "x": 6.0, "y": 2.0},
+    ]
+    try:
+        c = _coord_mesure(_ApiRase())
+        c._marcher = lambda x, y: (x, y)
+        rendu = Coordinator._raser_la_production(c)
+    finally:
+        _perc.parc = _vrai
+
+    a_pris_les_machines = sorted(demontees) == ["burner-mining-drill", "stone-furnace"]
+    dit_ce_qu_il_fait = "2" in rendu or "démont" in rendu.lower()
+
+    ok = a_pris_les_machines and dit_ce_qu_il_fait
+    rec("test_repartir_de_zero_recupere_l_existant_avant_de_batir", ok,
+        f"démontées={demontees} — « {rendu} »")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -3545,6 +3602,7 @@ def main() -> int:
         test_la_recolte_ne_se_limite_pas_a_un_rayon_arbitraire,
         test_ravitailler_donne_une_dose_et_ne_vide_pas_la_poche,
         test_batir_une_chaine_signale_ce_qu_elle_laisse_orphelin,
+        test_repartir_de_zero_recupere_l_existant_avant_de_batir,
         test_le_coffre_d_evacuation_essaie_aussi_les_diagonales,
         test_la_foreuse_a_charbon_recoit_un_bras_de_retour,
         test_l_evacuation_s_approche_avant_de_poser_son_coffre,

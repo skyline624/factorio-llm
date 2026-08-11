@@ -366,6 +366,25 @@ Deux réserves, du même ordre que celles ci-dessus :
 Tu ne peux pas répondre dans le chat. Si tu veux faire savoir quelque chose, dis-le dans
 ta réponse : elle est lue.
 
+## Étendre ou repartir de zéro : c'est toi qui tranches
+
+`batir_une_chaine` prend `repartir_de_zero`, et les deux réponses sont bonnes selon le
+moment.
+
+**Étendre** (`False`, le défaut) — rien de ce qui est en terre n'est touché, la nouvelle
+chaîne se pose à côté. Ce qui existe et souffre te sera nommé dans le rapport (« HORS DE
+LA CHAÎNE, et en souffrance »), à toi de le ravitailler, de le démonter ou de le laisser.
+
+**Raser** (`True`) — foreuses, fours et assembleuses en place sont démontés et leurs pièces
+reviennent dans ta poche AVANT que le plan ne soit calculé : elles serviront donc à bâtir
+la nouvelle chaîne. C'est ce qu'il faut quand tu changes de palier. Des machines à charbon
+sur un gisement que tu veux passer à l'électrique ne sont pas seulement inutiles : elles
+occupent la place, réclament du combustible, et leurs pièces valent mieux dans ta poche.
+
+Le défaut est l'extension, parce que démonter ce qui produit ne se rattrape pas. Mais ne
+t'interdis pas de raser quand c'est le bon geste — une usine burner qu'on garde « au cas
+où » pendant qu'on en bâtit une électrique, c'est deux usines à moitié alimentées.
+
 ## Deux façons de produire, à toi de choisir
 
 `extraire_ici(ressource)` pose TOUT DE SUITE deux entités : une foreuse, et un four sur sa

@@ -1083,13 +1083,27 @@ def ce_que_l_usine_a_produit(item: str) -> str:
 
 @outil
 def batir_une_chaine(item: str, debit: float = 0.5,
-                     alimentations_max: int = 0, budget_belts: int = 0) -> str:
+                     alimentations_max: int = 0, budget_belts: int = 0,
+                     repartir_de_zero: bool = False) -> str:
     """Bâtit une usine complète pour produire `item` : extraction, fonte, transport.
 
     Pour du VOLUME. Elle choisit son gisement au débit visé, marche jusqu'à lui, et forge
     ce qui lui manque avant de poser — plusieurs minutes, parfois plus de dix. Si tu tiens
     déjà une foreuse et que tu veux produire tout de suite, `extraire_ici` pose trois
     entités avec ce que tu as, en quelques secondes ; les deux se complètent.
+
+    `repartir_de_zero` : ce que tu veux faire de ce qui est DÉJÀ en terre.
+
+      - `False` (défaut) — on ÉTEND : rien n'est touché, la nouvelle chaîne se pose à
+        côté. Ce qui existe et souffre te sera nommé dans le rapport, à toi d'en faire
+        ce que tu veux.
+      - `True` — on RASE : les foreuses, fours et assembleuses en place sont démontés et
+        leurs pièces reviennent dans ta poche, AVANT que le plan ne soit calculé — elles
+        serviront donc à le bâtir. C'est ce qu'il faut quand tu changes de palier :
+        des machines à charbon sur un gisement que tu veux passer à l'électrique ne sont
+        pas seulement inutiles, elles occupent la place et réclament du combustible.
+
+    Le défaut est l'extension, parce que démonter ce qui produit ne se rattrape pas.
 
     `budget_belts` : combien de tuiles de convoyeur tu acceptes de faire FORGER pour
     amener le charbon jusqu'aux machines. Une tuile coûte 3 plaques de fer. Sans lui, la
@@ -1114,7 +1128,8 @@ def batir_une_chaine(item: str, debit: float = 0.5,
         coord.budget_belts = int(budget_belts) if budget_belts else None
         ok, detail = coord.batir_chaine(
             item, debit,
-            alimentations_max=(int(alimentations_max) if alimentations_max else None))
+            alimentations_max=(int(alimentations_max) if alimentations_max else None),
+            repartir_de_zero=bool(repartir_de_zero))
         return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
     return _lancer_chantier(f"batir_une_chaine({item})", _travail)
 
