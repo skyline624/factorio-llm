@@ -3579,6 +3579,75 @@ def test_la_cause_d_un_echec_survit_a_la_troncature() -> None:
     assert ok
 
 
+def test_le_laboratoire_se_pose_la_ou_l_on_a_MARCHE() -> None:
+    """CENT SOIXANTE-HUIT TUILES, ET PAS UN PAS — « aucune place libre », dit le rapport.
+
+    Partie 39, mesuré au moment même :
+
+        personnage      (-29.3, 97.4)    la zone de travail
+        poteau alimenté (11.5, -65.5)    la centrale, au bord de l'eau
+        distance        167.9 tuiles
+
+        15:48:56  ÉCHEC — « electric-mining-drill » : aucune place libre pour un
+                  laboratoire près du réseau
+
+    L'espace ne manquait pas : sondé en jeu, DIX-HUIT des quarante-neuf positions autour
+    de ce poteau acceptaient un laboratoire. Ce qui manquait, c'est le personnage. On
+    cherche une place autour du réseau, on tente d'y poser — et l'on n'y va jamais. Une
+    pose hors de portée de construction échoue quoi qu'on fasse.
+
+    Le rapport accuse alors l'espace, et l'agent n'a aucun moyen de deviner la distance.
+    Il a relancé la même recherche deux minutes plus tard, pour le même échec.
+
+    SIXIÈME FOIS QUE LE MOTIF REVIENT : du code juste, à un endroit que l'exécution ne
+    traverse pas. H52 avait branché la marche sur la pose et sur la forge — pas ici. Le
+    test vérifie donc le CHEMIN : a-t-on marché vers le réseau avant d'essayer ?
+    """
+    from agents.coordinator import Coordinator
+    import services.perception as _perc
+    import services.site_finder as _sf
+
+    class _Api:
+        place_entity_at = "place_entity_at"     # le vrai code passe la MÉTHODE à run_action
+        def get_state(self):
+            return {"character": {"position": {"x": -29.3, "y": 97.4}}}
+        def run_action(self, fn, *a, **kw):
+            return {"ok": True}
+        def get_power_state(self, x, y, r):
+            return {"connected": True}
+
+    poses: list[tuple[float, float]] = []
+    marches: list[tuple[float, float]] = []
+
+    vrais = (_sf._entites_a, _sf.can_place, _sf.poteau_alimente_le_plus_proche,
+             _perc.inventory)
+    _sf.poteau_alimente_le_plus_proche = lambda api, x, y: (11.5, -65.5, 1)
+    _sf.can_place = lambda api, nom, x, y: True
+    _perc.inventory = lambda api: {"lab": 1}
+
+    def _entites(api, x, y, r):
+        # Un lab n'existe qu'une fois POSÉ, et seulement là où l'on a marché.
+        return [{"name": "lab", "x": x, "y": y}] if any(
+            abs(x - px) < 2 and abs(y - py) < 2 for px, py in poses) else []
+    _sf._entites_a = _entites
+
+    c = _coord_mesure(_Api())
+    c.rayon = 12.0
+    c._marcher = lambda x, y: (marches.append((x, y)), poses.append((x, y)))[0] or (x, y)
+
+    try:
+        ou, dit = c.poser_le_laboratoire()
+    finally:
+        (_sf._entites_a, _sf.can_place, _sf.poteau_alimente_le_plus_proche,
+         _perc.inventory) = vrais
+
+    a_marche = any(abs(x - 11.5) < 12 and abs(y + 65.5) < 12 for x, y in marches)
+    ok = a_marche and ou is not None
+    rec("test_le_laboratoire_se_pose_la_ou_l_on_a_MARCHE", ok,
+        f"marches={marches} — posé en {ou} — « {dit} »")
+    assert ok
+
+
 def main() -> int:
     tests = [
         test_reparer_passe_avant_construire,
@@ -3660,6 +3729,7 @@ def main() -> int:
         test_les_ancres_sont_essayees_de_la_plus_proche_a_la_plus_lointaine,
         test_le_coffre_se_choisit_comme_les_autres_paliers,
         test_la_cause_d_un_echec_survit_a_la_troncature,
+        test_le_laboratoire_se_pose_la_ou_l_on_a_MARCHE,
     ]
     for t in tests:
         t()

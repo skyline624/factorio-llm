@@ -3114,6 +3114,18 @@ class Coordinator:
         source = site_finder.poteau_alimente_le_plus_proche(
             self.api, self.zone[0], self.zone[1])
         centre = (source[0], source[1]) if source else self.zone
+        # ON VA OÙ L'ON POSE. Partie 39, mesuré à la seconde : le personnage est en
+        # (-29.3, 97.4), le poteau alimenté en (11.5, -65.5) — CENT SOIXANTE-HUIT tuiles.
+        # On cherchait une place là-bas, on tentait d'y poser, on n'y allait jamais. Les
+        # quarante-neuf tentatives échouaient hors de portée de construction, et le rapport
+        # accusait l'espace : « aucune place libre pour un laboratoire près du réseau ».
+        #
+        # L'espace ne manquait pas — sondé en jeu, DIX-HUIT des quarante-neuf positions
+        # acceptaient un laboratoire. C'est le motif de H52, revenu à un endroit qu'il
+        # n'avait pas couvert : la marche branchée sur la pose et sur la forge, pas ici.
+        ici = perception.position(self.api)
+        if ici is None or math.dist(ici, centre) > self.PORTEE_BRAS:
+            self._marcher(centre[0], centre[1])
         for dx in range(-6, 7, 2):
             for dy in range(-6, 7, 2):
                 x = float(int(centre[0] + dx)) + 0.5
