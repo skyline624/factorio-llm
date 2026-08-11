@@ -1606,6 +1606,41 @@ def test_extraire_reprend_la_foreuse_ou_qu_elle_soit() -> None:
     assert ok
 
 
+def test_se_procurer_quinze_c_est_quinze_DE_PLUS() -> None:
+    """« TU EN AS DÉJÀ ASSEZ » — répondu à qui vient d'apprendre qu'il en manque quinze.
+
+    Partie 38, mesuré, et c'est une boucle fermée :
+
+        14:40:48  centrale ÉCHEC — il te manque coal (il t'en faut 50 en tout, tu en as 35)
+        14:40:53  se_procurer('coal', 15)          ← il pose la soustraction, elle est juste
+        14:40:55  OK — tu en as déjà assez en poche (35), rien à fabriquer
+        14:41:00  batir_une_centrale               ← qui réclamera les mêmes quinze
+
+    `Coordinator.fabriquer(item, n)` veut dire « fais que j'en aie n », et c'est la bonne
+    sémantique POUR LUI : il approvisionne un plan qui connaît ses totaux. Mais l'outil
+    exposé s'appelle `se_procurer`, et « procure-moi quinze charbons » ne veut dire qu'une
+    chose en français — quinze de plus. L'agent a lu son nom, pas notre implémentation.
+
+    Le mode d'échec décide : lu en TOTAL, l'outil ne fait rien et le dit sur le ton de la
+    réussite, donc l'agent boucle. Lu en DELTA, le pire est d'en forger en trop. On traduit
+    donc à la frontière — le Coordinator, lui, ne bouge pas.
+    """
+    import mcp_jeu
+
+    import services.perception as _perc
+    _vrai = _perc.inventory
+    _perc.inventory = lambda api: {"coal": 35}
+    try:
+        cible = mcp_jeu._cible_apres(object(), "coal", 15)
+    finally:
+        _perc.inventory = _vrai
+
+    ok = cible == 50
+    rec("test_se_procurer_quinze_c_est_quinze_DE_PLUS", ok,
+        f"35 en poche + 15 demandes -> cible {cible} (attendu 50)")
+    assert ok
+
+
 def test_la_foreuse_de_fer_ne_vaut_pas_foreuse_de_charbon() -> None:
     """UNE FOREUSE N'EST PAS L'AUTRE — et l'outil les confondait toutes.
 
@@ -1745,6 +1780,7 @@ def main() -> int:
               test_le_bandeau_dit_d_ou_vient_le_message_et_ce_qu_il_vaut,
               test_un_message_du_joueur_libere_l_avatar,
               test_extraire_reprend_la_foreuse_ou_qu_elle_soit,
+              test_se_procurer_quinze_c_est_quinze_DE_PLUS,
               test_la_foreuse_de_fer_ne_vaut_pas_foreuse_de_charbon,
               test_c_est_le_bandeau_qui_libere_l_avatar_pas_le_veilleur):
         t()

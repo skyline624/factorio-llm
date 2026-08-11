@@ -1216,9 +1216,36 @@ def batir_une_chaine(item: str, debit: float = 0.5,
     return _lancer_chantier(f"batir_une_chaine({item})", _travail)
 
 
+def _cible_apres(api, item: str, combien: int) -> int:
+    """Le stock à ATTEINDRE pour que `combien` de plus soient obtenus.
+
+    DEUX SENS POUR UN MÊME NOMBRE, ET L'UN DES DEUX BOUCLE. `Coordinator.fabriquer(item,
+    n)` veut dire « fais que j'en aie n » — juste pour lui, qui approvisionne un plan
+    connaissant ses totaux. L'outil exposé, lui, s'appelle `se_procurer`, et « procure-moi
+    quinze charbons » n'a qu'un sens : quinze DE PLUS.
+
+    Partie 38 : la centrale échoue sur « il t'en faut 50 en tout, tu en as 35 » ; l'agent
+    pose la soustraction, demande quinze, et s'entend répondre « tu en as déjà assez en
+    poche (35), rien à fabriquer ». Il relance la centrale, qui réclame les mêmes quinze.
+    Rien ne signale l'anomalie : l'outil répond OK.
+
+    C'est le mode d'échec qui tranche, pas la préférence. Lu en TOTAL, l'outil ne fait rien
+    en annonçant une réussite — l'agent ne peut qu'y retourner. Lu en DELTA, le pire est
+    d'en forger en trop. On traduit donc ICI, à la frontière ; le Coordinator ne bouge pas.
+    """
+    from services import perception
+    try:
+        deja = int(perception.inventory(api).get(item, 0) or 0)
+    except Exception:
+        deja = 0
+    return deja + max(1, int(combien))
+
+
 @outil
 def se_procurer(item: str, combien: int = 1) -> str:
-    """Obtient `item` par tous les moyens : miner, fondre, fabriquer — dans cet ordre.
+    """Obtient `combien` unités DE PLUS de `item` : miner, fondre, fabriquer — dans l'ordre.
+
+    `combien` s'ajoute à ce que tu as : en demander 15 quand tu en as 35 t'en fait 50.
 
     Fonctionne les mains vides. Une recette verrouillée est signalée comme telle : c'est
     une recherche qui manque, pas une impossibilité.
@@ -1227,7 +1254,7 @@ def se_procurer(item: str, combien: int = 1) -> str:
     autres constructions. Suis-la par `ou_en_est_le_chantier`.
     """
     def _travail():
-        ok, detail = _coord().fabriquer(item, combien)
+        ok, detail = _coord().fabriquer(item, _cible_apres(_api(), item, combien))
         return f"{'OK' if ok else 'ÉCHEC'} — {detail}"
     return _lancer_chantier(f"se_procurer({item}x{combien})", _travail)
 
