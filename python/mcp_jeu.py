@@ -728,8 +728,19 @@ def outil(fn=None, *, ecrit: bool = True):
             _fin(fn.__name__, f"ERREUR {type(e).__name__}: {e}", time.time() - t0)
             raise
         _EN_COURS.pop(fn.__name__, None)
-        _fin(fn.__name__, r, time.time() - t0)
-        return _bandeau_du_joueur(r)
+        # ON JOURNALISE CE QUI EST LIVRÉ, PAS CE QU'ON A CALCULÉ. Le bandeau se greffait
+        # APRÈS l'écriture du journal : ni la parole du joueur ni le « CHANTIER TERMINÉ »
+        # n'y figuraient, alors qu'ils partaient bel et bien dans la réponse.
+        #
+        # Le 11/08, cela m'a fait diagnostiquer à tort que l'agent n'avait jamais lu le
+        # compte rendu de neuf minutes de construction — il l'avait reçu, en tête de
+        # l'appel suivant. J'écrivais le correctif d'un défaut qui n'existait pas.
+        # Un journal qui montre autre chose que la réalité est pire que pas de journal :
+        # il fabrique des coupables, exactement comme un double de test qui rend la
+        # fiction qu'on s'est faite du mod plutôt que sa vraie réponse.
+        livre = _bandeau_du_joueur(r)
+        _fin(fn.__name__, livre, time.time() - t0)
+        return livre
 
     enveloppe.__fl_ecrit__ = ecrit
     return mcp.tool()(enveloppe)
