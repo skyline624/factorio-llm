@@ -1589,6 +1589,10 @@ def test_extraire_reprend_la_foreuse_ou_qu_elle_soit() -> None:
             # Le joueur s'est deplace : le point rendu est ailleurs sur le gisement.
             return {"name": nom, "x": -20.0, "y": 40.0, "distance": 3}
         def inspect_at(self, x, y, radius=0.5):
+            # La foreuse de (-65,9) couvre bien du charbon : c'est CELLE-LA qu'on reprend.
+            if abs(x + 65.0) < 2 and abs(y - 9.0) < 2:
+                return {"entities": [{"name": "coal", "type": "resource",
+                                      "x": -65.0, "y": 9.0, "amount": 1200}]}
             return {"entities": []}
 
     try:
@@ -1599,6 +1603,58 @@ def test_extraire_reprend_la_foreuse_ou_qu_elle_soit() -> None:
     ok = trouve == (-65.0, 9.0)
     rec("test_extraire_reprend_la_foreuse_ou_qu_elle_soit", ok,
         f"foreuse trouvee : {trouve} (attendu (-65.0, 9.0))")
+    assert ok
+
+
+def test_la_foreuse_de_fer_ne_vaut_pas_foreuse_de_charbon() -> None:
+    """UNE FOREUSE N'EST PAS L'AUTRE — et l'outil les confondait toutes.
+
+    Partie 38, mesuré. Le joueur demande une foreuse sur le charbon ; l'agent obéit dans
+    la minute, forge la foreuse qui lui manque, appelle `extraire_ici('coal')` :
+
+        14:19:15  ÉCHEC — rien posé en (38,46) : cannot place here
+        14:19:59  idem
+        14:20:41  idem
+
+    (38,46) est sa foreuse de FER, posée un quart d'heure plus tôt. `_foreuse_posee_pres_de`
+    recevait bien `ressource` en paramètre et ne s'en servait NULLE PART : elle rendait la
+    première foreuse du parc. L'outil concluait « elle est déjà en terre », ancrait dessus,
+    et le jeu refusait la tuile — occupée par elle.
+
+    Le filtre avait disparu au correctif précédent : en remplaçant la recherche par rayon
+    (partie 37) par une lecture du parc entier, on a gagné la portée et perdu le lien avec
+    la ressource demandée. Un paramètre reçu et jamais lu est le signe le plus net qu'une
+    intention s'est perdue en route.
+
+    On regarde donc ce qu'il y a SOUS la foreuse. Dans le doute — rien de lisible — on rend
+    None : le chemin normal (`find_nearest`) reprend la main, alors que le raccourci, lui,
+    ancre sur une tuile qu'on n'a pas vérifiée.
+    """
+    import mcp_jeu
+
+    import services.perception as _perc
+    _vrai = _perc.parc
+    _perc.parc = lambda api: [
+        {"name": "burner-mining-drill", "type": "mining-drill", "x": 38.0, "y": 46.0},
+    ]
+
+    class _ApiFer:
+        def find_nearest(self, nom):
+            return {"name": nom, "x": 12.0, "y": 80.0, "distance": 40}
+        def inspect_at(self, x, y, radius=0.5):
+            # Sous la foreuse de (38,46) il y a du FER, pas du charbon.
+            return {"entities": [{"name": "iron-ore", "type": "resource",
+                                  "x": 38.0, "y": 46.0, "amount": 900}]}
+
+    try:
+        pour_charbon = mcp_jeu._foreuse_posee_pres_de(_ApiFer(), "coal")
+        pour_fer = mcp_jeu._foreuse_posee_pres_de(_ApiFer(), "iron-ore")
+    finally:
+        _perc.parc = _vrai
+
+    ok = pour_charbon is None and pour_fer == (38.0, 46.0)
+    rec("test_la_foreuse_de_fer_ne_vaut_pas_foreuse_de_charbon", ok,
+        f"coal -> {pour_charbon} (attendu None) ; iron-ore -> {pour_fer}")
     assert ok
 
 
@@ -1689,6 +1745,7 @@ def main() -> int:
               test_le_bandeau_dit_d_ou_vient_le_message_et_ce_qu_il_vaut,
               test_un_message_du_joueur_libere_l_avatar,
               test_extraire_reprend_la_foreuse_ou_qu_elle_soit,
+              test_la_foreuse_de_fer_ne_vaut_pas_foreuse_de_charbon,
               test_c_est_le_bandeau_qui_libere_l_avatar_pas_le_veilleur):
         t()
     print("\n" + "=" * 72)

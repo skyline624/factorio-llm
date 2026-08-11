@@ -823,14 +823,32 @@ def _foreuse_posee_pres_de(api, ressource: str):
     # foreuse « manquante » — celle qui était en terre, à l'endroit qu'il avait lui-même
     # nommé. Trois refus de suite. Même défaut que le rayon de vingt-cinq tuiles de la
     # récolte (H63) : une recherche bornée autour d'un repère mouvant.
+    #
+    # MAIS UNE FOREUSE N'EST PAS L'AUTRE. `ressource` était reçu ici et lu NULLE PART : on
+    # rendait la première foreuse du parc. Partie 38 : le joueur demande une foreuse sur le
+    # charbon, l'agent obéit dans la minute, et `extraire_ici('coal')` ancre sur sa foreuse
+    # de FER en (38,46) — « cannot place here », trois fois, la tuile étant occupée par
+    # elle. Le filtre s'est perdu en gagnant la portée, au correctif ci-dessus.
+    #
+    # On regarde donc ce qu'il y a SOUS la foreuse, et l'on ne conclut rien de ce qu'on ne
+    # voit pas : sans ressource lisible, on rend None et le chemin normal (`find_nearest`)
+    # reprend la main. Le raccourci, lui, ancrerait sur une tuile non vérifiée.
     from services import perception
     try:
         tout = perception.parc(api) or []
     except Exception:
         tout = []
     for e in tout:
-        if str(e.get("name", "")).endswith("mining-drill"):
-            return (float(e.get("x", 0.0)), float(e.get("y", 0.0)))
+        if not str(e.get("name", "")).endswith("mining-drill"):
+            continue
+        x, y = float(e.get("x", 0.0)), float(e.get("y", 0.0))
+        try:
+            dessous = ((api.inspect_at(x, y, 1.5) or {}).get("entities") or [])
+        except Exception:
+            continue
+        if any(f.get("type") == "resource" and f.get("name") == ressource
+               for f in dessous):
+            return (x, y)
     return None
 
 
