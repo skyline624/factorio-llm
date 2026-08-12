@@ -127,6 +127,7 @@ def main() -> int:
     fin = float("inf") if opt.pilote else time.time() + opt.minutes * 60
     session = None
     attente: list[str] = []
+    attendu = False          # mode piloté : « j'attends ta consigne » ne se dit qu'une fois
 
     while time.time() < fin:
         time.sleep(PAUSE_S)
@@ -161,6 +162,17 @@ def main() -> int:
 
         if not pont_chat.doit_relancer(_agent_tourne(), attente):
             if not attente:
+                # RENDRE LA MAIN N'EST PAS FINIR — quand c'est l'humain qui mène. La règle
+                # ci-dessous vaut pour une partie autonome : l'agent qui s'arrête sans
+                # qu'on lui parle a décidé que c'était fini. En mode piloté, s'arrêter
+                # après chaque étape est précisément ce qu'on lui DEMANDE ; conclure là
+                # coupait la session au premier geste réussi (mesuré à la seconde tentative
+                # du 12/08 : deux consignes livrées, puis « fin »).
+                if opt.pilote:
+                    if not attendu:
+                        print("[pont] étape terminée — j'attends ta prochaine consigne")
+                        attendu = True
+                    continue
                 print("[pont] l'agent s'est arrêté et personne ne lui parle — fin")
                 break
             continue
@@ -171,6 +183,7 @@ def main() -> int:
 
         message = pont_chat.composer(attente)
         attente.clear()
+        attendu = False
         print(f"[pont] reprise de {session} avec le message du joueur")
         proc = _lancer(pont_chat.commande_relance(session, message, COMPOSE), opt.journal)
 
