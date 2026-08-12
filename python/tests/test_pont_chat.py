@@ -74,6 +74,46 @@ def test_le_message_dit_d_ou_il_vient() -> None:
     assert ok
 
 
+def test_le_mode_pilote_change_le_prompt_et_rien_d_autre() -> None:
+    """UNE PARTIE AUTONOME MESURE DEUX CHOSES À LA FOIS.
+
+    Quand une chaîne s'arrête, on ne sait pas si l'outil a menti ou si l'agent a mal
+    choisi. Les parties 39 à 42 ont fait remonter onze défauts d'outils, mais chacun a
+    coûté une demi-heure à isoler au milieu de ses décisions.
+
+    En mode piloté, l'humain donne les étapes une par une : ce qui échoue est un OUTIL,
+    pas un jugement. C'est un banc, pas une partie.
+
+    Le mode ne touche QUE le prompt de départ. Tout le reste — attente de l'avatar, pont
+    des messages, reprise de session — est identique : un banc qui change deux choses à la
+    fois ne mesure rien, ce qui est précisément le défaut qu'il corrige.
+    """
+    import os
+
+    from services.pont_chat import composer, doit_relancer
+
+    racine = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    pilote = os.path.join(racine, "scripts", "prompt_pilote.md")
+    existe = os.path.exists(pilote)
+    texte = open(pilote, encoding="utf-8").read() if existe else ""
+
+    # Le cadre : il attend, il n'entreprend rien, mais il garde le droit de contredire.
+    attend = "attends" in texte.lower() or "attendre" in texte.lower()
+    pas_d_initiative = "n'entreprends rien" in texte.lower()
+    garde_son_jugement = "impossible" in texte.lower() and "mesure" in texte.lower()
+
+    # Et le pont ne change pas de comportement pour autant.
+    pont_intact = (doit_relancer(agent_tourne=False, messages=["pose une foreuse"]) is True
+                   and doit_relancer(agent_tourne=True, messages=["pose"]) is False
+                   and "chat" in composer(["pose une foreuse"]).lower())
+
+    ok = existe and attend and pas_d_initiative and garde_son_jugement and pont_intact
+    rec("test_le_mode_pilote_change_le_prompt_et_rien_d_autre", ok,
+        f"prompt={existe} attend={attend} sans_initiative={pas_d_initiative} "
+        f"juge={garde_son_jugement} pont_intact={pont_intact}")
+    assert ok
+
+
 def test_le_pont_ne_VOLE_pas_le_message_au_bandeau() -> None:
     """TROIS LECTEURS POUR UNE FILE, ET C'EST LE MAUVAIS QUI GAGNE.
 
@@ -182,6 +222,7 @@ def test_on_ne_lance_pas_un_agent_sans_mains() -> None:
 def main() -> int:
     for t in (test_le_pont_attend_que_l_agent_ait_rendu_la_main,
               test_le_message_dit_d_ou_il_vient,
+              test_le_mode_pilote_change_le_prompt_et_rien_d_autre,
               test_le_pont_ne_VOLE_pas_le_message_au_bandeau,
               test_on_ne_lance_pas_un_agent_sans_mains):
         t()

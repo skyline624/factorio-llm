@@ -44,6 +44,12 @@ from services import pont_chat
 RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COMPOSE = os.path.join(RACINE, "docker-compose.hermes.yml")
 PROMPT = os.path.join(RACINE, "scripts", ".prompt_courant.txt")
+# UNE PARTIE AUTONOME MESURE DEUX CHOSES À LA FOIS : la qualité des outils et celle de
+# l'arbitrage. Quand une chaîne s'arrête, on ne sait pas si l'outil a menti ou si l'agent a
+# mal choisi — les parties 39 à 42 ont fait remonter onze défauts d'outils, chacun coûtant
+# une demi-heure à isoler au milieu de ses décisions. En mode piloté, l'humain donne les
+# étapes une par une : ce qui échoue est un OUTIL. C'est un banc, pas une partie.
+PROMPT_PILOTE = os.path.join(RACINE, "scripts", "prompt_pilote.md")
 JOURNAL = "hermes_partie.log"
 
 # Entre deux coups d'œil à la file de messages. Assez court pour que le joueur ne se sente
@@ -72,12 +78,25 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--minutes", type=float, default=120.0)
     ap.add_argument("--journal", default=JOURNAL)
+    ap.add_argument("--pilote", action="store_true",
+                    help="le JOUEUR donne les étapes une par une dans le chat ; "
+                         "l'agent n'entreprend rien de lui-même")
     opt = ap.parse_args()
 
-    if not os.path.exists(PROMPT):
-        print(f"prompt introuvable : {PROMPT}")
+    # Le mode piloté ne change QUE le prompt de départ : attente de l'avatar, pont des
+    # messages et reprise de session restent identiques. Un banc qui change deux choses à
+    # la fois ne mesure rien — ce qui est précisément le défaut qu'il corrige.
+    chemin = PROMPT_PILOTE if opt.pilote else PROMPT
+    if not os.path.exists(chemin):
+        print(f"prompt introuvable : {chemin}")
         return 1
-    mission = open(PROMPT, encoding="utf-8").read().strip()
+    mission = open(chemin, encoding="utf-8").read().strip()
+    if opt.pilote:
+        # Le fichier est un document : on n'envoie que ce qui suit la ligne de séparation,
+        # le reste explique POURQUOI ce mode existe et ne s'adresse pas à l'agent.
+        if "\n---\n" in mission:
+            mission = mission.split("\n---\n", 1)[1].strip()
+        print("[pont] mode PILOTÉ — il attend tes consignes dans le chat du jeu")
 
     api = ModApi(get_rcon())
     open(opt.journal, "w", encoding="utf-8").close()
