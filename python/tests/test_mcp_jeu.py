@@ -1554,6 +1554,59 @@ def test_un_message_du_joueur_libere_l_avatar() -> None:
     assert ok
 
 
+def test_attendre_le_joueur_rend_la_main_des_qu_il_parle() -> None:
+    """CINQUANTE-HUIT SECONDES POUR LIVRER UNE PHRASE, DONT L'ESSENTIEL EN DÉMARRAGE DOCKER.
+
+    Mesuré le 12/08 en mode piloté :
+
+        11:31:50  il répond, puis rend la main       (fin de session)
+        11:32:27  le pont relance un conteneur
+        11:32:48  première action de la session suivante
+
+    Quand le bandeau livre pendant qu'il travaille, c'est HUIT secondes. Quand il a rendu
+    la main, c'est une minute — `hermes chat -q` est une commande one-shot, et le mode
+    piloté lui demande justement de s'arrêter après chaque étape. Chaque consigne payait
+    donc un démarrage complet.
+
+    D'où cet outil : il RESTE VIVANT en attendant, et se coupe dès que le joueur parle. Ce
+    n'est pas `ou_en_est_le_chantier` qui peut le faire — sans chantier en cours, celui-ci
+    rend « aucun chantier lancé » instantanément, et l'agent boucle à vide.
+
+    L'attente est bornée : un agent qui ne reprend jamais la main ne pourrait plus ni
+    signaler une panne, ni être arrêté.
+    """
+    import mcp_jeu
+
+    class _Muet:
+        def peek_messages(self):
+            return {"messages": []}
+
+    class _Parle:
+        def __init__(self) -> None:
+            self.vus = 0
+        def peek_messages(self):
+            self.vus += 1
+            return {"messages": [{"joueur": "pier", "texte": "pose une foreuse"}]
+                    if self.vus >= 3 else []}
+
+    sommeils_muet: list[float] = []
+    mcp_jeu._attendre_le_joueur(_Muet(), dort=sommeils_muet.append, limite_s=1.0,
+                                pas_s=0.25)
+
+    sommeils_parle: list[float] = []
+    parle = _Parle()
+    mcp_jeu._attendre_le_joueur(parle, dort=sommeils_parle.append, limite_s=100.0,
+                                pas_s=0.25)
+
+    attend_si_silence = len(sommeils_muet) >= 3          # il a bien patienté
+    coupe_si_parole = len(sommeils_parle) <= 3           # et lâché dès la parole
+
+    ok = attend_si_silence and coupe_si_parole
+    rec("test_attendre_le_joueur_rend_la_main_des_qu_il_parle", ok,
+        f"silence : {len(sommeils_muet)} pas — parole : {len(sommeils_parle)} pas")
+    assert ok
+
+
 def test_l_arret_annule_AUSSI_la_tache_du_mod() -> None:
     """« ARRÊTÉ À LA DEMANDE » DIT LE JOURNAL, ET L'AVATAR MINE TOUJOURS.
 
@@ -1848,6 +1901,8 @@ def main() -> int:
               test_machine_a_rend_la_PLUS_PROCHE_et_non_la_premiere,
               test_le_bandeau_dit_d_ou_vient_le_message_et_ce_qu_il_vaut,
               test_un_message_du_joueur_libere_l_avatar,
+              test_attendre_le_joueur_rend_la_main_des_qu_il_parle,
+              test_l_arret_annule_AUSSI_la_tache_du_mod,
               test_extraire_reprend_la_foreuse_ou_qu_elle_soit,
               test_se_procurer_quinze_c_est_quinze_DE_PLUS,
               test_la_foreuse_de_fer_ne_vaut_pas_foreuse_de_charbon,

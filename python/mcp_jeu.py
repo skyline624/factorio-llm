@@ -1077,6 +1077,59 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
             f"{manque_feu}. Vérifie qu'elle tourne (`regarder`), puis évacue ou étends.")
 
 
+def _attendre_le_joueur(api, dort, limite_s: float, pas_s: float = 0.5) -> bool:
+    """Patiente jusqu'à ce que le joueur parle. Rend True s'il a parlé.
+
+    CINQUANTE-HUIT SECONDES POUR LIVRER UNE PHRASE. Mesuré le 12/08 en mode piloté :
+
+        11:31:50  il répond, puis rend la main       (fin de session)
+        11:32:27  le pont relance un conteneur
+        11:32:48  première action de la session suivante
+
+    Quand le bandeau livre pendant qu'il travaille, c'est HUIT secondes. Quand il a rendu
+    la main, c'est une minute : `hermes chat -q` est une commande one-shot, et le mode
+    piloté lui demande justement de s'arrêter après chaque étape — chaque consigne payait
+    donc un démarrage de conteneur.
+
+    Rester vivant coûte quelques tours de modèle ; relancer coûte une minute à chaque
+    phrase du joueur. `ou_en_est_le_chantier` ne peut pas jouer ce rôle : sans chantier en
+    cours il rend « aucun chantier lancé » dans la milliseconde, et l'agent boucle à vide.
+
+    L'attente est BORNÉE : un agent qui ne reprend jamais la main ne pourrait plus ni
+    signaler une panne, ni être arrêté.
+    """
+    reste = float(limite_s)
+    while reste > 0:
+        try:
+            if (api.peek_messages() or {}).get("messages"):
+                return True
+        except Exception:
+            pass
+        dort(pas_s)
+        reste -= pas_s
+    return False
+
+
+@outil(ecrit=False)
+def attendre_le_joueur(secondes: float = 20.0) -> str:
+    """Patiente jusqu'à ce que le joueur t'écrive — sans consommer de tour pour rien.
+
+    À appeler quand tu as fini ce qu'il t'a demandé et que tu attends la suite. L'appel se
+    coupe DÈS qu'il parle, et son message arrive en tête de la réponse ; s'il ne dit rien,
+    il rend la main au bout du délai et tu peux rappeler.
+
+    Cela vaut mieux que de t'arrêter : reprendre une session coûte près d'une minute au
+    joueur, alors qu'ici il est servi en quelques secondes.
+    """
+    import time as _t
+    limite = max(1.0, min(float(secondes), 60.0))
+    a_parle = _attendre_le_joueur(_api(), _t.sleep, limite)
+    if a_parle:
+        return "le joueur vient d'écrire — sa consigne est en tête de ce message."
+    return (f"rien de neuf après {int(limite)} s. Rappelle `attendre_le_joueur` si tu n'as "
+            f"rien d'autre à faire, ou vérifie ton usine (`etat_du_jeu`, `diagnostiquer`).")
+
+
 @outil(ecrit=False)
 def ou_en_est_le_chantier() -> str:
     """Où en est le travail lancé en fond — et ce qu'on te dit pendant ce temps.
