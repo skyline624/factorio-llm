@@ -1554,6 +1554,66 @@ def test_un_message_du_joueur_libere_l_avatar() -> None:
     assert ok
 
 
+def test_l_arret_annule_AUSSI_la_tache_du_mod() -> None:
+    """« ARRÊTÉ À LA DEMANDE » DIT LE JOURNAL, ET L'AVATAR MINE TOUJOURS.
+
+    Partie 42, vu à l'écran par le joueur pendant que je lisais le contraire :
+
+        11:15:25  LE JOUEUR TE PARLE — …
+        11:15:29  chantier n°4 « se_procurer(coalx40) » terminé — ARRÊTÉ à la demande
+        (à l'écran)  le personnage continue de miner
+
+    Les trois étages de `_demander_l_arret` — drapeau, exception asynchrone, fermeture du
+    lien — visent tous le CÔTÉ PYTHON. Or le travail réel se fait dans une tâche du mod :
+    `task_manager` fait marcher puis miner l'avatar sur `on_tick`, et rien de ce qu'on tue
+    côté Python ne l'atteint. On arrêtait le donneur d'ordres, pas l'ouvrier.
+
+    Le mod expose pourtant `fl_ops.cancel` depuis toujours — `operations.cancel()`, qui
+    passe par `task_manager.clear()` : arrêt de la marche, file vidée, tâche courante
+    oubliée. Il n'était simplement jamais appelé.
+
+    Un journal qui annonce un arrêt qui n'a pas lieu est pire que pas de journal : il m'a
+    fait valider H70 sur une preuve fausse. C'est l'écran qui a tranché, encore.
+    """
+    import time
+
+    import mcp_jeu
+
+    annules = []
+
+    class _ApiAnnule:
+        def cancel(self):
+            annules.append(True)
+            return {"ok": True}
+        def peek_messages(self):
+            return {"messages": []}
+        def say(self, texte):
+            return {"ok": True}
+
+    vrai = mcp_jeu._api
+    mcp_jeu._api = lambda: _ApiAnnule()
+    mcp_jeu._AVATAR_VU[:] = [time.time(), None]
+    try:
+        _table_rase(mcp_jeu)
+        def _long():
+            fin_ = time.time() + 20.0
+            while time.time() < fin_:
+                time.sleep(0.05)
+            return "fini"
+        mcp_jeu._lancer_chantier("se_procurer(coalx40)", _long)
+        time.sleep(0.3)
+        tournait = mcp_jeu._chantier_tourne()
+        mcp_jeu._demander_l_arret()
+        time.sleep(0.3)
+    finally:
+        mcp_jeu._api = vrai
+
+    ok = tournait and bool(annules)
+    rec("test_l_arret_annule_AUSSI_la_tache_du_mod", ok,
+        f"chantier lancé={tournait} — cancel() appelé={bool(annules)}")
+    assert ok
+
+
 def test_extraire_reprend_la_foreuse_ou_qu_elle_soit() -> None:
     """« IL T'EN MANQUE 1 » — alors qu'elle est en terre, posée par lui, deux minutes avant.
 

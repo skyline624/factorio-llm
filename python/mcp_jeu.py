@@ -458,6 +458,26 @@ def _demander_l_arret() -> bool:
     import time as _t
 
     _CHANTIER["arret"] = True
+    # ON ARRÊTAIT LE DONNEUR D'ORDRES, PAS L'OUVRIER. Les trois étages ci-dessous visent
+    # tous le côté PYTHON — or le travail réel se fait dans une tâche du mod :
+    # `task_manager` fait marcher puis miner l'avatar sur `on_tick`, et rien de ce qu'on
+    # tue côté Python ne l'atteint.
+    #
+    # Partie 42, vu à l'écran par le joueur pendant que je lisais le contraire dans le
+    # journal : « chantier ARRÊTÉ à la demande » à 11:15:29, et le personnage continuait
+    # de miner. Un journal qui annonce un arrêt qui n'a pas lieu est pire que pas de
+    # journal — il m'avait fait valider H70 sur une preuve fausse.
+    #
+    # Le mod expose `fl_ops.cancel` depuis toujours (`operations.cancel()` ->
+    # `task_manager.clear()` : marche stoppée, file vidée, tâche courante oubliée). Il
+    # n'était simplement jamais appelé. On le fait EN PREMIER, avant de tuer quoi que ce
+    # soit : c'est le seul étage qui touche le jeu, et il doit partir même si le fil est
+    # déjà mort — une tâche de minage peut lui survivre.
+    try:
+        _api().cancel()
+    except Exception:
+        pass
+
     fil = _CHANTIER.get("fil")
     if fil is None or not fil.is_alive():
         return False
