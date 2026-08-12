@@ -117,7 +117,14 @@ def main() -> int:
                     "--entrypoint", "hermes", "hermes", "chat",
                     "-s", "factorio", "-q", mission], opt.journal)
 
-    fin = time.time() + opt.minutes * 60
+    # PAS DE MINUTERIE QUAND C'EST L'HUMAIN QUI MÈNE. Le budget borne une partie qui joue
+    # SEULE ; en mode piloté il s'écoule pendant que le joueur réfléchit entre deux
+    # consignes, et c'est lui qui décide quand on s'arrête — par Ctrl-C ou en fermant.
+    #
+    # Il ne faisait d'ailleurs pas ce qu'il annonçait : partie 40, « budget écoulé — arrêt
+    # de l'agent », et le conteneur a continué de jouer vingt minutes. `proc.terminate()`
+    # tue `docker compose run`, pas le conteneur qu'il a lancé.
+    fin = float("inf") if opt.pilote else time.time() + opt.minutes * 60
     session = None
     attente: list[str] = []
 
