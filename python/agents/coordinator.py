@@ -1626,10 +1626,19 @@ class Coordinator:
     # mesuré trois bancs de suite, l'usine s'éteignant toujours entre T2 et T3.
     CHARBON_PAR_BRULEUR = 25
 
-    # Ce qu'on va reprendre dans les machines avant d'aller miner. Les produits de fusion
-    # seulement : ce sont eux qui coûtent du temps de four, et eux qui s'entassent quand
-    # l'évacuation manque. Le minerai brut se remine en quelques secondes.
-    MATIERES_RECOLTABLES = ("iron-plate", "copper-plate", "stone-brick")
+    # Ce qu'on va reprendre dans les machines et les coffres avant d'aller miner. Les
+    # produits de fusion coûtent du temps de four et s'entassent quand l'évacuation
+    # manque ; le minerai brut, lui, se remine en quelques secondes — d'où son absence.
+    #
+    # LE CHARBON FAIT EXCEPTION, et c'est le joueur qui l'a vu : « pourquoi il mine du
+    # charbon à la main en plus des foreuses ? » (banc piloté du 13/08). Deux foreuses à
+    # charbon tournaient, leur inserteur versait dans un coffre, et l'agent minait quand
+    # même — le charbon n'était pas dans cette liste. Ce qu'une foreuse a DÉJÀ extrait et
+    # déposé n'est pas du minerai brut : le reminer, c'est refaire un travail fait.
+    #
+    # Il l'avait demandé mot pour mot en partie 42 — « refais le plein à partir de ce qui
+    # a été récolté dans le coffre » — et l'agent ne pouvait structurellement pas le faire.
+    MATIERES_RECOLTABLES = ("iron-plate", "copper-plate", "stone-brick", "coal")
 
     # Entre deux récoltes des fours. Assez court pour suivre une usine qui produit, assez
     # long pour qu'une rafale de crafts ne les vide pas dix fois de suite.
@@ -2468,7 +2477,11 @@ class Coordinator:
             except Exception:
                 return 0
         for e in proches:
-            if str(e.get("type", "")) not in ("furnace", "assembling-machine"):
+            # LES COFFRES AUSSI. Un coffre n'a qu'une fonction dans nos chaînes : recevoir
+            # ce qu'un inserteur y verse. Ne pas le visiter, c'est laisser le stock qu'on
+            # a soi-même fait produire — et repartir miner à la pioche à côté. C'est ce
+            # que le joueur a vu au banc du 13/08, avec deux foreuses à charbon en service.
+            if str(e.get("type", "")) not in ("furnace", "assembling-machine", "container"):
                 continue
             # ON VA CHERCHER, ON N'ATTEND PAS. `empty_output_at` exige d'être à portée de
             # bras — une dizaine de tuiles. La récolte trouvait bien les fours (elle

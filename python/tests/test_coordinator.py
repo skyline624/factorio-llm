@@ -3542,6 +3542,66 @@ def test_repartir_de_zero_recupere_l_existant_avant_de_batir() -> None:
     assert ok
 
 
+def test_le_charbon_du_coffre_se_recolte_aussi() -> None:
+    """IL MINE À LA PIOCHE À CÔTÉ D'UN COFFRE QUI SE REMPLIT.
+
+    Banc piloté du 13/08, vu par le joueur : « pourquoi il mine du charbon à la main en
+    plus des foreuses ? ». Deux foreuses à charbon tournaient, leur inserteur versait dans
+    un coffre — et l'agent minait quand même.
+
+    Deux verrous, tous deux dans la récolte :
+
+        MATIERES_RECOLTABLES = ("iron-plate", "copper-plate", "stone-brick")
+        if e["type"] not in ("furnace", "assembling-machine"): continue
+
+    Le charbon n'était pas dans la liste, et les COFFRES n'étaient pas visités. Le
+    raisonnement d'origine tient pour le minerai brut — « il se remine en quelques
+    secondes » — mais pas pour ce qu'une foreuse a déjà extrait et déposé : le reminer,
+    c'est refaire un travail déjà fait, et c'est la corvée qui revient à chaque partie.
+
+    Le joueur l'avait demandé mot pour mot en partie 42 (« refais le plein à partir de ce
+    qui a été récolté dans le coffre ») ; l'agent ne pouvait structurellement pas le faire.
+    """
+    from agents.coordinator import Coordinator
+
+    import services.perception as _perc
+    vides = []
+
+    class _Api:
+        def __init__(self) -> None:
+            self.tour = 0
+        def get_state(self):
+            self.tour += 1
+            # Le coffre rend ses 40 charbons dès qu'on l'a vidé.
+            return {"inventory": {"coal": 40 if vides else 0}, "tick": 1, "ready": True}
+        empty_output_at = "empty_output_at"
+        def run_action(self, fn, x, y, nom, **kw):
+            vides.append((nom, x, y))
+            return {"ok": True}
+
+    _vrai_parc, _vrai_inv = _perc.parc, _perc.inventory
+    _perc.parc = lambda api: [
+        {"name": "burner-mining-drill", "type": "mining-drill", "x": -84.0, "y": 41.0},
+        {"name": "iron-chest", "type": "container", "x": -81.0, "y": 43.0},
+    ]
+    try:
+        c = _coord_mesure(_Api())
+        c.rayon = 25.0
+        c._marcher = lambda x, y: (x, y)
+        gagne = Coordinator._recolter_la_production(c, "coal")
+    finally:
+        _perc.parc, _perc.inventory = _vrai_parc, _vrai_inv
+
+    a_vide_le_coffre = any(n == "iron-chest" for n, _, _ in vides)
+    a_rapporte = gagne > 0
+    dans_la_liste = "coal" in Coordinator.MATIERES_RECOLTABLES
+
+    ok = a_vide_le_coffre and a_rapporte and dans_la_liste
+    rec("test_le_charbon_du_coffre_se_recolte_aussi", ok,
+        f"vidés={vides} gagné={gagne} coal dans la liste={dans_la_liste}")
+    assert ok
+
+
 def test_on_ne_repaie_pas_les_flacons_deja_consommes() -> None:
     """SEIZE FLACONS EN MAIN, HUIT SUFFISENT, ET L'OUTIL EN RÉCLAME VINGT-CINQ.
 
@@ -3814,6 +3874,7 @@ def main() -> int:
         test_la_cause_d_un_echec_survit_a_la_troncature,
         test_la_piece_qui_resiste_dit_POURQUOI_elle_resiste,
         test_on_ne_repaie_pas_les_flacons_deja_consommes,
+        test_le_charbon_du_coffre_se_recolte_aussi,
         test_le_laboratoire_se_pose_la_ou_l_on_a_MARCHE,
     ]
     for t in tests:
