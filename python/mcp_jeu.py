@@ -903,6 +903,105 @@ def _foreuse_posee_pres_de(api, ressource: str):
     return None
 
 
+def _ancres_du_gisement(api, ressource: str, depuis) -> list:
+    """Les cases d'un gisement où tenter la pose, de la plus proche à la plus lointaine.
+
+    TROIS ARBRES ONT FAIT ÉCHOUER UNE POSE SUR SIX CENT SOIXANTE-ONZE TUILES LIBRES.
+    Mesuré en jeu le 12/08 :
+
+        en (6,98)  : 2 tree-08-red, 1 dead-tree-desert   can_place = False
+        patch fer  : de (-9,98) à (22,128) — 671 tuiles
+        11:27:24 ÉCHEC … 11:31:23 ÉCHEC … 11:31:42 ÉCHEC — toujours la même case
+
+    L'outil demandait UN point à `find_nearest` et abandonnait s'il était pris. Le
+    troisième essai n'a réussi que parce que le personnage avait bougé, si bien que
+    `find_nearest` a rendu une autre case : de la chance, pas de la robustesse.
+
+    On garde ce point en tête de liste — c'est le plus proche, et marcher n'est pas
+    gratuit (leçon `ancres_par_proximite`) — puis on couvre la boîte englobante du
+    gisement, triée par distance au personnage.
+
+    Contrat MESURÉ de `scan_patches` : {patches: [{x, y, count, amount, x1, y1, x2, y2,
+    dist}]}. La boîte peut couvrir des trous ; `can_place` tranche à la pose, c'est lui
+    l'arbitre. Ici on ne fait que proposer.
+    """
+    import math
+
+    proches = []
+    tete = None
+    try:
+        r = api.find_nearest(ressource) or {}
+        if r.get("x") is not None:
+            tete = (float(r["x"]), float(r["y"]))
+    except Exception:
+        tete = None
+
+    try:
+        patches = (api.scan_patches(ressource, 300.0, 4) or {}).get("patches") or []
+    except Exception:
+        patches = []
+
+    vues = set()
+    for p in patches:
+        if p.get("x1") is None:
+            continue
+        x1, y1, x2, y2 = (float(p["x1"]), float(p["y1"]), float(p["x2"]), float(p["y2"]))
+        # Un pas de trois tuiles : une foreuse en occupe deux, et l'on veut couvrir un
+        # gisement de trente tuiles sans proposer neuf cents candidats.
+        x = x1
+        while x <= x2:
+            y = y1
+            while y <= y2:
+                c = (float(int(x)), float(int(y)))
+                if c not in vues:
+                    vues.add(c)
+                    proches.append(c)
+                y += 3.0
+            x += 3.0
+
+    ici = (float(depuis[0]), float(depuis[1])) if depuis else (0.0, 0.0)
+    proches.sort(key=lambda c: math.dist(ici, c))
+    # ASSEZ POUR CONTOURNER, PAS ASSEZ POUR BOUCLER. Un bosquet fait quelques tuiles ; si
+    # quarante essais échouent, ce n'est plus un obstacle local et il faut le DIRE plutôt
+    # que d'arpenter le gisement pendant dix minutes.
+    proches = proches[:40]
+    if tete is not None:
+        proches = [tete] + [c for c in proches if c != tete]
+    return proches
+
+
+def _pourquoi_refus(api, x: float, y: float) -> str:
+    """Ce qui occupe la case, en clair. Chaîne vide si l'on ne voit rien.
+
+    « CANNOT PLACE HERE » — UN ARBRE S'ABAT, UN LAC NON. Le message ne disait pas ce qui
+    gênait, et la conduite à tenir en dépend entièrement : devant un arbre on déboise,
+    devant une machine on démonte ou l'on se décale, devant de l'eau on change de gisement.
+    L'agent a réessayé trois fois à l'identique, faute du mot.
+
+    `inspect_at` exclut les ressources (`tools.lua:837`, cf. H82) mais rend tout le reste —
+    arbres, rochers, machines. Quand il ne rend RIEN et que la pose est pourtant refusée,
+    c'est le terrain lui-même (eau, bord de carte) : on le dit comme une hypothèse, pas
+    comme un fait, puisqu'on ne l'a pas lu.
+    """
+    from collections import Counter
+    try:
+        ents = (api.inspect_at(float(x), float(y), 1.5) or {}).get("entities") or []
+    except Exception:
+        return ""
+    if not ents:
+        return "rien de visible — c'est sans doute le terrain (eau, bord de carte)"
+    arbres = [e for e in ents if str(e.get("type")) == "tree"
+              or "tree" in str(e.get("name", ""))]
+    autres = [e for e in ents if e not in arbres]
+    bouts = []
+    if arbres:
+        bouts.append(f"{len(arbres)} arbre(s)")
+    if autres:
+        c = Counter(str(e.get("name")) for e in autres)
+        bouts.append(", ".join(f"{n}×{k}" if n > 1 else k for k, n in c.most_common(3)))
+    return " et ".join(bouts)
+
+
 @outil
 def extraire_ici(ressource: str = "iron-ore") -> str:
     """Pose TOUT DE SUITE une extraction minimale : une foreuse, un four sur sa sortie.
@@ -990,15 +1089,45 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
     # Le banc ne pouvait pas le voir : ses doubles rendaient `{"found": True, ...}`,
     # c'est-à-dire ma fiction. Un double doit refléter la RÉPONSE DU MOD, jamais l'idée
     # qu'on s'en fait — sans quoi il confirme l'erreur au lieu de la révéler.
+    # UN GISEMENT OFFRE DES CENTAINES DE CASES, ON N'EN ESSAYAIT QU'UNE. Trois arbres
+    # suffisaient à faire échouer la pose sur six cent soixante-onze tuiles libres —
+    # mesuré le 12/08, trois refus de suite au même point, et le succès n'est venu que
+    # parce que le personnage avait bougé entre-temps.
     if deja is not None:
-        trouve = {"name": ressource, "x": deja[0], "y": deja[1], "distance": 0}
+        candidats = [(float(deja[0]), float(deja[1]))]
     else:
-        trouve = api.find_nearest(ressource) or {}
-    if trouve.get("x") is None or trouve.get("y") is None:
+        candidats = _ancres_du_gisement(api, ressource, perception.position(api))
+    if not candidats:
         return f"aucun gisement de {ressource} en vue — essaie `ou_sont_les_ressources`"
-    ancre = (float(trouve["x"]), float(trouve["y"]))
+
+    ancre = candidats[0]
     api.generate_terrain(ancre[0], ancre[1], 25.0)
     deplacement.marcher_vers(api, ancre[0], ancre[1])
+
+    # On ne marche qu'une fois : les autres candidats sont à quelques tuiles, dans la
+    # portée de construction. C'est `can_place` qui tranche — lui seul connaît le terrain,
+    # les arbres et le bâti.
+    from services import site_finder
+    refus = {}
+    for c in candidats[:12]:
+        try:
+            if site_finder.can_place(api, "burner-mining-drill", c[0], c[1]):
+                ancre = c
+                break
+        except Exception:
+            ancre = c
+            break
+        if len(refus) < 3:
+            motif = _pourquoi_refus(api, c[0], c[1])
+            if motif:
+                refus[c] = motif
+    else:
+        # Aucune case libre parmi celles essayées : on DIT ce qui gênait, en clair. « cannot
+        # place here » n'apprend rien — un arbre s'abat, un lac non.
+        dit = " ; ".join(f"({x:.0f},{y:.0f}) : {m}" for (x, y), m in refus.items())
+        return (f"rien posé sur {ressource} — les {min(len(candidats), 12)} emplacements "
+                f"essayés sont pris. {dit or 'cause non lisible'}. Déboise, démonte ce qui "
+                f"gêne, ou vise un autre gisement (`ou_sont_les_ressources`).")
 
     plan = plan_micro(MicroRequest(
         patch=ResourcePatch(resource=ressource, tiles=[], bbox=(0, 0, 0, 0)),
@@ -1023,6 +1152,12 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
         souci = (", ".join(f"{n} (il t'en manque {c})"
                            for n, c in (rap.missing or {}).items())
                  or (str(rap.blocked[0]) if rap.blocked else "cause inconnue"))
+        # ET SI C'EST LA CASE QUI REFUSE, ON DIT QUOI. « cannot place here » ne distingue
+        # pas un arbre d'un lac, et la conduite à tenir en dépend entièrement.
+        if "place" in souci:
+            gene = _pourquoi_refus(api, ancre[0], ancre[1])
+            if gene:
+                souci = f"{souci} — {gene}"
         return f"ÉCHEC — rien posé en ({ancre[0]:.0f},{ancre[1]:.0f}) : {souci}"
     # ON RELIT LE MONDE, ON NE CROIT PAS LE RAPPORT. Partie 31 : l'outil annonce « posée :
     # burner-mining-drill, stone-furnace » et le jeu ne contient AUCUN four — celui-ci

@@ -1554,6 +1554,99 @@ def test_un_message_du_joueur_libere_l_avatar() -> None:
     assert ok
 
 
+def test_le_gisement_offre_plus_d_une_case() -> None:
+    """TROIS ARBRES ONT FAIT ÉCHOUER UNE POSE SUR SIX CENT SOIXANTE-ONZE TUILES LIBRES.
+
+    Partie du 12/08, mode piloté, mesuré en jeu :
+
+        en (6,98)  : 2 tree-08-red, 1 dead-tree-desert
+        can_place  : False
+        patch fer  : de (-9,98) à (22,128) — 671 tuiles
+
+        11:27:24  ÉCHEC — rien posé en (6,98) : cannot place here
+        11:31:23  idem   11:31:42  idem
+
+    `extraire_ici` demande UN point à `find_nearest` et abandonne s'il est pris. Le
+    troisième essai n'a réussi que parce que le personnage avait bougé entre-temps, si
+    bien que `find_nearest` a rendu une autre case : de la chance, pas de la robustesse.
+
+    Le gisement en offre des centaines. `scan_patches` rend sa boîte englobante — contrat
+    MESURÉ : {patches: [{x, y, count, amount, x1, y1, x2, y2, dist}]} — et l'on balaie
+    depuis le point le plus proche vers l'extérieur, comme `ancres_par_proximite` le fait
+    déjà ailleurs : marcher n'est pas gratuit.
+    """
+    import mcp_jeu
+
+    class _Api:
+        def find_nearest(self, nom):
+            return {"name": nom, "x": 6.0, "y": 98.0, "distance": 4}
+        def scan_patches(self, resource, radius=300.0, max_patches=8):
+            return {"resource": resource, "count": 1, "patches": [
+                {"x": 7.0, "y": 113.5, "count": 671, "amount": 200000,
+                 "x1": -9, "y1": 98, "x2": 22, "y2": 128, "dist": 14.6}]}
+
+    ancres = mcp_jeu._ancres_du_gisement(_Api(), "iron-ore", (11.2, 99.5))
+
+    # Le point de `find_nearest` reste le premier essai : c'est le plus proche.
+    commence_au_plus_proche = ancres and ancres[0] == (6.0, 98.0)
+    # Et il y en a d'autres, toutes DANS le gisement.
+    dedans = all(-9 <= x <= 22 and 98 <= y <= 128 for x, y in ancres[1:])
+    assez = 6 <= len(ancres) <= 60          # de quoi contourner, pas de quoi boucler
+    # Du plus proche au plus lointain — À PARTIR DU SECOND. Le premier vient de
+    # `find_nearest`, qui vise le gisement RÉEL et non notre grille : il garde sa place en
+    # tête même si un point échantillonné se trouve marginalement plus près.
+    import math
+    d = [math.dist((11.2, 99.5), a) for a in ancres[1:]]
+    ordonnees = all(d[i] <= d[i + 1] + 1e-6 for i in range(len(d) - 1))
+
+    ok = commence_au_plus_proche and dedans and assez and ordonnees
+    rec("test_le_gisement_offre_plus_d_une_case", ok,
+        f"{len(ancres)} ancres, 1re={ancres[0] if ancres else None}, ordonnées={ordonnees}")
+    assert ok
+
+
+def test_un_refus_de_pose_NOMME_ce_qui_gene() -> None:
+    """« CANNOT PLACE HERE » — UN ARBRE S'ABAT, UN LAC NON.
+
+    Le message ne disait pas ce qui gênait. Or la conduite à tenir en dépend entièrement :
+    devant un arbre on déboise, devant une machine on démonte ou on se décale, devant de
+    l'eau on change de gisement. L'agent a réessayé trois fois à l'identique.
+
+    `inspect_at` EXCLUT les ressources (tools.lua:837, cf. H82) mais rend tout le reste —
+    arbres, rochers, machines. C'est exactement ce qu'on veut nommer ici.
+    """
+    import mcp_jeu
+
+    class _Arbres:
+        def inspect_at(self, x, y, radius=0.5):
+            return {"x": x, "y": y, "radius": radius, "entities": [
+                {"name": "tree-08-red", "type": "tree", "x": 5.3, "y": 97.4},
+                {"name": "tree-08-red", "type": "tree", "x": 6.6, "y": 98.2},
+                {"name": "dead-tree-desert", "type": "tree", "x": 6.1, "y": 99.0}]}
+
+    class _Machine:
+        def inspect_at(self, x, y, radius=0.5):
+            return {"x": x, "y": y, "radius": radius, "entities": [
+                {"name": "burner-mining-drill", "type": "mining-drill", "x": 6.0, "y": 98.0}]}
+
+    class _Vide:
+        def inspect_at(self, x, y, radius=0.5):
+            return {"x": x, "y": y, "radius": radius, "entities": []}
+
+    arbres = mcp_jeu._pourquoi_refus(_Arbres(), 6.0, 98.0)
+    machine = mcp_jeu._pourquoi_refus(_Machine(), 6.0, 98.0)
+    vide = mcp_jeu._pourquoi_refus(_Vide(), 6.0, 98.0)
+
+    dit_arbres = "arbre" in arbres.lower() and "3" in arbres
+    dit_machine = "burner-mining-drill" in machine
+    honnete_si_vide = "eau" in vide.lower() or "terrain" in vide.lower() or not vide
+
+    ok = dit_arbres and dit_machine and honnete_si_vide
+    rec("test_un_refus_de_pose_NOMME_ce_qui_gene", ok,
+        f"arbres={arbres!r} | machine={machine!r} | vide={vide!r}")
+    assert ok
+
+
 def test_attendre_le_joueur_rend_la_main_des_qu_il_parle() -> None:
     """CINQUANTE-HUIT SECONDES POUR LIVRER UNE PHRASE, DONT L'ESSENTIEL EN DÉMARRAGE DOCKER.
 
@@ -1901,6 +1994,8 @@ def main() -> int:
               test_machine_a_rend_la_PLUS_PROCHE_et_non_la_premiere,
               test_le_bandeau_dit_d_ou_vient_le_message_et_ce_qu_il_vaut,
               test_un_message_du_joueur_libere_l_avatar,
+              test_le_gisement_offre_plus_d_une_case,
+              test_un_refus_de_pose_NOMME_ce_qui_gene,
               test_attendre_le_joueur_rend_la_main_des_qu_il_parle,
               test_l_arret_annule_AUSSI_la_tache_du_mod,
               test_extraire_reprend_la_foreuse_ou_qu_elle_soit,
