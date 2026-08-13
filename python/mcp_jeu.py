@@ -934,16 +934,25 @@ def _ancres_du_gisement(api, ressource: str, depuis) -> list:
     `find_nearest` a rendu une autre case : de la chance, pas de la robustesse.
 
     On garde ce point en tête de liste — c'est le plus proche, et marcher n'est pas
-    gratuit (leçon `ancres_par_proximite`) — puis on couvre la boîte englobante du
-    gisement, triée par distance au personnage.
+    gratuit (leçon `ancres_par_proximite`) — puis on prend les TUILES DE MINERAI, pas la
+    boîte englobante.
 
-    Contrat MESURÉ de `scan_patches` : {patches: [{x, y, count, amount, x1, y1, x2, y2,
-    dist}]}. La boîte peut couvrir des trous ; `can_place` tranche à la pose, c'est lui
-    l'arbitre. Ici on ne fait que proposer.
+    LA BBOX MENT, ET LE MOD LE DIT DEPUIS LONGTEMPS. Première version de cette fonction :
+    je balayais la boîte de `scan_patches`, et `can_place` acceptait volontiers une case
+    d'herbe — rien n'y gêne. Mesuré en jeu le 13/08, quelques minutes après l'avoir
+    écrite : foreuse posée en (-38,-72), minerai réel à 1,6 tuile, `no_minable_resources`.
+    Elle tournait dans le vide.
+
+    `tools.lua` porte l'avertissement noir sur blanc : « la bbox enveloppe tous les patches
+    du rayon, trous compris — le LayoutPlanner s'y fiait et posait un foreur sur de
+    l'herbe ». J'avais refait son erreur sans lire son commentaire.
+
+    Contrat MESURÉ de `scan_patch` (singulier) : {resource, count, bbox, sample:[{x,y}],
+    origin, total_amount}. Le `sample` porte jusqu'à quatre cents tuiles de minerai
+    GARANTI, déjà triées par distance à l'observateur — exactement ce qu'il faut.
     """
     import math
 
-    proches = []
     tete = None
     try:
         r = api.find_nearest(ressource) or {}
@@ -953,27 +962,18 @@ def _ancres_du_gisement(api, ressource: str, depuis) -> list:
         tete = None
 
     try:
-        patches = (api.scan_patches(ressource, 300.0, 4) or {}).get("patches") or []
+        sample = (api.scan_patch(ressource, 400.0) or {}).get("sample") or []
     except Exception:
-        patches = []
+        sample = []
 
-    vues = set()
-    for p in patches:
-        if p.get("x1") is None:
+    vues, proches = set(), []
+    for t in sample:
+        if t.get("x") is None:
             continue
-        x1, y1, x2, y2 = (float(p["x1"]), float(p["y1"]), float(p["x2"]), float(p["y2"]))
-        # Un pas de trois tuiles : une foreuse en occupe deux, et l'on veut couvrir un
-        # gisement de trente tuiles sans proposer neuf cents candidats.
-        x = x1
-        while x <= x2:
-            y = y1
-            while y <= y2:
-                c = (float(int(x)), float(int(y)))
-                if c not in vues:
-                    vues.add(c)
-                    proches.append(c)
-                y += 3.0
-            x += 3.0
+        c = (float(t["x"]), float(t["y"]))
+        if c not in vues:
+            vues.add(c)
+            proches.append(c)
 
     ici = (float(depuis[0]), float(depuis[1])) if depuis else (0.0, 0.0)
     proches.sort(key=lambda c: math.dist(ici, c))

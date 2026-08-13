@@ -1578,30 +1578,44 @@ def test_le_gisement_offre_plus_d_une_case() -> None:
     import mcp_jeu
 
     class _Api:
+        """Double FIDÈLE : `scan_patch` rend un SAMPLE de tuiles RÉELLES de minerai,
+        déjà triées par distance à l'observateur, plus une bbox qui, elle, contient des
+        trous. Contrat lu dans `tools.lua:600` — {resource, count, bbox, sample, origin,
+        total_amount}."""
         def find_nearest(self, nom):
             return {"name": nom, "x": 6.0, "y": 98.0, "distance": 4}
-        def scan_patches(self, resource, radius=300.0, max_patches=8):
-            return {"resource": resource, "count": 1, "patches": [
-                {"x": 7.0, "y": 113.5, "count": 671, "amount": 200000,
-                 "x1": -9, "y1": 98, "x2": 22, "y2": 128, "dist": 14.6}]}
+        def scan_patch(self, resource, radius=400.0):
+            return {"resource": resource, "count": 671,
+                    "bbox": {"x1": -9, "y1": 98, "x2": 22, "y2": 128},
+                    # Un gisement en diagonale : la bbox couvre (0,120), le minerai non.
+                    "sample": [{"x": 6, "y": 98}, {"x": 9, "y": 101}, {"x": 12, "y": 104},
+                               {"x": 15, "y": 107}, {"x": 18, "y": 110}, {"x": 21, "y": 113},
+                               {"x": 3, "y": 95}, {"x": 0, "y": 92}],
+                    "origin": {"x": 11.2, "y": 99.5}, "total_amount": 200000}
 
     ancres = mcp_jeu._ancres_du_gisement(_Api(), "iron-ore", (11.2, 99.5))
 
     # Le point de `find_nearest` reste le premier essai : c'est le plus proche.
     commence_au_plus_proche = ancres and ancres[0] == (6.0, 98.0)
-    # Et il y en a d'autres, toutes DANS le gisement.
-    dedans = all(-9 <= x <= 22 and 98 <= y <= 128 for x, y in ancres[1:])
+    # ET TOUTES LES AUTRES SONT DU MINERAI RÉEL, pas des cases de la bbox. C'est le piège
+    # que le mod documente lui-même (tools.lua) : « la bbox enveloppe tous les patches,
+    # trous compris — le LayoutPlanner s'y fiait et posait un foreur sur de l'herbe ».
+    # Mesuré en jeu le 13/08 : foreuse posée en (-38,-72), minerai à 1.6 tuile,
+    # `no_minable_resources`.
+    tuiles = {(6.0, 98.0), (9.0, 101.0), (12.0, 104.0), (15.0, 107.0), (18.0, 110.0),
+              (21.0, 113.0), (3.0, 95.0), (0.0, 92.0)}
+    que_du_minerai = all(a in tuiles for a in ancres)
     assez = 6 <= len(ancres) <= 60          # de quoi contourner, pas de quoi boucler
-    # Du plus proche au plus lointain — À PARTIR DU SECOND. Le premier vient de
-    # `find_nearest`, qui vise le gisement RÉEL et non notre grille : il garde sa place en
-    # tête même si un point échantillonné se trouve marginalement plus près.
+    # Du plus proche au plus lointain — À PARTIR DU SECOND : le premier vient de
+    # `find_nearest` et garde sa place en tête.
     import math
     d = [math.dist((11.2, 99.5), a) for a in ancres[1:]]
     ordonnees = all(d[i] <= d[i + 1] + 1e-6 for i in range(len(d) - 1))
 
-    ok = commence_au_plus_proche and dedans and assez and ordonnees
+    ok = commence_au_plus_proche and que_du_minerai and assez and ordonnees
     rec("test_le_gisement_offre_plus_d_une_case", ok,
-        f"{len(ancres)} ancres, 1re={ancres[0] if ancres else None}, ordonnées={ordonnees}")
+        f"{len(ancres)} ancres, 1re={ancres[0] if ancres else None}, "
+        f"que du minerai={que_du_minerai}, ordonnées={ordonnees}")
     assert ok
 
 
