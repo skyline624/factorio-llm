@@ -42,6 +42,14 @@ class Contract:
 # Offsets essayés pour poser un four près du character (cf. test_full.py:120).
 _FURNACE_OFFSETS = [(2, 0), (0, 2), (-2, 0), (0, -2), (3, 1), (-1, 3), (2, 2), (-2, -2)]
 
+# Combien de fois relire l'inventaire après un craft, et à quel rythme. Le jeu met la
+# recette en FILE : l'objet arrive un instant plus tard, et conclure trop tôt annonce un
+# échec sans cause pour une fabrication qui allait réussir (partie 42, mesuré : verdict à
+# 11:16:26, objet en poche à 11:16:40). Trois relevés d'une seconde couvrent les crafts
+# simples ; au-delà c'est que rien ne vient.
+CRAFT_RELEVES = 3
+CRAFT_PAUSE_S = 1.0
+
 
 class BaseAgent:
     """Boucle perceive -> decide -> act. `decide` est à surcharger par métier.
@@ -308,7 +316,34 @@ class BaseAgent:
             return api.run_action(api.wait, ticks, timeout=max(20.0, ticks / 60.0 + 5))
 
         if k == "craft_item":
-            return api.run_action(api.craft_item, a["item"], a["count"], timeout=90.0)
+            # UN CRAFT SE MET EN FILE, IL NE S'EXÉCUTE PAS. Partie 42, mesuré :
+            #
+            #   11:16:26  ÉCHEC — burner-mining-drill : 0 -> 0 (+0) en 2 étape(s)
+            #   11:16:40  inventaire : burner-mining-drill = 1
+            #
+            # `craft_item` rend `ok=True` dès la mise en file, et l'objet n'arrive qu'un
+            # instant plus tard. On relisait trop tôt : le rapport annonçait un échec sans
+            # cause pour une fabrication qui allait réussir, et l'agent repartait fabriquer
+            # ce qu'il avait déjà.
+            #
+            # C'est la leçon d'E1 avec sa conséquence inverse : il ne suffit pas de RELIRE
+            # l'inventaire, il faut lui laisser le temps d'arriver. Un verdict prématuré
+            # est aussi faux qu'un `ok=True` cru sur parole.
+            item, combien = a["item"], int(a["count"])
+            avant = perception.inventory(api).get(item, 0)
+            r = api.run_action(api.craft_item, item, combien, timeout=90.0)
+            dort = getattr(self, "_dort", None) or __import__("time").sleep
+            for _ in range(CRAFT_RELEVES):
+                if perception.inventory(api).get(item, 0) > avant:
+                    return r
+                dort(CRAFT_PAUSE_S)
+            apres = perception.inventory(api).get(item, 0)
+            if apres > avant:
+                return r
+            return {"ok": False,
+                    "detail": (f"{item} toujours à {apres} après {combien} craft(s) "
+                               f"demandé(s) — la file n'a rien rendu : ingrédient manquant "
+                               f"ou recette verrouillée")}
 
         return {"ok": False, "detail": f"kind inconnu: {k}"}
 

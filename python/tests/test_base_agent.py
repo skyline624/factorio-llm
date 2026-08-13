@@ -87,8 +87,74 @@ def test_un_transfert_qui_ne_transfere_rien_est_un_echec() -> None:
     assert ok
 
 
+def test_un_craft_qui_ne_produit_rien_le_dit() -> None:
+    """DEUX ÉTAPES VERTES, ZÉRO FOREUSE, ET AUCUNE CAUSE — puis elle apparaît toute seule.
+
+    Partie 42, mesuré :
+
+        11:16:26  ÉCHEC — burner-mining-drill : 0 -> 0 (+0) en 2 étape(s)
+                  [1:craft_item, 2:craft_item]      aucune etape en erreur
+        11:16:40  inventaire : burner-mining-drill = 1
+
+    Le craft est ASYNCHRONE côté jeu : `craft_item` met la recette en file et rend
+    `ok=True` aussitôt, alors que l'objet n'arrive dans l'inventaire qu'un instant plus
+    tard. On relisait trop tôt, et le rapport annonçait un échec sans cause pour une
+    fabrication qui allait réussir.
+
+    C'est la leçon d'E1 — c'est l'inventaire qui tranche — mais avec sa conséquence
+    inverse : ici il ne faut pas seulement RELIRE, il faut ATTENDRE avant de relire. Un
+    verdict prématuré est aussi faux qu'un `ok=True` cru sur parole.
+    """
+    from agents.base import BaseAgent
+    from services.knowledge import Step
+
+    class _ApiLent:
+        """Le jeu met la recette en file : l'objet arrive au 3e relevé."""
+        def __init__(self) -> None:
+            self.lectures = 0
+        def get_state(self):
+            self.lectures += 1
+            n = 1 if self.lectures >= 3 else 0
+            return {"inventory": {"burner-mining-drill": n}, "tick": 1, "ready": True}
+        def craft_item(self, item, count, **kw):
+            return {"ok": True, "detail": "mis en file"}
+        def run_action(self, fn, *a, **kw):
+            kw.pop('timeout', None)
+            return fn(*a, **kw)
+
+    class _ApiJamais:
+        def get_state(self):
+            return {"inventory": {}, "tick": 1, "ready": True}
+        def craft_item(self, item, count, **kw):
+            return {"ok": True, "detail": "mis en file"}
+        def run_action(self, fn, *a, **kw):
+            kw.pop('timeout', None)
+            return fn(*a, **kw)
+
+    a = BaseAgent.__new__(BaseAgent)
+    dodos: list[float] = []
+
+    a.api = _ApiLent()
+    a._dort = dodos.append
+    lent = a._execute(Step("craft_item", {"item": "burner-mining-drill", "count": 1}))
+
+    a.api = _ApiJamais()
+    a._dort = lambda s: None
+    jamais = a._execute(Step("craft_item", {"item": "burner-mining-drill", "count": 1}))
+
+    patiente = lent.get("ok") is True and dodos          # il a attendu, puis constaté
+    dit_le_vide = (jamais.get("ok") is False
+                   and "burner-mining-drill" in str(jamais.get("detail", "")))
+
+    ok = patiente and dit_le_vide
+    rec("test_un_craft_qui_ne_produit_rien_le_dit", ok,
+        f"file lente -> {lent} ({len(dodos)} attentes) | jamais -> {jamais}")
+    assert ok
+
+
 def main() -> int:
-    for t in (test_un_transfert_qui_ne_transfere_rien_est_un_echec,):
+    for t in (test_un_transfert_qui_ne_transfere_rien_est_un_echec,
+              test_un_craft_qui_ne_produit_rien_le_dit):
         t()
     print("\n" + "=" * 72)
     nok = sum(1 for _, ok, _ in RESULTS if ok)
