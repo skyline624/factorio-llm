@@ -1628,6 +1628,50 @@ def test_le_gisement_offre_plus_d_une_case() -> None:
     assert ok
 
 
+def test_une_extraction_DEJA_COMPLETE_ne_se_repose_pas() -> None:
+    """CENT SOIXANTE-QUATRE SECONDES DE MARCHE POUR REPOSER CE QUI EST DÉJÀ LÀ.
+
+    Banc piloté du 13/08 :
+
+        06:45:12  extraire_ici(iron-ore)
+        06:47:56  ÉCHEC — rien posé en (-32,-9) : coal (il t'en manque 4)   [164 s]
+        06:49:43  ÉCHEC — rien posé en (-32,-9) : cannot place here
+                  — burner-mining-drill, stone-furnace
+
+    L'obstacle nommé par H88 dit tout : ce qui gêne, c'est SA PROPRE foreuse et SON four.
+    L'extraction était complète — les deux entités en place, la chaîne tournait — et
+    l'outil repartait quand même marcher jusqu'au gisement pour tenter de reposer une
+    foreuse sur elle-même.
+
+    Le chemin de reprise (H63/H82) est juste quand il MANQUE quelque chose : foreuse posée
+    sans son four, cas mesuré partie 31. Il n'a aucun sens quand les deux sont là. On
+    constate donc l'état avant d'agir, et l'on rend la main tout de suite.
+    """
+    import mcp_jeu
+
+    class _ApiComplete:
+        """Foreuse ET receveur déjà en place sur le gisement."""
+        def find_nearest(self, nom):
+            return {"name": nom, "x": -32.0, "y": -9.0, "distance": 2}
+        def inspect_at(self, x, y, radius=0.5):
+            return {"x": x, "y": y, "radius": radius, "entities": [
+                {"name": "burner-mining-drill", "type": "mining-drill",
+                 "x": -32.0, "y": -9.0, "status": "working"},
+                {"name": "stone-furnace", "type": "furnace",
+                 "x": -32.0, "y": -7.0, "status": "working"}]}
+
+    dit = mcp_jeu._extraction_deja_complete(_ApiComplete(), (-32.0, -9.0), "stone-furnace")
+    absente = mcp_jeu._extraction_deja_complete(_ApiComplete(), (99.0, 99.0), "wooden-chest")
+
+    nomme_les_deux = dit and "burner-mining-drill" in dit and "stone-furnace" in dit
+    laisse_passer = not absente          # ailleurs, rien n'est complet : on laisse agir
+
+    ok = bool(nomme_les_deux) and laisse_passer
+    rec("test_une_extraction_DEJA_COMPLETE_ne_se_repose_pas", ok,
+        f"complète -> {dit!r} | ailleurs -> {absente!r}")
+    assert ok
+
+
 def test_on_ancre_au_COEUR_du_gisement_pas_au_bord() -> None:
     """ÊTRE SUR DU MINERAI NE SUFFIT PAS : IL FAUT EN AVOIR AUTOUR.
 
@@ -2064,6 +2108,7 @@ def main() -> int:
               test_le_bandeau_dit_d_ou_vient_le_message_et_ce_qu_il_vaut,
               test_un_message_du_joueur_libere_l_avatar,
               test_le_gisement_offre_plus_d_une_case,
+              test_une_extraction_DEJA_COMPLETE_ne_se_repose_pas,
               test_on_ancre_au_COEUR_du_gisement_pas_au_bord,
               test_un_refus_de_pose_NOMME_ce_qui_gene,
               test_attendre_le_joueur_rend_la_main_des_qu_il_parle,

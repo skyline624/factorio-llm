@@ -1013,6 +1013,35 @@ def _ancres_du_gisement(api, ressource: str, depuis) -> list:
     return proches[:40]
 
 
+def _extraction_deja_complete(api, ancre, receveur: str) -> str:
+    """Ce qui est DÉJÀ posé à cet endroit, si l'extraction y est entière. Sinon "".
+
+    CENT SOIXANTE-QUATRE SECONDES DE MARCHE POUR REPOSER CE QUI EST DÉJÀ LÀ. Banc piloté
+    du 13/08 :
+
+        06:45:12  extraire_ici(iron-ore)
+        06:47:56  ÉCHEC — rien posé en (-32,-9) : coal (il t'en manque 4)   [164 s]
+        06:49:43  ÉCHEC — rien posé en (-32,-9) : cannot place here
+                  — burner-mining-drill, stone-furnace
+
+    L'obstacle que H88 nomme dit tout : ce qui gêne, c'est SA PROPRE foreuse et SON four.
+    L'extraction était entière, la chaîne tournait, et l'outil repartait marcher jusqu'au
+    gisement pour tenter de reposer une foreuse sur elle-même.
+
+    Le chemin de reprise (H63, H82) reste juste quand il MANQUE quelque chose — foreuse
+    posée sans son four, mesuré partie 31, l'agent enfermé faute de pouvoir compléter. Il
+    n'a aucun sens quand les deux sont là : on constate, on le dit, on rend la main.
+    """
+    try:
+        ents = (api.inspect_at(float(ancre[0]), float(ancre[1]), 3.0) or {}).get("entities") or []
+    except Exception:
+        return ""
+    noms = {str(e.get("name")) for e in ents}
+    if "burner-mining-drill" in noms and receveur in noms:
+        return f"burner-mining-drill et {receveur}"
+    return ""
+
+
 def _pourquoi_refus(api, x: float, y: float) -> str:
     """Ce qui occupe la case, en clair. Chaîne vide si l'on ne voit rien.
 
@@ -1142,6 +1171,18 @@ def extraire_ici(ressource: str = "iron-ore") -> str:
         candidats = _ancres_du_gisement(api, ressource, perception.position(api))
     if not candidats:
         return f"aucun gisement de {ressource} en vue — essaie `ou_sont_les_ressources`"
+
+    # RIEN À COMPLÉTER : ON NE MARCHE MÊME PAS. Le chemin de reprise vaut quand il MANQUE
+    # une pièce ; quand foreuse ET receveur sont là, repartir au gisement pour reposer une
+    # foreuse sur elle-même coûte cent soixante-quatre secondes et deux échecs (mesuré au
+    # banc du 13/08). On constate avant d'agir.
+    if deja is not None:
+        entier = _extraction_deja_complete(api, deja, receveur)
+        if entier:
+            return (f"rien à faire — l'extraction de {ressource} est déjà complète en "
+                    f"({deja[0]:.0f},{deja[1]:.0f}) : {entier}. Vérifie qu'elle tourne "
+                    f"(`regarder`) ; si elle est à l'arrêt c'est le combustible ou "
+                    f"l'évacuation, pas la pose.")
 
     ancre = candidats[0]
     api.generate_terrain(ancre[0], ancre[1], 25.0)
