@@ -3359,8 +3359,10 @@ def test_la_recolte_ne_se_limite_pas_a_un_rayon_arbitraire() -> None:
     import services.perception as perc
     vrai_parc = perc.parc
     # Le four est à 300 tuiles : hors de tout rayon, mais bien dans le parc.
-    perc.parc = lambda api: [{"name": "stone-furnace", "type": "furnace",
-                              "x": 300.0, "y": -200.0}]
+    # `types` est accepté comme dans la vraie signature — l'appelant le passe pour obtenir
+    # aussi les conteneurs (cf. `test_le_charbon_du_coffre_se_recolte_aussi`).
+    perc.parc = lambda api, types=None: [{"name": "stone-furnace", "type": "furnace",
+                                          "x": 300.0, "y": -200.0}]
 
     c = _coord_mesure(_ApiVaste())
     c.zone = (0.0, 0.0)
@@ -3579,11 +3581,24 @@ def test_le_charbon_du_coffre_se_recolte_aussi() -> None:
             vides.append((nom, x, y))
             return {"ok": True}
 
+    # LE DOUBLE DOIT REFLÉTER CE QUE `parc` REND VRAIMENT — et il ne rend PAS les coffres :
+    # sa liste de types est ("mining-drill", "furnace", "assembling-machine", "inserter",
+    # "lab"). Première version de ce test : je lui faisais rendre un `iron-chest`, donc il
+    # validait une récolte que la production ne pouvait pas faire. Mesuré au banc du 13/08 :
+    # « coal : 0 -> 40 (+40) en 3 étapes [find_nearest, walk_to_entity, mine_entity] » — il
+    # a miné à côté d'un coffre plein.
+    #
+    # On appelle donc `parc` avec les types voulus, comme le fait le code corrigé.
     _vrai_parc, _vrai_inv = _perc.parc, _perc.inventory
-    _perc.parc = lambda api: [
-        {"name": "burner-mining-drill", "type": "mining-drill", "x": -84.0, "y": 41.0},
-        {"name": "iron-chest", "type": "container", "x": -81.0, "y": 43.0},
-    ]
+
+    def _parc(api, types=("mining-drill", "furnace", "assembling-machine",
+                          "inserter", "lab")):
+        tout = [{"name": "burner-mining-drill", "type": "mining-drill",
+                 "x": -84.0, "y": 41.0},
+                {"name": "iron-chest", "type": "container", "x": -81.0, "y": 43.0}]
+        return [e for e in tout if e["type"] in types]
+
+    _perc.parc = _parc
     try:
         c = _coord_mesure(_Api())
         c.rayon = 25.0

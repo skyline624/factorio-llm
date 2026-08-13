@@ -2469,7 +2469,19 @@ class Coordinator:
         # portée de bras pour vider — et elle se franchit en marchant. `perception.parc`
         # liste déjà toutes les machines de la surface : on s'en sert.
         try:
-            proches = perception.parc(self.api) or []
+            # LES COFFRES NE SONT PAS DANS LA LISTE PAR DÉFAUT. `parc` filtre sur
+            # ("mining-drill", "furnace", "assembling-machine", "inserter", "lab") : un
+            # conteneur n'en fait pas partie, et la boucle ci-dessous avait beau accepter
+            # le type `container`, elle n'en rencontrait jamais.
+            #
+            # Mesuré au banc piloté du 13/08, à côté d'un coffre qui se remplissait :
+            # « coal : 0 -> 40 (+40) en 3 étape(s) [find_nearest, walk_to_entity,
+            # mine_entity] ». Du code juste, sur un chemin que l'exécution ne traverse
+            # pas — le motif que ce projet paie depuis H10.
+            proches = perception.parc(
+                self.api,
+                types=("mining-drill", "furnace", "assembling-machine", "inserter",
+                       "lab", "container")) or []
         except Exception:
             try:
                 proches = ((self.api.inspect_at(self.zone[0], self.zone[1], self.rayon)
