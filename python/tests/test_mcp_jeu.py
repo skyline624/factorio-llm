@@ -1628,6 +1628,53 @@ def test_le_gisement_offre_plus_d_une_case() -> None:
     assert ok
 
 
+def test_on_GENERE_le_terrain_avant_de_le_scanner() -> None:
+    """SUR UNE CARTE NEUVE, LE GISEMENT N'EXISTE PAS ENCORE POUR LE JEU.
+
+    Banc piloté du 13/08, premier geste sur carte fraîche :
+
+        06:56:48  extraire_ici(iron-ore)
+        06:58:19  ÉCHEC — rien posé en (0,1) : pose non confirmée   [91 s]
+        06:58:33  OK — extraction posée en (3,12)                   [1,5 s]
+
+    (0,1) n'est pas du minerai — le `sample` ne le contient pas. Les chunks autour du
+    gisement n'étaient pas générés au premier appel : `scan_patch` ne voyait rien, et le
+    code retombait sur son secours `find_nearest`, qui pointait une case vide. La marche
+    du premier essai a généré le terrain, d'où la réussite du second en une seconde et
+    demie.
+
+    On génère donc AVANT de scanner. `find_nearest` sert à savoir OÙ générer — c'est son
+    seul rôle utile désormais, depuis que le `sample` fournit les tuiles (H92).
+    """
+    import mcp_jeu
+
+    ordre = []
+
+    class _Api:
+        def find_nearest(self, nom):
+            ordre.append("find_nearest")
+            return {"name": nom, "x": 14.0, "y": 29.0, "distance": 30}
+        def generate_terrain(self, x, y, r):
+            ordre.append("generate_terrain")
+            return {"ok": True}
+        def scan_patch(self, resource, radius=400.0):
+            ordre.append("scan_patch")
+            return {"resource": resource, "count": 3,
+                    "bbox": {"x1": 13, "y1": 28, "x2": 16, "y2": 30},
+                    "sample": [{"x": 14, "y": 29}, {"x": 15, "y": 29}, {"x": 14, "y": 28}],
+                    "origin": {"x": 0.0, "y": 0.0}, "total_amount": 9000}
+
+    mcp_jeu._ancres_du_gisement(_Api(), "iron-ore", (0.0, 0.0))
+
+    a_genere = "generate_terrain" in ordre
+    avant_le_scan = (a_genere and "scan_patch" in ordre
+                     and ordre.index("generate_terrain") < ordre.index("scan_patch"))
+
+    ok = a_genere and avant_le_scan
+    rec("test_on_GENERE_le_terrain_avant_de_le_scanner", ok, f"ordre des appels : {ordre}")
+    assert ok
+
+
 def test_une_extraction_DEJA_COMPLETE_ne_se_repose_pas() -> None:
     """CENT SOIXANTE-QUATRE SECONDES DE MARCHE POUR REPOSER CE QUI EST DÉJÀ LÀ.
 
@@ -2108,6 +2155,7 @@ def main() -> int:
               test_le_bandeau_dit_d_ou_vient_le_message_et_ce_qu_il_vaut,
               test_un_message_du_joueur_libere_l_avatar,
               test_le_gisement_offre_plus_d_une_case,
+              test_on_GENERE_le_terrain_avant_de_le_scanner,
               test_une_extraction_DEJA_COMPLETE_ne_se_repose_pas,
               test_on_ancre_au_COEUR_du_gisement_pas_au_bord,
               test_un_refus_de_pose_NOMME_ce_qui_gene,

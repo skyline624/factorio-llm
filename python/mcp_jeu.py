@@ -961,6 +961,25 @@ def _ancres_du_gisement(api, ressource: str, depuis) -> list:
     except Exception:
         tete = None
 
+    # ON GÉNÈRE AVANT DE SCANNER. Sur une carte neuve, les chunks autour du gisement
+    # n'existent pas encore pour le jeu : `scan_patch` ne voit rien, et l'on retombe sur le
+    # secours `find_nearest` — qui pointe alors une case vide.
+    #
+    # Banc piloté du 13/08, premier geste sur carte fraîche :
+    #   06:56:48  extraire_ici(iron-ore)
+    #   06:58:19  ÉCHEC — rien posé en (0,1) : pose non confirmée   [91 s]
+    #   06:58:33  OK — extraction posée en (3,12)                   [1,5 s]
+    # (0,1) n'était pas du minerai. C'est la marche du premier essai qui a généré le
+    # terrain, d'où la réussite immédiate du second.
+    #
+    # `find_nearest` sert à savoir OÙ générer : c'est son seul rôle utile depuis que le
+    # `sample` fournit les tuiles (H92).
+    if tete is not None:
+        try:
+            api.generate_terrain(tete[0], tete[1], 64.0)
+        except Exception:
+            pass
+
     try:
         sample = (api.scan_patch(ressource, 400.0) or {}).get("sample") or []
     except Exception:
