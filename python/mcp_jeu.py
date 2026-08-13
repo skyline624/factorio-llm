@@ -216,12 +216,23 @@ def _accuser_reception(outil_en_cours, depuis_s):
             except Exception:
                 pass
 
-        if outil_en_cours:
+        # ON N'ACCUSE RÉCEPTION QUE SI L'ATTENTE EST RÉELLE. Ce mot servait quand un
+        # message mettait des minutes à parvenir : il évitait au joueur de parler dans le
+        # vide. Depuis H80 (le pont ne vole plus le message au bandeau) et H87
+        # (`attendre_le_joueur`), il arrive en une seconde — et l'accusé tombe alors EN
+        # MÊME TEMPS que la vraie réponse.
+        #
+        # Le 12/08 le joueur l'a signalé : « pourquoi il me dit Bien reçu je le lis au
+        # prochain geste ? ». Il croyait lire Hermes ; c'était notre serveur, annonçant une
+        # attente qui n'existait plus. Un accusé qui double la réponse n'informe pas, il
+        # brouille — et il vient de NOUS, ce qui le rend plus trompeur encore.
+        #
+        # On le garde donc pour le seul cas où il dit quelque chose de vrai : un outil
+        # occupe l'avatar depuis assez longtemps pour que le silence soit inquiétant.
+        if outil_en_cours and depuis_s >= ACCUSE_SI_OCCUPE_S:
             api.say(f"bien reçu — occupé par {outil_en_cours} depuis "
                     f"{int(depuis_s // 60)} min {int(depuis_s % 60)} s, "
                     f"je le lis dès que j'ai la main")
-        else:
-            api.say("bien reçu — je le lis au prochain geste")
     except Exception:
         pass
 
@@ -261,6 +272,11 @@ def _veiller():
 # qu'attendre coûte un tour au lieu de dix, assez court pour ne pas donner l'impression
 # d'un outil bloqué. L'attente se coupe de toute façon dès qu'il se passe quelque chose.
 ATTENTE_SUIVI_S = 8.0
+
+# Au-delà de quoi le silence devient inquiétant, et un accusé de réception dit quelque
+# chose de vrai. En deçà, le message arrive de toute façon avant qu'on ait fini de le lire
+# — le bandeau le livre au prochain retour d'outil, une seconde plus tard.
+ACCUSE_SI_OCCUPE_S = 15.0
 
 _CHANTIER = {"n": 0, "nom": "", "debut": 0.0, "fil": None,
              "resultat": None, "arret": False}
