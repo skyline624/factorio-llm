@@ -975,15 +975,42 @@ def _ancres_du_gisement(api, ressource: str, depuis) -> list:
             vues.add(c)
             proches.append(c)
 
+    # ÊTRE SUR DU MINERAI NE SUFFIT PAS : IL FAUT EN AVOIR AUTOUR. La tuile la plus proche
+    # est souvent en BORDURE du gisement — une foreuse burner couvre 2×2, elle n'a alors
+    # qu'une ou deux tuiles sous elle et les épuise en trois minutes. Mesuré au banc du
+    # 13/08, signalé par le joueur depuis l'écran : « la foreuse de fer n'a plus de minerai
+    # sur son emplacement, il faut la déplacer » — statut `no_minable_resources`, trois
+    # minutes après une pose que j'avais validée.
+    #
+    # Le `sample` porte toutes les tuiles : on compte donc les voisines de chacune. Un
+    # cœur de gisement à quinze tuiles vaut mieux qu'un bord à trois — on n'y marche
+    # qu'une fois, on y mine des heures.
     ici = (float(depuis[0]), float(depuis[1])) if depuis else (0.0, 0.0)
-    proches.sort(key=lambda c: math.dist(ici, c))
+
+    def _voisines(c):
+        return sum(1 for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                   if (c[0] + dx, c[1] + dy) in vues)
+
+    # Densité d'abord (par paliers, pour ne pas traverser la carte à la tuile près), puis
+    # distance. Une case pleinement entourée vaut 9 ; on regroupe 9-8, 7-5, puis le reste.
+    def _rang(c):
+        n = _voisines(c)
+        palier = 0 if n >= 8 else (1 if n >= 5 else 2)
+        return (palier, math.dist(ici, c))
+
+    proches.sort(key=_rang)
+
+    # `find_nearest` ne garde PLUS la tête. Elle l'avait tant que le reste venait d'une
+    # bbox douteuse — c'était la seule tuile de minerai garanti. Depuis que le `sample`
+    # n'en contient que des vraies, son seul privilège est d'être la plus PROCHE, et c'est
+    # précisément ce qui la place en bordure. Elle ne sert plus que de secours quand le
+    # `sample` est vide (gisement hors du rayon scanné).
+    if not proches and tete is not None:
+        proches = [tete]
     # ASSEZ POUR CONTOURNER, PAS ASSEZ POUR BOUCLER. Un bosquet fait quelques tuiles ; si
     # quarante essais échouent, ce n'est plus un obstacle local et il faut le DIRE plutôt
     # que d'arpenter le gisement pendant dix minutes.
-    proches = proches[:40]
-    if tete is not None:
-        proches = [tete] + [c for c in proches if c != tete]
-    return proches
+    return proches[:40]
 
 
 def _pourquoi_refus(api, x: float, y: float) -> str:

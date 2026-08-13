@@ -1595,8 +1595,17 @@ def test_le_gisement_offre_plus_d_une_case() -> None:
 
     ancres = mcp_jeu._ancres_du_gisement(_Api(), "iron-ore", (11.2, 99.5))
 
-    # Le point de `find_nearest` reste le premier essai : c'est le plus proche.
-    commence_au_plus_proche = ancres and ancres[0] == (6.0, 98.0)
+    # LE PLUS PROCHE PARMI LES TUILES RÉELLES — et non celui de `find_nearest`. Ce point
+    # gardait la tête tant que le reste venait d'une bbox douteuse : il était alors la
+    # seule tuile de minerai garanti. Depuis que le `sample` n'en contient que des vraies,
+    # son seul privilège serait d'être le plus proche, et c'est précisément ce qui le place
+    # en bordure (cf. `test_on_ancre_au_COEUR_du_gisement_pas_au_bord`).
+    import math as _m
+    attendu = min(_m.dist((11.2, 99.5), t) for t in
+                  [(6.0, 98.0), (9.0, 101.0), (12.0, 104.0), (15.0, 107.0),
+                   (18.0, 110.0), (21.0, 113.0), (3.0, 95.0), (0.0, 92.0)])
+    commence_au_plus_proche = (ancres
+                               and abs(_m.dist((11.2, 99.5), ancres[0]) - attendu) < 1e-6)
     # ET TOUTES LES AUTRES SONT DU MINERAI RÉEL, pas des cases de la bbox. C'est le piège
     # que le mod documente lui-même (tools.lua) : « la bbox enveloppe tous les patches,
     # trous compris — le LayoutPlanner s'y fiait et posait un foreur sur de l'herbe ».
@@ -1616,6 +1625,52 @@ def test_le_gisement_offre_plus_d_une_case() -> None:
     rec("test_le_gisement_offre_plus_d_une_case", ok,
         f"{len(ancres)} ancres, 1re={ancres[0] if ancres else None}, "
         f"que du minerai={que_du_minerai}, ordonnées={ordonnees}")
+    assert ok
+
+
+def test_on_ancre_au_COEUR_du_gisement_pas_au_bord() -> None:
+    """ÊTRE SUR DU MINERAI NE SUFFIT PAS : IL FAUT EN AVOIR AUTOUR.
+
+    Banc piloté du 13/08. H92 pose bien sur une tuile de minerai — le statut de départ
+    était `no_fuel`, pas `no_minable_resources`, la différence est réelle. Mais trois
+    minutes plus tard, le joueur signale depuis l'écran :
+
+        burner-mining-drill (-16,-34)  no_minable_resources
+
+    La tuile la plus PROCHE est souvent en bordure du gisement. Une foreuse burner couvre
+    2×2 : posée au bord, elle n'a qu'une ou deux tuiles sous elle et les épuise en trois
+    minutes. Il faut ensuite la démonter et la reposer — la corvée que l'outil devait
+    justement éviter.
+
+    Le `sample` de `scan_patch` porte toutes les tuiles du gisement : on peut donc compter
+    les voisines de chaque candidat. On préfère les cases ENTOURÉES, à distance de marche
+    comparable — un cœur de gisement à quinze tuiles vaut mieux qu'un bord à trois.
+    """
+    import mcp_jeu
+
+    class _Api:
+        """Un gisement en bloc dense, plus une tuile ISOLÉE tout près du personnage."""
+        def find_nearest(self, nom):
+            return {"name": nom, "x": 0.0, "y": 0.0, "distance": 1}
+        def scan_patch(self, resource, radius=400.0):
+            coeur = [{"x": float(x), "y": float(y)}
+                     for x in range(20, 27) for y in range(20, 27)]
+            return {"resource": resource, "count": len(coeur) + 1,
+                    "bbox": {"x1": 0, "y1": 0, "x2": 26, "y2": 26},
+                    "sample": [{"x": 0.0, "y": 0.0}] + coeur,   # la solitaire en premier
+                    "origin": {"x": 1.0, "y": 1.0}, "total_amount": 50000}
+
+    ancres = mcp_jeu._ancres_du_gisement(_Api(), "iron-ore", (1.0, 1.0))
+
+    # La tuile isolée (0,0) est la plus proche, mais elle n'a AUCUNE voisine : une foreuse
+    # posée dessus s'épuise en trois minutes. Elle ne doit pas être le premier essai.
+    isolee_pas_en_tete = ancres and ancres[0] != (0.0, 0.0)
+    # Le premier essai doit être dans le bloc dense.
+    dans_le_coeur = ancres and 20 <= ancres[0][0] <= 26 and 20 <= ancres[0][1] <= 26
+
+    ok = isolee_pas_en_tete and dans_le_coeur
+    rec("test_on_ancre_au_COEUR_du_gisement_pas_au_bord", ok,
+        f"1re ancre={ancres[0] if ancres else None} (la solitaire (0,0) doit être écartée)")
     assert ok
 
 
@@ -2009,6 +2064,7 @@ def main() -> int:
               test_le_bandeau_dit_d_ou_vient_le_message_et_ce_qu_il_vaut,
               test_un_message_du_joueur_libere_l_avatar,
               test_le_gisement_offre_plus_d_une_case,
+              test_on_ancre_au_COEUR_du_gisement_pas_au_bord,
               test_un_refus_de_pose_NOMME_ce_qui_gene,
               test_attendre_le_joueur_rend_la_main_des_qu_il_parle,
               test_l_arret_annule_AUSSI_la_tache_du_mod,
